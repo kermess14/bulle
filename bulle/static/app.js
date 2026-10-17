@@ -169,19 +169,25 @@
     bdt_ghosts: true, bdt_titles: false,
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
-  const SKINS = ["bd", "sobre", "bling", "girly", "neon"];
+  const SKINS = ["bd", "sobre", "bling", "girly", "neon", "ocean", "stars", "riso"];
   /* Onomatopées de la colonne de gauche et des petits éclats, par habillage */
   const ONO = {
     bd: ["WIZZ !", "Zzz…", "PAF !", "CLAC", "BOUM", "TADAM !", "ZOU !"],
     bling: ["BLING !", "$$$", "CHA-CHING", "WOW", "DE LUXE", "VIP", "CASH !"],
     girly: ["Trop mignon", "♥ ♥ ♥", "Oh la la", "Youpi !", "Bisous", "Chouette !", "Hihi"],
     neon: ["ZAP !", "GAME ON", "1UP", "BZZT", "INSERT COIN", "HI-SCORE", "COMBO !"],
+    ocean: ["BLOUP !", "PLOUF", "GLOU GLOU", "SPLASH !", "BLUB…", "><((°>", "OHÉ !"],
+    stars: ["Waouh…", "Fais un vœu", "Scintille", "Ooooh", "Filante !", "Shhh…", "Zénith"],
+    riso: ["PHOTOCOPIE", "N° 0", "AGRAFE !", "SCOTCH", "50 EX.", "FAIT MAIN", "ZINE !"],
   };
   const POWS = {
     bd: { fav: ["HOP !", "YES !", "TOP !"], list: ["PAF !", "TCHAC !", "HOP !"], read: ["FINI !", "BRAVO !"], random: ["ZOU !", "TADAM !"], adult: ["CHUT…", "PSSST"] },
     bling: { fav: ["BLING !", "WOW !"], list: ["CHA-CHING", "VIP !"], read: ["JACKPOT !", "BRAVO !"], random: ["CASH !", "TADAM !"], adult: ["PRIVÉ", "VIP"] },
     girly: { fav: ["♥ ♥ ♥", "Trop bien !"], list: ["Hop !", "Youpi !"], read: ["Bravo !", "Fini !"], random: ["Surprise !", "Tadam !"], adult: ["Chut…", "Oh !"] },
     neon: { fav: ["1UP !", "ZAP !"], list: ["COMBO !", "BZZT"], read: ["GAME OVER", "HI-SCORE !"], random: ["RANDOM !", "INSERT COIN"], adult: ["ACCESS", "UNLOCKED"] },
+    ocean: { fav: ["BLOUP !", "PÊCHÉ !"], list: ["PLOUF !", "SPLASH !"], read: ["REMONTÉE !", "BRAVO !"], random: ["À L'EAU !", "PLOUF !"], adult: ["ABYSSES", "GLOU…"] },
+    stars: { fav: ["✦ Étoile !", "Brille !"], list: ["Rangé !", "Constellé"], read: ["Bravo !", "Fin…"], random: ["Vœu !", "Filante !"], adult: ["Nuit noire", "Shhh…"] },
+    riso: { fav: ["COUP DE CŒUR", "TAMPONNÉ"], list: ["AGRAFÉ !", "CLAC !"], read: ["LU & APPROUVÉ", "FIN"], random: ["AU PIF !", "TIRAGE !"], adult: ["CENSURÉ", "X"] },
   };
   const HOVER = { none: 1, light: 1.05, strong: 1.12 };
   const settings = { profile: Object.assign({}, PROFILE_DEFAULTS), global: {}, meta: {} };
@@ -592,9 +598,12 @@
         <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
         <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
         ${settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
-        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire tous les fichiers de cette série sur le disque (format, pages, couvertures)">↻ Rescanner</button>
+        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire cette série sur le disque : fichiers ajoutés ou jetés, format, pages, couvertures">↻ Rescanner</button>
         <button class="btn" type="button" data-ignore="${data.folder.id}" data-name="${esc(data.folder.name)}" data-folder="1" title="Enlever ce dossier de Bulle (rien n'est supprimé sur le disque)">✕ Retirer</button></span></h1>`;
       html += bdtPanelHtml(data);
+      const ig = data.ignored_here || [];
+      if (ig.length) html += `<div class="ignored-here"><span class="muted">${ig.length > 1 ? `${ig.length} éléments retirés` : "1 élément retiré"} de Bulle ici (toujours sur le disque) :</span>
+        ${ig.map(p => `<span class="prow"><code>${esc(p.slice(data.folder.path.length + 1))}</code> <button class="btn mini" type="button" data-action="unignore" data-path="${esc(p)}">Remettre</button></span>`).join("")}</div>`;
     }
     html += lettersHtml(list);
     html += gridFor(id ? withGhosts(list, data.bdt) : list, page || 1);
@@ -822,7 +831,7 @@
     const cacheLine = cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—";
     const sections = {
       look: () => `
-        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["neon", "Néon arcade (nuit, cyan et magenta, grille)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
+        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["neon", "Néon arcade (nuit, cyan et magenta, grille)"], ["ocean", "Aquarium (grand bleu, poissons, bulles)"], ["stars", "Nuit étoilée (ciel profond, étoiles filantes)"], ["riso", "Fanzine risographie (papier, encres fluo, scotch, tampons)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
         ${field("Thème", sel("p", "theme", [["dark", "Sombre"], ["light", "Clair"], ["auto", "Comme l'appareil"]], p.theme))}
         ${field("Réglages : présentation", sel("p", "settings_layout", [["tabs", "Signets (une rubrique à la fois)"], ["bricks", "Briques (tout sur une page)"]], p.settings_layout), "Cette page.")}
         ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
@@ -992,16 +1001,16 @@
         if (on) pow(powFor("adult"), lastPointer.x, lastPointer.y);
         route();
       } else if (action === "rebuild-folder") {
-        if (!confirm(`Relire tous les fichiers de « ${btn.dataset.name} » sur le disque et refaire leurs couvertures ?`)) return;
+        if (!confirm(`Relire « ${btn.dataset.name} » sur le disque (fichiers ajoutés ou jetés) et refaire ses couvertures ?`)) return;
         const r = await fetch(`/api/covers/rebuild/folder/${btn.dataset.id}`, { method: "POST" });
         if (r.status === 409) { toast("Un scan est déjà en cours, réessayez après."); return; }
         if (!r.ok) throw new Error((await r.json()).error || r.statusText);
         const j = await r.json();
-        toast(`${plural(j.count, "fichier", "fichiers")} en cours de relecture…`);
+        toast(`Rescan de « ${esc(btn.dataset.name)} » en cours…`);
         pollScan(true);
       } else if (action === "unignore") {
         await api("/api/ignored", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: btn.dataset.path }) });
-        toast(`« ${esc(btn.dataset.path)} » remis : il réapparaît avec le scan en cours…`); pollScan(true); route();
+        toast(`« ${esc(btn.dataset.path.split("/").pop())} » remis : il réapparaît dans un instant…`); pollScan(true); route();
       } else if (action === "retry-errors") {
         const r = await fetch("/api/covers/retry-errors", { method: "POST" });
         if (r.status === 409) { toast("Un scan est déjà en cours, réessayez après."); return; }
@@ -1352,6 +1361,10 @@
   function escapeBack() {
     const h = location.hash || "#/";
     if (h === "#/" || h === "" || /^#\/p\d+$/.test(h)) return;
+    if (h.startsWith("#/settings")) {   // Échap / Fermer : on quitte les réglages d'un coup, quel que soit le nombre de rubriques vues
+      location.hash = outsideSettings || "#/";
+      return;
+    }
     let m;
     if ((m = /^#\/f\/(\d+)/.exec(h))) {
       const crumbs = [...crumbsEl.querySelectorAll("a")];
@@ -1361,8 +1374,18 @@
     }
     if (navCount > 0) { navCount -= 2; history.back(); } else location.hash = "#/";   // -2 : le retour déclenche lui-même un hashchange
   }
-  let navCount = 0;
-  window.addEventListener("hashchange", () => { navCount += 1; });
+  let navCount = 0, outsideSettings = location.hash.startsWith("#/settings") ? "" : (location.hash || "#/");
+  window.addEventListener("hashchange", () => {
+    navCount += 1;
+    if (!location.hash.startsWith("#/settings")) outsideSettings = location.hash || "#/";
+  });
+  // passer d'une rubrique des réglages à l'autre ne s'empile pas dans l'historique du navigateur
+  main.addEventListener("click", e => {
+    const t = e.target.closest(".stabs a.tab");
+    if (!t) return;
+    e.preventDefault();
+    location.replace(t.getAttribute("href"));
+  });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
       if (!modal.hidden) { closeModal(); return; }

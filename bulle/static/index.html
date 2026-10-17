@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/style.css">
 <script>/* thème et disposition avant le premier rendu, pour éviter un flash */
-try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "neon"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
+try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "neon", "ocean", "stars", "riso"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
 </head>
 <body>
 <header class="topbar">
