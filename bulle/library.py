@@ -356,8 +356,10 @@ class Library:
         return os.path.join(self.root, rel) if rel else self.root
 
     # -- scan ------------------------------------------------------------------
-    def scan(self) -> dict:
-        """Parcourt le dossier des BD et met la base à jour. Thread-safe (un scan à la fois)."""
+    def scan(self, under: Optional[str] = None) -> dict:
+        """Parcourt le dossier des BD et met la base à jour. Thread-safe (un scan à la fois).
+        `under` : ne relit sur le disque que ce dossier (et ses sous-dossiers) ; le reste de la base est gardé tel
+        quel. Les fichiers ajoutés y apparaissent, ceux jetés disparaissent."""
         if not self.scan_lock.acquire(blocking=False):
             raise RuntimeError("Un scan est déjà en cours")
         t0 = time.time()
@@ -365,7 +367,7 @@ class Library:
         self.status.update(running=True, phase="scan", started_at=t0, finished_at=None,
                            error=None, added=0, removed=0, changed=0, stopped=False)
         try:
-            result = self._scan()
+            result = self._scan(under)
             self.status.update(**result)
             return result
         except ScanStopped:
@@ -381,11 +383,13 @@ class Library:
                                duration=round(time.time() - t0, 1))
             self.scan_lock.release()
 
-    def _walk(self, ignored: Optional[set] = None):
+    def _walk(self, ignored: Optional[set] = None, start: str = ""):
         """Parcours itératif ; renvoie (chemin relatif, sous-dossiers, fichiers albums). Les chemins de `ignored`
-        (dossiers ou fichiers retirés de Bulle) sont sautés."""
+        (dossiers ou fichiers retirés de Bulle) sont sautés. `start` : dossier de départ (relatif)."""
         ignored = ignored or set()
-        stack = [""]
+        if start and not os.path.isdir(self.abs_path(start)):
+            return
+        stack = [start]
         while stack:
             rel = stack.pop()
             try:
@@ -414,17 +418,45 @@ class Library:
             for d in dirs:
                 stack.append(f"{rel}/{d}" if rel else d)
 
-    def _scan(self) -> dict:
+    def _scan(self, under: Optional[str] = None) -> dict:
         if not os.path.isdir(self.root):
             raise RuntimeError(f"Dossier des BD introuvable : {self.root}")
-        gen = int(time.time())
+        # numéro de passage toujours croissant (deux scans dans la même seconde ne doivent pas se confondre)
+        gen = max(int(time.time()), (self.conn.execute("SELECT MAX(seen) FROM nodes").fetchone()[0] or 0) + 1)
         now = time.time()
+        under = (under or "").strip("/")
 
         # 1) Tout lire en mémoire (sans les fichiers et dossiers retirés de Bulle : ils restent sur le disque)
         ignored = self.ignored_paths()
         folders: dict[str, dict] = {}
         albums: list[dict] = []
-        for rel, dirs, files in self._walk(ignored):
+        if under:
+            # scan d'un seul dossier : le reste de la bibliothèque est repris tel quel depuis la base
+            inside = lambda p: p == under or p.startswith(under + "/")  # noqa: E731
+            rows = [dict(r) for r in self.conn.execute("SELECT path, kind, size, mtime FROM nodes")]
+            for r in rows:
+                if r["kind"] == "folder" and not inside(r["path"]):
+                    p = r["path"]
+                    folders[p] = {"path": p, "parent": (p.rsplit("/", 1)[0] if "/" in p else "") if p else None,
+                                  "name": p.rsplit("/", 1)[-1] if p else "", "direct": 0, "count": 0}
+            for r in rows:
+                if r["kind"] == "album" and not inside(r["path"]):
+                    p = r["path"]
+                    parent = p.rsplit("/", 1)[0] if "/" in p else ""
+                    if parent not in folders:
+                        continue
+                    folders[parent]["direct"] += 1
+                    file = p.rsplit("/", 1)[-1]
+                    albums.append({"path": p, "parent": parent, "name": display_name(file), "file": file,
+                                   "size": r["size"], "mtime": r["mtime"], "keep": True})
+            # dossiers parents du dossier relu (au cas où ils manqueraient dans la base)
+            anc = under
+            while "/" in anc:
+                anc = anc.rsplit("/", 1)[0]
+                folders.setdefault(anc, {"path": anc, "parent": anc.rsplit("/", 1)[0] if "/" in anc else "",
+                                         "name": anc.rsplit("/", 1)[-1], "direct": 0, "count": 0})
+            folders.setdefault("", {"path": "", "parent": None, "name": "", "direct": 0, "count": 0})
+        for rel, dirs, files in self._walk(ignored, under):
             if self.stop_requested.is_set():
                 raise ScanStopped("Scan arrêté")   # avant toute écriture : la base reste comme avant le scan
             parent = rel.rsplit("/", 1)[0] if "/" in rel else ("" if rel else None)
@@ -434,6 +466,8 @@ class Library:
                 albums.append({"path": f"{rel}/{name}" if rel else name, "parent": rel,
                                "name": display_name(name), "file": name, "size": size, "mtime": mtime})
             self.status["albums"] = len(albums)
+        if under and not os.path.isdir(self.abs_path(under)):
+            log.info("Dossier %s introuvable sur le disque : retiré de la base", under)
 
         # 2) Nombre d'albums par dossier (y compris sous-dossiers)
         for rel in sorted(folders, key=lambda p: p.count("/"), reverse=True):
@@ -493,7 +527,7 @@ class Library:
                                  natural_key(a["name"]), fmt, a["size"], a["mtime"], gen, row["id"]))
                             invalidate.append(row["id"])
                             changed += 1
-                        elif row.get("error"):
+                        elif row.get("error") and not a.get("keep"):
                             # album en échec : son format a peut-être été mal lu la dernière fois (disque qui n'a pas
                             # répondu) ; on relit les premiers octets et on lui redonne sa chance s'il a changé
                             fmt = detect_format(self.abs_path(a["path"]), a["file"])
@@ -565,8 +599,9 @@ class Library:
                 log.exception("Invalidation du cache")
         result = {"albums": len(albums), "folders": max(0, len(folders) - 1), "added": added,
                   "removed": removed, "changed": changed}
-        log.info("Scan terminé : %(albums)d albums, %(folders)d dossiers, +%(added)d, -%(removed)d, "
-                 "~%(changed)d modifiés", result)
+        log.info("Scan terminé%s : %%(albums)d albums, %%(folders)d dossiers, +%%(added)d, -%%(removed)d, "
+                 "~%%(changed)d modifiés" % (f" ({under})" if under else ""), result)
+
         return result
 
     # -- lecture ---------------------------------------------------------------

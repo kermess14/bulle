@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -411,6 +411,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if link:
             payload["bdt"] = bdt_report(folder, link, children)
         payload["bdt_enabled"] = bool(settings()["bdt_enabled"])
+        if folder["path"]:
+            pre = folder["path"].strip("/") + "/"
+            payload["ignored_here"] = sorted(p for p in lib.ignored_paths() if p.startswith(pre))
         return payload
 
     def bdt_report(folder: dict, link: dict, children: Optional[list[dict]] = None) -> dict:
@@ -718,20 +721,33 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     # ------------------------------------------------------------------ API : couvertures, par série ou par album
     @app.route("/api/covers/rebuild/folder/<int:folder_id>", methods=["POST"])
     def api_covers_rebuild_folder(folder_id: int):
-        """Régénère les couvertures (et la couleur) de tous les albums d'une série, en tâche de fond."""
+        """Rescanne une série sur le disque, en tâche de fond : les fichiers ajoutés (ou remis) apparaissent, ceux
+        jetés disparaissent, puis les couvertures (et la couleur) de tous ses albums sont refaites."""
         folder = get_node(folder_id, "folder")
         if lib.status["running"]:
             return jsonify(lib.status), 409
-        todo = []
-        for n in lib.albums_under(folder["path"]):
-            fresh = lib.refresh_file(n["id"])   # relit taille, date et format sur le disque (rattrape les ratés du scan)
-            if fresh:
-                comics.invalidate([n["id"]])
-                todo.append(fresh)
-        threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, f"Rescan de {folder['name']}", force=True)),
-                         name="bulle-covers", daemon=True).start()
+        path, name = folder["path"], folder["name"] or "la bibliothèque"
+        before = len(lib.albums_under(path))
+
+        def job() -> None:
+            try:
+                lib.scan(under=path)
+            except RuntimeError as e:   # scan déjà en cours, ou arrêté avec « Arrêter »
+                log.warning("%s", e)
+                return
+            except Exception:  # noqa: BLE001
+                return
+            todo = []
+            for n in lib.albums_under(path):
+                fresh = lib.refresh_file(n["id"])   # relit taille, date et format sur le disque (rattrape les ratés)
+                if fresh:
+                    comics.invalidate([n["id"]])
+                    todo.append(fresh)
+            run_background(lambda: preload_albums(todo, f"Rescan de {name}", force=True))
+
+        threading.Thread(target=job, name="bulle-rescan", daemon=True).start()
         time.sleep(0.2)
-        return jsonify({"count": len(todo), "scan": lib.status}), 202
+        return jsonify({"count": before, "scan": lib.status}), 202
 
     @app.route("/api/covers/page/<int:node_id>", methods=["POST"])
     def api_covers_page(node_id: int):
@@ -927,9 +943,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_unignore():
         """Remet un chemin retiré ; un scan est lancé pour le faire réapparaître."""
         body = request.get_json(force=True, silent=True) or {}
-        paths = lib.unignore_path(body.get("path") or "")
-        if not lib.status["running"]:
-            start_scan_thread()
+        path = str(body.get("path") or "").strip("/")
+        paths = lib.unignore_path(path)
+        if lib.status["running"]:
+            pending_scan.set()   # un scan tourne déjà : on en relance un dès qu'il est fini
+        else:
+            start_scan_thread(path.rsplit("/", 1)[0] if "/" in path else None)
         return jsonify(paths)
 
     @app.route("/api/scan/stop", methods=["POST"])
@@ -1510,9 +1529,11 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         finally:
             lib.status["running"] = False
 
-    def scan_job() -> None:
+    pending_scan = threading.Event()   # scan demandé pendant qu'un autre tournait
+
+    def scan_job(under: Optional[str] = None) -> None:
         try:
-            lib.scan()
+            lib.scan(under=under)
         except RuntimeError as e:
             log.warning("%s", e)
             return
@@ -1528,15 +1549,22 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         except Exception:  # noqa: BLE001
             log.exception("Couleurs des couvertures")
         trim_cache()
+        if pending_scan.is_set() and not lib.status["running"]:
+            pending_scan.clear()
+            start_scan_thread()
 
-    def start_scan_thread() -> None:
-        threading.Thread(target=scan_job, name="bulle-scan", daemon=True).start()
+    def start_scan_thread(under: Optional[str] = None) -> None:
+        threading.Thread(target=scan_job, args=(under,), name="bulle-scan", daemon=True).start()
 
     def scheduler() -> None:
         last_trim = time.time()
         while True:
             time.sleep(60)
             if lib.status["running"]:
+                continue
+            if pending_scan.is_set():
+                pending_scan.clear()
+                start_scan_thread()
                 continue
             interval = int(settings()["scan_interval_hours"])
             last = lib.stats().get("last_scan") or 0
