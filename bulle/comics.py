@@ -4,6 +4,7 @@ from __future__ import annotations
 import glob
 import io
 import logging
+import re
 import math
 import os
 import shutil
@@ -74,8 +75,22 @@ def is_image_name(name: str) -> bool:
     return os.path.splitext(base)[1].lower() in IMAGE_EXT
 
 
+_COVER_RE = re.compile(r"(^|[^a-z])(cover|couv|couverture|front|frontcover|c1|plat1)([^a-z]|$)")
+_BACK_RE = re.compile(r"(^|[^a-z])(back|backcover|dos|arri|plat4|c4|4e|4eme|quatri)")
+
+
+def _cover_rank(name: str) -> int:
+    """0 pour un fichier nommé comme une couverture (cover, couv, front…), sinon 1 : il passe en tête, avant les pages
+    numérotées, même s'il se trie après elles par ordre naturel (« Cover.jpg » après « 001.jpg », par exemple)."""
+    base = os.path.splitext(name.replace("\\", "/").rsplit("/", 1)[-1])[0].lower()
+    base = base.replace("_", " ").replace("-", " ")
+    if _COVER_RE.search(base) and not _BACK_RE.search(base):
+        return 0
+    return 1
+
+
 def sort_pages(names: list[str]) -> list[str]:
-    return sorted(names, key=lambda n: natural_sort_key(n.replace("\\", "/")))
+    return sorted(names, key=lambda n: (_cover_rank(n), natural_sort_key(n.replace("\\", "/"))))
 
 
 def pick_width(w: Optional[int]) -> int:

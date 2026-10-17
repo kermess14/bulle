@@ -623,11 +623,15 @@ class Library:
             self.conn.commit()
 
     def colors_for(self, node_ids: list[int]) -> dict[int, Optional[str]]:
-        out = {}
+        return {k: v["color"] for k, v in self.cover_meta_for(node_ids).items()}
+
+    def cover_meta_for(self, node_ids: list[int]) -> dict[int, dict]:
+        """Pour des albums (couvertures de dossiers) : id → {color, mtime}."""
+        out: dict[int, dict] = {}
         for i in range(0, len(node_ids), 500):
             chunk = node_ids[i:i + 500]
-            for r in self.conn.execute(f"SELECT id, color FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", chunk):
-                out[r["id"]] = r["color"]
+            for r in self.conn.execute(f"SELECT id, color, mtime FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                out[r["id"]] = {"id": r["id"], "color": r["color"], "mtime": r["mtime"]}
         return out
 
     def set_pages(self, node_id: int, page_count: Optional[int], error: Optional[str]) -> None:
