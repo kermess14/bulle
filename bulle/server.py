@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.10.4"
+VERSION = "0.10.5"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -431,6 +431,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/static/<path:filename>")
     def static_files(filename: str):
+        if filename.endswith(".webmanifest"):
+            resp = send_from_directory(STATIC_DIR, filename, max_age=0, conditional=True)
+            resp.mimetype = "application/manifest+json"
+            return resp
         return send_from_directory(STATIC_DIR, filename, max_age=0, conditional=True)
 
     # ------------------------------------------------------------------ API : navigation

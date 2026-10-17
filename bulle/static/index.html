@@ -6,6 +6,12 @@
 <meta name="theme-color" content="#0f1115">
 <title>Bulle</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 6C17 6 5 16.5 5 29.5c0 7.5 4 14 10.5 18.3L13 58l12.6-6.7c2 .4 4.2.7 6.4.7 15 0 27-10.5 27-23.5S47 6 32 6z' fill='%23ffb454'/%3E%3C/svg%3E">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bulle">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/style.css">
 <script>/* thème et disposition avant le premier rendu, pour éviter un flash */
 try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "neon"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
