@@ -527,11 +527,68 @@ class Comics:
             pass
 
     # -- cache ------------------------------------------------------------------
-    def cover_path(self, node_id: int) -> str:
-        return os.path.join(self.covers_dir, f"{node_id}-{self.cover_width}-{self.profile_tag}.jpg")
+    @staticmethod
+    def _ver(node) -> int:
+        """Version du fichier (sa date) : une couverture ou une page en cache ne peut jamais venir d'un autre fichier,
+        ni d'une ancienne version du même fichier, ni d'un album qui aurait repris le numéro d'un album disparu."""
+        if isinstance(node, int):
+            return 0
+        try:
+            return int(node["mtime"] or 0)
+        except (KeyError, IndexError, TypeError, ValueError):
+            return 0
 
-    def page_path(self, node_id: int, index: int, width: int) -> str:
-        return os.path.join(self.pages_dir, str(node_id), f"{index}-{width}-{self.profile_tag}.jpg")
+    def cover_path(self, node) -> str:
+        nid = int(node) if isinstance(node, int) else node["id"]
+        return os.path.join(self.covers_dir, f"{nid}-{self._ver(node)}-{self.cover_width}-{self.profile_tag}.jpg")
+
+    def page_path(self, node, index: int, width: int) -> str:
+        nid = int(node) if isinstance(node, int) else node["id"]
+        return os.path.join(self.pages_dir, str(nid), f"{self._ver(node)}-{index}-{width}-{self.profile_tag}.jpg")
+
+    def cached_page_at_least(self, node, index: int, min_width: int, max_width: int = 1400) -> Optional[str]:
+        """Fichier de la page déjà en cache dont la largeur est entre min_width et max_width (la plus petite), ou None."""
+        nid = int(node) if isinstance(node, int) else node["id"]
+        prefix = f"{self._ver(node)}-{index}-"
+        best, best_w = None, None
+        try:
+            names = os.listdir(os.path.join(self.pages_dir, str(nid)))
+        except OSError:
+            return None
+        for name in names:
+            if not name.startswith(prefix) or not name.endswith(f"-{self.profile_tag}.jpg"):
+                continue
+            try:
+                w = int(name[len(prefix):].split("-")[0])
+            except ValueError:
+                continue
+            if min_width <= w <= max_width and (best_w is None or w < best_w):
+                best, best_w = os.path.join(self.pages_dir, str(nid), name), w
+        return best
+
+    def migrate_cover_names(self, nodes) -> int:
+        """Anciens fichiers « id-largeur-profil.jpg » (sans version) : renommés avec la date du fichier actuel."""
+        n = 0
+        by_id = {int(x["id"]): x for x in nodes}
+        for name in os.listdir(self.covers_dir):
+            parts = name[:-4].split("-") if name.endswith(".jpg") else []
+            if len(parts) != 3 or not parts[0].isdigit():
+                continue
+            node = by_id.get(int(parts[0]))
+            src = os.path.join(self.covers_dir, name)
+            if node is None:
+                try:
+                    os.unlink(src)
+                except OSError:
+                    pass
+                continue
+            dst = os.path.join(self.covers_dir, f"{parts[0]}-{self._ver(node)}-{parts[1]}-{parts[2]}.jpg")
+            try:
+                os.replace(src, dst)
+                n += 1
+            except OSError:
+                pass
+        return n
 
     def cache_size(self) -> dict:
         """Taille du cache (octets) par partie."""
@@ -630,15 +687,18 @@ class Comics:
         return n
 
     # -- opérations de haut niveau ------------------------------------------------
-    def inspect(self, node: dict, abs_path: str, make_cover: bool = True) -> int:
-        """Ouvre l'album : renvoie le nombre de pages et génère la couverture si demandée."""
+    def inspect(self, node: dict, abs_path: str, make_cover: bool = True, force: bool = False) -> int:
+        """Ouvre l'album : renvoie le nombre de pages et génère la couverture (toujours la première page, dans l'ordre
+        naturel des noms de fichiers) si demandée ; `force` la refait même si elle existe."""
         with self.lock(node["id"]):
             with self.open(node, abs_path) as album:
                 n = len(album.pages)
                 if n == 0:
                     raise AlbumError("Aucune image trouvée dans ce fichier")
-                if make_cover and not os.path.exists(self.cover_path(node["id"])):
-                    self._write_atomic(self.cover_path(node["id"]), self._render(album, 0, self.cover_width))
+                if make_cover and (force or not os.path.exists(self.cover_path(node))):
+                    if force:
+                        self.clear_cover(node["id"])
+                    self._write_atomic(self.cover_path(node), self._render(album, 0, self.cover_width))
                 return n
 
     def cover_color(self, node: dict, abs_path: str) -> Optional[str]:
@@ -652,7 +712,7 @@ class Comics:
 
     def cover(self, node: dict, abs_path: str) -> str:
         """Chemin du fichier de couverture (généré au besoin)."""
-        p = self.cover_path(node["id"])
+        p = self.cover_path(node)
         if os.path.exists(p):
             return p
         self.inspect(node, abs_path, make_cover=True)
@@ -663,7 +723,7 @@ class Comics:
         width = max(100, min(self.cover_width, int(math.ceil(width / 50.0) * 50)))
         if width >= self.cover_width:
             return self.cover(node, abs_path)
-        p = os.path.join(self.covers_dir, f"{node['id']}-{width}-{self.profile_tag}.jpg")
+        p = os.path.join(self.covers_dir, f"{node['id']}-{self._ver(node)}-{width}-{self.profile_tag}.jpg")
         if os.path.exists(p):
             return p
         base = self.cover(node, abs_path)
@@ -686,7 +746,7 @@ class Comics:
         """
         width = pick_width(width)
         if width and self.page_cache:
-            cached = self.page_path(node["id"], index, width)
+            cached = self.page_path(node, index, width)
             if os.path.exists(cached):
                 return cached, None, "image/jpeg"
         with self.lock(node["id"]):
@@ -696,7 +756,7 @@ class Comics:
                     return None, data, MIME.get(ext, "application/octet-stream")
                 data = self._render(album, index, width)
                 if self.page_cache:
-                    cached = self.page_path(node["id"], index, width)
+                    cached = self.page_path(node, index, width)
                     try:
                         self._write_atomic(cached, data)
                         return cached, None, "image/jpeg"
