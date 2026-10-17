@@ -31,6 +31,15 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
   </a>
 </header>
+<nav class="maintabs" id="maintabs" aria-label="Sections">
+  <a href="#/" data-tab="home">Bibliothèque</a>
+  <a href="#/list/readlater" data-tab="readlater">À lire</a>
+  <a href="#/list/favorites" data-tab="favorites">★ Favoris</a>
+  <a href="#/lists" data-tab="lists">Listes</a>
+  <a href="#/history" data-tab="history">Historique</a>
+  <a href="#/collection" data-tab="collection">Collection</a>
+  <a href="#/random" data-tab="random" title="Ouvre un album pas encore lu, au hasard">🎲 Au hasard</a>
+</nav>
 <nav class="crumbs" id="crumbs" aria-label="Fil d'Ariane"></nav>
 <main id="main"><div class="empty"><div class="spinner"></div>Chargement…</div></main>
 <div id="modal" hidden></div>
