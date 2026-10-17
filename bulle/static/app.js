@@ -1417,7 +1417,7 @@
       scanStopping = false;
       if (s.stopped) toast(s.stopped === "covers" ? `Couvertures arrêtées (${s.covers_done}/${s.covers_total}) : les autres se feront à l'ouverture des albums` : "Scan arrêté : la bibliothèque est restée comme avant");
       else if (s.error) toast(`${ICON.warn} Scan impossible : ${esc(s.error)}`);
-      else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.removed ? `, ${s.removed} retirés` : ""}`);
+      else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.renamed ? `, ${s.renamed} renommés ou déplacés` : ""}${s.removed ? `, ${s.removed} disparus` : ""}`);
       if (!location.hash.startsWith("#/settings")) route();
       loadStats();
     }

@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.14.0"
+VERSION = "0.14.1"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -346,6 +346,28 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             node["error"] = f"Erreur inattendue : {e}"
         return node
 
+    heal_lock = threading.Lock()
+
+    def heal(node: dict) -> dict:
+        """Album dont le fichier n'est plus à sa place (renommé, déplacé, jeté) : relit tout de suite son dossier sur le
+        disque. Renommé ou déplacé, il est retrouvé (même taille, même date) et garde sa fiche ; jeté, il disparaît."""
+        if node.get("kind") != "album" or os.path.isfile(lib.abs_path(node["path"])):
+            return node
+        if lib.status["running"] or not heal_lock.acquire(blocking=False):
+            return node
+        try:
+            parent = node["path"].rsplit("/", 1)[0] if "/" in node["path"] else ""
+            log.info("Fichier introuvable %s : relecture du dossier « %s »", node["path"], parent or "/")
+            lib.scan(under=parent or None)
+        except RuntimeError as e:
+            log.warning("%s", e)
+        finally:
+            heal_lock.release()
+        fresh = lib.node(node["id"])
+        if not fresh:
+            abort(404, description="Ce fichier n'est plus sur le disque : il a été retiré de Bulle")
+        return fresh   # même contenu sous un autre nom : couverture et pages en cache restent bonnes
+
     def get_node(node_id: int, kind: Optional[str] = None, allow_hidden: bool = False) -> dict:
         node = lib.node(node_id)
         if not node or (kind and node["kind"] != kind):
@@ -496,7 +518,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/item/<int:node_id>")
     def api_item(node_id: int):
-        node = ensure_pages(get_node(node_id, "album"))
+        node = ensure_pages(heal(get_node(node_id, "album")))
         prev_, next_ = lib.siblings(node)
         j = album_json(node, with_progress=False)
         j["progress"] = progress_json(lib.progress(node_id, current_profile()))
@@ -561,7 +583,13 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         try:
             path, data, mime = comics.page(node, lib.abs_path(node["path"]), index, width)
         except AlbumError as e:
-            abort(415, description=str(e))
+            fresh = heal(node)   # fichier renommé ou déplacé pendant la lecture : on le retrouve et on réessaie
+            if fresh["path"] == node["path"]:
+                abort(415, description=str(e))
+            try:
+                path, data, mime = comics.page(fresh, lib.abs_path(fresh["path"]), index, width)
+            except AlbumError as e2:
+                abort(415, description=str(e2))
         resp = send_file(path, mimetype=mime, conditional=True) if path else Response(data, mimetype=mime)
         return cache_headers(resp, immutable="v" in request.args)
 
