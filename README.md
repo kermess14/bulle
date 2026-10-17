@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.8.1)
+# Bulle — lecteur de BD maison (v0.9)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -6,12 +6,16 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
 - **Navigation par dossiers** : un dossier = une série ; les sous-dossiers sont gardés
   (ex. `Blueberry/01 - Blueberry/…`). Rien n'est deviné d'après les noms de fichiers,
   les dossiers vides sont cachés, le tri est « naturel » (T2 avant T10).
-- **Formats** : CBZ, ZIP, CBR, RAR, PDF (et CB7/7z, CBT/tar). Le vrai format est détecté
-  d'après le contenu : un `.cbr` qui est en fait un zip fonctionne.
+- **Formats** : CBZ / ZIP, CBR / RAR (RAR 4 et RAR 5, via `unar`), CB7 / 7z, CBT / tar (y compris
+  tar.gz), PDF (pypdfium2). Le vrai format est détecté d'après le contenu : un `.cbr` qui est en fait un
+  zip fonctionne, et un `.cbr` qui est en réalité une archive ACE (vieux format propriétaire) est signalé
+  comme tel, avec le conseil de le reconvertir en CBZ. Les CBZ dont les noms internes sont mal encodés
+  (refusés par Python par prudence) sont lus quand même.
 - **Lecteur** : une page, **double page** (couverture et planches larges seules), **défilement
-  continu** ou **case par case** (touche `C` : les cases sont repérées automatiquement d'après les
-  gouttières, le lecteur glisse et zoome de l'une à l'autre ; une planche sans cases reconnues reste
-  entière), page entière / pleine largeur / taille d'origine, clavier, tactile (balayage, zones de tape),
+  continu** ou **case par case** (touche `C` : les cases sont repérées automatiquement, par leurs
+  gouttières *et* par leurs cadres — y compris les cases incrustées sur une grande image — et le lecteur
+  glisse et zoome de l'une à l'autre, puis enchaîne sur la première case de la planche suivante ; une
+  planche sans cases reconnues reste entière), page entière / pleine largeur / taille d'origine, clavier, tactile (balayage, zones de tape),
   sens manga (l'ordre des cases suit), plein écran, préchargement, enchaînement sur l'album suivant.
   **Zoom libre** : Ctrl + molette (centré sur la souris), pincement, `+` / `-` / `0`, double-clic ;
   une fois zoomé, la souris ou le doigt déplacent la page et Bulle va chercher une version plus nette.
@@ -217,10 +221,10 @@ une fois dans `data/cache/extract` (les 8 derniers albums ouverts sont gardés).
   « lire la suite sur Bédéthèque ».
 - Le glisser-déposer des vignettes fonctionne à la souris (et sur iPad) ; sur un téléphone, passez par la
   fiche de l'album.
-- La détection des cases repose sur les gouttières (bandes de fond uni qui traversent la planche) : les
-  mises en page très libres (cases qui se chevauchent, fonds sans gouttière, cases en biais) ne sont pas
-  découpées, ou pas toujours comme un œil humain le ferait. Dans ce cas, la planche entière s'affiche et
-  la touche `C` repasse en mode page.
+- La détection des cases combine les gouttières (bandes de fond uni qui traversent la planche) et les
+  cadres (traits d'encre rectilignes fermant un rectangle). Les cases sans cadre ni gouttière (bords
+  déchirés, cases en biais, dessins qui se chevauchent) ne sont pas découpées, ou pas toujours comme un
+  œil humain le ferait. Dans ce cas, la planche entière s'affiche et la touche `C` repasse en mode page.
 - Les CBR dépendent de l'outil `unar` installé dans l'image Docker ; ce chemin n'a pas pu être
   testé hors Docker (les CBZ, les PDF et les `.cbr` qui sont en réalité des zip l'ont été).
   Si un album s'affiche « illisible », la fiche (bouton « i ») donne la raison.

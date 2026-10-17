@@ -4,7 +4,7 @@ LABEL org.opencontainers.image.source="https://github.com/kermess14/bulle" \
 
 # unar : ouverture des CBR / RAR (et 7z). Le reste est en pur Python (pypdfium2 pour les PDF).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends unar ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends unar p7zip-full ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
