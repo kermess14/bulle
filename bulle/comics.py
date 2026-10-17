@@ -24,6 +24,17 @@ from .library import natural_sort_key
 log = logging.getLogger("bulle.comics")
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True  # une page légèrement abîmée s'affiche quand même
+# Formats d'images en plus, si les modules sont présents (installés dans l'image Docker) : HEIC/HEIF (photos
+# d'iPhone, certains scans) et JPEG XL. Sans eux, ces pages restent illisibles mais le reste de l'album s'affiche.
+try:
+    import pillow_heif  # type: ignore
+    pillow_heif.register_heif_opener()
+except Exception:  # noqa: BLE001
+    pass
+try:
+    import pillow_jxl  # type: ignore  # noqa: F401
+except Exception:  # noqa: BLE001
+    pass
 Image.MAX_IMAGE_PIXELS = 400_000_000
 
 IMAGE_EXT = {".jpg", ".jpeg", ".jpe", ".png", ".gif", ".webp", ".bmp", ".avif", ".jxl", ".tif", ".tiff", ".heic"}
@@ -444,6 +455,37 @@ def _shrink(img: Image.Image, width: int, sharpen: bool) -> Image.Image:
     return img
 
 
+def sniff_image(data: bytes) -> str:
+    """Vrai format d'une image d'après ses premiers octets (une extension .jpg ne garantit rien)."""
+    h = data[:32]
+    if not data:
+        return "fichier vide"
+    if h.startswith(b"\xff\xd8"):
+        return "JPEG"
+    if h.startswith(b"\x89PNG"):
+        return "PNG"
+    if h[:4] == b"RIFF" and h[8:12] == b"WEBP":
+        return "WebP"
+    if h.startswith((b"GIF87a", b"GIF89a")):
+        return "GIF"
+    if h[4:8] == b"ftyp":
+        brand = h[8:12].decode("latin-1", "replace")
+        return "AVIF" if brand.startswith("avi") else f"HEIC/HEIF ({brand})"
+    if h.startswith(b"\xff\x0a") or h.startswith(b"\x00\x00\x00\x0cJXL "):
+        return "JPEG XL"
+    if h.startswith((b"II*\x00", b"MM\x00*")):
+        return "TIFF"
+    if h.startswith(b"BM"):
+        return "BMP"
+    if h.startswith(b"%PDF"):
+        return "PDF"
+    if h.startswith(b"PK"):
+        return "archive ZIP"
+    if h.lstrip().startswith((b"<", b"<?xml")):
+        return "texte/HTML"
+    return "format inconnu"
+
+
 def resize_to_jpeg(data: bytes, width: int, quality: int = JPEG_QUALITY, subsampling: int = 0,
                    sharpen: bool = True) -> bytes:
     """Décode, réduit à `width` pixels de large (jamais agrandi) et encode en JPEG."""
@@ -452,8 +494,10 @@ def resize_to_jpeg(data: bytes, width: int, quality: int = JPEG_QUALITY, subsamp
         return encode_jpeg(_shrink(img, width, sharpen), quality, subsampling)
     except AlbumError:
         raise
+    except Image.UnidentifiedImageError as e:
+        raise AlbumError("format d'image non reconnu") from e
     except Exception as e:  # noqa: BLE001
-        raise AlbumError(f"Image illisible : {e}") from e
+        raise AlbumError(f"image illisible : {e}") from e
 
 
 def image_to_jpeg(img: Image.Image, width: int, quality: int = JPEG_QUALITY, subsampling: int = 0,
@@ -760,7 +804,23 @@ class Comics:
                 if make_cover and (force or not os.path.exists(self.cover_path(node))):
                     if force:
                         self.clear_cover(node["id"])
-                    self._write_atomic(self.cover_path(node), self._render(album, self.cover_index(node, n), self.cover_width))
+                    first = self.cover_index(node, n)
+                    try:
+                        data = self._render(album, first, self.cover_width)
+                    except AlbumError as e:
+                        # page de couverture illisible (format inconnu, image abîmée) : l'album reste lisible, la
+                        # couverture est prise sur la page lisible suivante
+                        data = None
+                        for i in range(first + 1, min(n, first + 6)):
+                            try:
+                                data = self._render(album, i, self.cover_width)
+                                log.warning("Couverture de %s prise page %d : %s", abs_path, i + 1, e)
+                                break
+                            except AlbumError:
+                                continue
+                        if data is None:
+                            raise
+                    self._write_atomic(self.cover_path(node), data)
                 return n
 
     @staticmethod
@@ -840,4 +900,12 @@ class Comics:
         if isinstance(album, PdfAlbum):
             return image_to_jpeg(album.render(index, width), width, quality, subsampling, self.sharpen)
         data, _ = album.read(index)
-        return resize_to_jpeg(data, width, quality, subsampling, self.sharpen)
+        try:
+            return resize_to_jpeg(data, width, quality, subsampling, self.sharpen)
+        except AlbumError as e:
+            # on dit QUEL fichier de l'archive pose problème (et ce qu'il contient vraiment), pour pouvoir le réparer
+            name = album.pages[index] if index < len(album.pages) else "?"
+            kind = sniff_image(data)
+            log.warning("%s, page %d (%s, %d octets, %s) : %s", album.path, index + 1, name, len(data), kind, e)
+            raise AlbumError(f"Page {index + 1} : « {str(name).replace(chr(92), '/').rsplit('/', 1)[-1]} » "
+                             f"({max(1, round(len(data) / 1024))} Ko, {kind}) : {e}") from e

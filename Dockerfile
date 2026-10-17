@@ -10,6 +10,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Pages en HEIC/HEIF et JPEG XL (facultatif : si ces modules ne s'installent pas sur une architecture, Bulle s'en passe)
+RUN pip install --no-cache-dir pillow-heif pillow-jxl-plugin || echo "HEIC/JPEG XL non disponibles"
 COPY bulle ./bulle
 
 ENV LIBRARY_ROOT=/library \

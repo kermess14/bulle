@@ -571,6 +571,8 @@ body.zoomed #stage img { transition: none; }
 .sthumb { position: relative; }
 .sthumb .setcov { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); font-style: normal; font-size: 12px; font-weight: 700; white-space: nowrap; padding: 3px 10px; border-radius: 999px; background: rgba(15, 17, 21, .85); color: #fff; border: 1px solid rgba(255, 255, 255, .3); opacity: 0; transition: opacity .15s; cursor: pointer; }
 .sthumb:hover .setcov, .sthumb.sel .setcov { opacity: 1; }
+.sthumb .sbad { width: 100%; aspect-ratio: 2 / 3; display: flex; align-items: center; justify-content: center; text-align: center; padding: 10px; box-sizing: border-box; font-style: normal; font-size: 11.5px; line-height: 1.35; color: #ffd1d1; background: repeating-linear-gradient(135deg, #2a1c22 0 10px, #23171c 10px 20px); border: 2px dashed #a8495a; border-radius: 6px; overflow: hidden; word-break: break-word; }
+.sthumb.cur .sbad { border-color: var(--accent); }
 .sthumb .setcov:hover { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 .sthumb.iscover .setcov { opacity: 1; background: var(--accent); color: var(--accent-ink); border-color: transparent; pointer-events: none; }
 .sthumb.iscover img { border-color: var(--accent); }
