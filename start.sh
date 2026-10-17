@@ -31,6 +31,13 @@ if ! cmp -s requirements.txt "$VENV/.requirements.txt"; then
   fi
 fi
 
+# Pages HEIC/HEIF et JPEG XL : facultatif, une seule fois
+if [ ! -f "$VENV/.extra-formats" ]; then
+  "$VENV/bin/pip" install -q --disable-pip-version-check pillow-heif pillow-jxl-plugin >/dev/null 2>&1 \
+    && echo "[bulle] formats HEIC / JPEG XL installés" || echo "[bulle] formats HEIC / JPEG XL non installés (facultatif)"
+  touch "$VENV/.extra-formats"
+fi
+
 # Polices « lettrage BD » (variante autonome : elles ne sont pas dans l'archive embarquée) — facultatif, sans internet
 # Bulle utilise simplement les polices du navigateur.
 FONTS=bulle/static/fonts
