@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.7.3"
+VERSION = "0.8.0"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -63,6 +63,7 @@ def global_defaults() -> dict:
         "bdt_auto_summary": True,     # résumé lu sur la fiche Bédéthèque quand on ouvre la fiche d'un album
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
+        "tools_url": "auto",          # BDConverter dans le menu caché (champignon) : adresse, "auto" = même machine, port 3111, "" = masqué
     }
 
 
@@ -71,7 +72,7 @@ GLOBAL_TYPES = {
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
-    "require_profile": (bool,), "opds_enabled": (bool,),
+    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,),
 }
 
 
@@ -139,8 +140,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 elif typ is float:
                     val = max(spec[1], min(spec[2], float(val)))
                 elif typ is str:
-                    val = str(val)
-                    if val not in spec[1]:
+                    val = str(val).strip()[:500]
+                    if len(spec) > 1 and val not in spec[1]:
                         abort(400, description=f"Valeur invalide pour {key}")
             except (TypeError, ValueError):
                 abort(400, description=f"Valeur invalide pour {key}")

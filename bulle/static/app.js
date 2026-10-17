@@ -202,6 +202,25 @@
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden && mosaicEl) setupMosaic(); });
 
+  // ================================================================ le laboratoire (menu caché : BDConverter dans un panneau)
+  const lab = $("#lab"), labFrame = $("#lab-frame"), shroom = $("#shroom-btn");
+  function toolsUrl() {
+    const u = settings.global.tools_url;
+    if (u === undefined || u === "auto") return `${location.protocol}//${location.hostname}:3111/`;
+    return (u || "").trim();
+  }
+  function updateShroom() { if (shroom) shroom.hidden = !toolsUrl(); }
+  function openLab() {
+    const url = toolsUrl(); if (!url) return;
+    if (labFrame.getAttribute("src") !== url) labFrame.src = url;
+    $("#lab-open").href = url;
+    lab.hidden = false; document.body.classList.add("lab-open");
+    pow("TADAM !", shroom.getBoundingClientRect().left + 20, 80);
+  }
+  function closeLab() { lab.hidden = true; document.body.classList.remove("lab-open"); }
+  if (shroom) shroom.addEventListener("click", () => lab.hidden ? openLab() : closeLab());
+  $("#lab-close").addEventListener("click", closeLab);
+
   // ================================================================ onomatopées (habillage BD)
   function pow(text, x, y) {
     if (document.documentElement.dataset.skin !== "bd") return;
@@ -228,7 +247,7 @@
       settings.global = s.global; settings.meta = s;
       settings.profile = Object.assign({}, PROFILE_DEFAULTS, s.profile || {});
       try { localStorage.setItem("bulle:profile", JSON.stringify(settings.profile)); } catch (_) { /* ignore */ }
-      applyAppearance();
+      applyAppearance(); updateShroom();
     } catch (_) { /* hors ligne : on garde la copie locale */ }
   }
   let saveTimer = null, pendingProfile = {}, pendingGlobal = {};
@@ -245,7 +264,7 @@
       pendingProfile = {}; pendingGlobal = {};
       try {
         const s = await putJson("/api/settings", body);
-        settings.global = s.global; settings.meta = s;
+        settings.global = s.global; settings.meta = s; updateShroom();
         toast("Réglages enregistrés");
       } catch (e) { toast(`${ICON.warn} Réglage non enregistré : ${esc(e.message)}`); }
     }, 500);
@@ -656,6 +675,7 @@
   const sel = (scope, key, opts, val) => `<select data-scope="${scope}" data-key="${key}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(val) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
   const chk = (scope, key, val) => `<label class="switch"><input type="checkbox" data-scope="${scope}" data-key="${key}" ${val ? "checked" : ""}><i></i></label>`;
   const num = (scope, key, val, min, max, step = 1) => `<input type="number" data-scope="${scope}" data-key="${key}" value="${val}" min="${min}" max="${max}" step="${step}">`;
+  const txt = (scope, key, val, placeholder = "") => `<input type="text" data-scope="${scope}" data-key="${key}" value="${esc(val ?? "")}" placeholder="${esc(placeholder)}" style="width:min(360px,100%)">`;
   const range = (scope, key, val, min, max, unit = "%") => `<span class="rangewrap"><input type="range" data-scope="${scope}" data-key="${key}" value="${val}" min="${min}" max="${max}" step="5" oninput="this.nextElementSibling.textContent=this.value+'${unit}'"><output>${val}${unit}</output></span>`;
 
   async function viewSettings() {
@@ -666,7 +686,7 @@
     let cache = {}, stats = {};
     try { [cache, stats] = await Promise.all([api("/api/cache"), api("/api/stats")]); } catch (_) { /* ignore */ }
     const p = settings.profile, g = settings.global;
-    main.innerHTML = `<h1>Réglages</h1>
+    main.innerHTML = `<div class="listhead"><h1>Réglages</h1><button class="btn" type="button" data-action="back" title="Revenir à la page précédente (Échap)">✕ Fermer</button></div>
     <div class="settings">
       <section>
         <h2>Bibliothèque</h2>
@@ -739,6 +759,10 @@
         ${field("Flux OPDS pour les applis mobiles", chk("g", "opds_enabled", g.opds_enabled), `Adresse à donner à l'appli (Panels, Chunky, Moon+, Mihon…) : <code>${esc(location.origin)}/opds</code>`)}
       </section>
       <section>
+        <h2>Le laboratoire</h2>
+        ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}
+      </section>
+      <section>
         <h2>Bédéthèque</h2>
         ${field("Autoriser les requêtes vers bedetheque.com", chk("g", "bdt_enabled", g.bdt_enabled), "Uniquement quand vous cliquez « Analyser » (ou l'analyse groupée de la page Collection).")}
         ${field("Délai entre deux requêtes (s)", num("g", "bdt_interval", g.bdt_interval, 1, 30, 0.5), "Par politesse envers le site ; 2,5 s par défaut.")}
@@ -768,6 +792,7 @@
   async function settingsAction(action, btn) {
     btn.disabled = true;
     try {
+      if (action === "back") { escapeBack(); return; }
       if (action === "scan") { await fetch("/api/scan", { method: "POST" }); pollScan(true); }
       else if (action === "clear-cache") {
         const r = await api("/api/cache/clear", { method: "POST" });
@@ -1114,6 +1139,7 @@
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
       if (!modal.hidden) { closeModal(); return; }
+      if (!lab.hidden) { closeLab(); return; }
       if (popEl) return;   // la bulle de résumé se ferme dans son propre gestionnaire
       if (e.target.matches("input, select, textarea")) { e.target.blur(); if (e.target === searchInput && !searchInput.value) escapeBack(); return; }
       escapeBack(); return;
