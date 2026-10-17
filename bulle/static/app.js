@@ -120,7 +120,7 @@
   // ================================================================ réglages
   const PROFILE_DEFAULTS = {
     thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", letters_size: "large",
-    tabs_side: "left", cover_style: "book", skin: "bd", mosaic: "drift", mosaic_opacity: 45, mosaic_brightness: 70, sort: "natural", hide_read: false,
+    tabs_side: "left", cover_style: "book", skin: "bd", mosaic: "drift", mosaic_opacity: 45, mosaic_brightness: 70, mosaic_glass: true, sort: "natural", hide_read: false,
     show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
@@ -144,6 +144,7 @@
     root.dataset.skin = p.skin === "sobre" ? "sobre" : "bd";
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     root.dataset.mosaic = p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
+    root.dataset.glass = p.mosaic_glass !== false && root.dataset.mosaic !== "off" ? "on" : "off";
     root.style.setProperty("--mosaic-opacity", String(Math.max(5, Math.min(100, +p.mosaic_opacity || 45)) / 100));
     root.style.setProperty("--mosaic-brightness", String(Math.max(10, Math.min(150, +p.mosaic_brightness || 70)) / 100));
     $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
@@ -681,6 +682,7 @@
         ${field("Mosaïque de couvertures en fond", sel("p", "mosaic", [["drift", "Oui, qui dérive lentement"], ["fixed", "Oui, fixe"], ["off", "Non"]], p.mosaic), "Pas dans le lecteur. Les couvertures changent doucement en fondu.")}
         ${field("Mosaïque : opacité", range("p", "mosaic_opacity", p.mosaic_opacity, 5, 100), "Plus c'est bas, plus la mosaïque s'efface derrière le contenu.")}
         ${field("Mosaïque : luminosité", range("p", "mosaic_brightness", p.mosaic_brightness, 10, 150))}
+        ${field("Mosaïque : effet transparence", chk("p", "mosaic_glass", p.mosaic_glass), "Les panneaux, la colonne et les fiches deviennent translucides (verre dépoli) et laissent voir la mosaïque. Un peu plus lourd pour le navigateur.")}
         ${field("Tri", sel("p", "sort", [["natural", "Alphabétique naturel (T2 avant T10)"], ["recent", "Ajouts récents d'abord"], ["unread", "Non lus d'abord"]], p.sort))}
         ${field("Masquer les albums lus", chk("p", "hide_read", p.hide_read))}
         ${field("Nombre de pages sur les cartes", chk("p", "show_pages", p.show_pages))}
@@ -1094,8 +1096,28 @@
     }
     closeModal();
   });
+  /* Échap : ferme ce qui est ouvert, sinon revient en arrière (réglages, listes, recherche → page précédente ; dossier → dossier parent). */
+  function escapeBack() {
+    const h = location.hash || "#/";
+    if (h === "#/" || h === "" || /^#\/p\d+$/.test(h)) return;
+    let m;
+    if ((m = /^#\/f\/(\d+)/.exec(h))) {
+      const crumbs = [...crumbsEl.querySelectorAll("a")];
+      const parent = crumbs[crumbs.length - 1];
+      location.hash = parent ? (parent.getAttribute("href") || "#/") : "#/";
+      return;
+    }
+    if (navCount > 0) { navCount -= 2; history.back(); } else location.hash = "#/";   // -2 : le retour déclenche lui-même un hashchange
+  }
+  let navCount = 0;
+  window.addEventListener("hashchange", () => { navCount += 1; });
   document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && !modal.hidden) { closeModal(); return; }
+    if (e.key === "Escape") {
+      if (!modal.hidden) { closeModal(); return; }
+      if (popEl) return;   // la bulle de résumé se ferme dans son propre gestionnaire
+      if (e.target.matches("input, select, textarea")) { e.target.blur(); if (e.target === searchInput && !searchInput.value) escapeBack(); return; }
+      escapeBack(); return;
+    }
     if (e.target.matches("input, select, textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
     if (view.pages > 1 && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       const n = view.page + (e.key === "ArrowRight" ? 1 : -1);
