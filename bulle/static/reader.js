@@ -210,6 +210,7 @@
     resetZoom(false);
     clearTimeout(spin); loading.hidden = true;
     current = n; shown = list;
+    fitImages();
     stage.scrollTop = 0; stage.scrollLeft = 0;
     if (mode === "panels") {
       const data = await getPanels(n);
@@ -418,6 +419,25 @@
     FITS.forEach(f => body.classList.toggle("fit-" + f, f === eff));
     fitBtn.textContent = FIT_LABEL[fit];
     fitBtn.disabled = mode !== "single";
+    fitImages();
+  }
+  /* « Page entière » : la hauteur de chaque image est fixée en pixels CSS d'après sa proportion, pour qu'elle remplisse
+     l'écran même quand le fichier reçu est plus petit que l'écran (navigateur zoomé à 80 %, écran très dense) et pour que
+     la mise en page ne bouge pas quand la version nette remplace la version floue. */
+  function fitImages() {
+    const eff = mode === "panels" ? "page" : fit;
+    const vw = stage.clientWidth, vh = stage.clientHeight;
+    const set = (el, n, maxW) => {
+      const asp = aspects[n];
+      if (!asp || !el || el.hidden || !el.src) { if (el) { el.style.height = ""; el.style.width = ""; } return; }
+      el.style.height = Math.floor(Math.min(vh, maxW / asp)) + "px"; el.style.width = "auto";
+    };
+    if (mode === "double") {
+      const both = shown.length === 2 && !imgA.hidden && !imgB.hidden;
+      set(imgA, shown[0], both ? vw / 2 : vw); set(imgB, shown[1], both ? vw / 2 : vw);
+    } else if (mode === "single" || mode === "panels") {
+      if (eff === "page") set(img, current, vw); else { img.style.height = ""; img.style.width = ""; }
+    }
   }
   function applyMode() {
     MODES.forEach(m => body.classList.toggle("mode-" + m, m === mode));
@@ -502,7 +522,7 @@
     const el = zoomTarget();
     const sr = stage.getBoundingClientRect();
     if (mode === "panels" && panelBox && !el.style.transform) {   // case cadrée : position connue sans mesurer (l'animation peut être en cours)
-      zoomBounds = Object.assign({ vw: sr.width, vh: sr.height }, panelBox); return;
+      zoomBounds = Object.assign({ vw: sr.width, vh: sr.height, left: sr.left, top: sr.top }, panelBox); return;
     }
     const m = el.style.transform ? new DOMMatrix(getComputedStyle(el).transform) : new DOMMatrix();
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -513,15 +533,17 @@
       x0 = Math.min(x0, ux); y0 = Math.min(y0, uy); x1 = Math.max(x1, ux + r.width / (m.a || 1)); y1 = Math.max(y1, uy + r.height / (m.d || 1));
     }
     if (!isFinite(x0)) { x0 = 0; y0 = 0; x1 = el.scrollWidth; y1 = el.scrollHeight; }
-    zoomBounds = { x0, y0, x1, y1, vw: sr.width, vh: sr.height };
+    zoomBounds = { x0, y0, x1, y1, vw: sr.width, vh: sr.height, left: sr.left, top: sr.top };
   }
   function clampPan() {
     if (!zoomBounds) measureBounds();
     const { x0, y0, x1, y1, vw, vh } = zoomBounds;
     const z = userZoom, cw = (x1 - x0) * z, ch = (y1 - y0) * z;
     // bornes : le bord gauche de l'image (x0*z + panX) ne doit pas dépasser 0, son bord droit pas descendre sous vw
-    panX = cw <= vw ? (vw - cw) / 2 - x0 * z : Math.min(-x0 * z, Math.max(vw - x1 * z, panX));
-    panY = ch <= vh ? (vh - ch) / 2 - y0 * z : Math.min(-y0 * z, Math.max(vh - y1 * z, panY));
+    // image plus large que l'écran : pas de vide sur les côtés ; plus étroite : elle reste entière à l'écran (sans la recentrer de force,
+    // pour que le zoom reste accroché au pointeur)
+    panX = cw <= vw ? Math.min(vw - x1 * z, Math.max(-x0 * z, panX)) : Math.min(-x0 * z, Math.max(vw - x1 * z, panX));
+    panY = ch <= vh ? Math.min(vh - y1 * z, Math.max(-y0 * z, panY)) : Math.min(-y0 * z, Math.max(vh - y1 * z, panY));
   }
   /* Une seule écriture de style par image affichée (requestAnimationFrame), même si la molette envoie dix événements entre deux. */
   let zoomRaf = 0;
@@ -539,15 +561,16 @@
   function setZoom(z, cx, cy) {
     if (mode === "scroll") return;
     z = Math.max(1, Math.min(8, z));
+    if (z < 1.04) z = 1;   // un dézoom qui arrive presque à 100 % revient à 100 % (sinon on reste « zoomé » d'un poil)
     const el = zoomTarget();
     if (userZoom === 1 && z > 1) {   // on part de la position de défilement courante
       panX = -stage.scrollLeft; panY = -stage.scrollTop; stage.scrollLeft = 0; stage.scrollTop = 0;
       el.style.transformOrigin = "0 0";
       zoomBounds = null;
     }
-    // la scène occupe tout l'écran (position fixe) : les coordonnées du pointeur sont déjà celles de la scène
-    const vw = zoomBounds ? zoomBounds.vw : stage.clientWidth, vh = zoomBounds ? zoomBounds.vh : stage.clientHeight;
-    cx = (cx == null ? vw / 2 : cx); cy = (cy == null ? vh / 2 : cy);
+    if (!zoomBounds) measureBounds();
+    const { vw, vh, left, top } = zoomBounds;
+    cx = (cx == null ? vw / 2 : cx - left); cy = (cy == null ? vh / 2 : cy - top);
     const k = z / userZoom;
     panX = cx - (cx - panX) * k; panY = cy - (cy - panY) * k;
     const back = z === 1 && userZoom > 1;
@@ -592,7 +615,7 @@
     if (mode === "scroll") return;
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      const factor = Math.exp(-e.deltaY * 0.0022);
+      const factor = Math.exp(-Math.max(-150, Math.min(150, e.deltaY)) * 0.0017);   // un cran de molette ≈ ×1,19
       setZoom(userZoom * factor, e.clientX, e.clientY);
       return;
     }

@@ -493,6 +493,7 @@ body.reader.hide-bars { cursor: none; }
 
 #stage {
   position: fixed; inset: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
+  max-width: none; width: auto; margin: 0; padding: 0;   /* c'est un <main> : sans ça il hérite des marges et de la largeur maxi (1800 px) de la bibliothèque */
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
 #stage .wrap { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
