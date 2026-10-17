@@ -32,6 +32,7 @@
     body.classList.remove("bg-black", "bg-dark", "bg-gray", "bg-white");
     body.classList.add("bg-" + (prefs.reader_bg || "black"));
     body.style.setProperty("--night", String((+prefs.reader_night || 0) / 100));
+    body.classList.toggle("night", (+prefs.reader_night || 0) > 0);
     body.style.setProperty("--scroll-w", String(Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100))) + "%");
   }
   function loadAlbumMemory() {
@@ -167,6 +168,7 @@
     hideEnd();
     if (mode === "scroll") { scrollToPage(n, save); return; }
     const token = ++loadToken;
+    zoomBounds = null;
     navBusy = true; navSince = Date.now();
     const done = () => { if (token === loadToken) navBusy = false; };
     if (mode === "panels") getPanels(n);
@@ -249,7 +251,9 @@
   /* Cadre la case courante : l'image reste mise en page « page entière », on la déplace et on l'agrandit (transition CSS). */
   function applyPanel(animate = true) {
     const d = panelsCache.get(current);
+    zoomBounds = null;
     img.classList.toggle("nofx", !animate);
+    panelBox = null;
     if (!d || !(d.panels instanceof Array) || panelIdx < 0 || !d.panels.length || !img.naturalWidth) {
       img.style.transform = "";
       if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
@@ -269,10 +273,11 @@
     const tx = vw / 2 - ix - s * (px + pw / 2), ty = vh / 2 - iy - s * (py + ph / 2);
     img.style.transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px) scale(${s.toFixed(4)})`;
     panelScale = s;
+    panelBox = { x0: ix + tx, y0: iy + ty, x1: ix + tx + iw * s, y1: iy + ty + ih * s };   // position finale (après l'animation)
     if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
     scheduleRefine();   // une fois cadrée, la case est rechargée plus nette si besoin
   }
-  let panelScale = 1;
+  let panelScale = 1, panelBox = null;
   async function panelStep(dir) {
     const d = panelsCache.get(current);
     const count = d && d.panels instanceof Array ? d.panels.length : 0;
@@ -459,13 +464,12 @@
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen().catch(() => {});
   }
-  let flashEl = null;
+  let flashEl = null, flashTimer = null;
   function flash(text) {
-    if (flashEl) flashEl.remove();
-    flashEl = document.createElement("div");
-    flashEl.className = "hint"; flashEl.textContent = text;
-    body.appendChild(flashEl);
-    setTimeout(() => { if (flashEl) { flashEl.remove(); flashEl = null; } }, 1400);
+    if (!flashEl) { flashEl = document.createElement("div"); flashEl.className = "hint"; body.appendChild(flashEl); }
+    flashEl.textContent = text;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => { if (flashEl) { flashEl.remove(); flashEl = null; } }, 1400);
   }
 
   // ---------------------------------------------------------------- barres : auto-masquage
@@ -490,10 +494,16 @@
   // ---------------------------------------------------------------- zoom libre (Ctrl + molette, pincement, +/-, double-clic) et déplacement
   let userZoom = 1, panX = 0, panY = 0, dragging = null, dragMoved = false;
   const zoomTarget = () => mode === "double" ? spread : single;
-  /* Limite le déplacement aux images visibles (pas au cadre noir autour) : on ne peut pas « perdre » la page. */
-  function clampPan() {
+  /* Limite le déplacement aux images visibles (pas au cadre noir autour) : on ne peut pas « perdre » la page.
+     Les bords de l'image sont mesurés une seule fois par zoom (zoomBounds), pas à chaque cran de molette : mesurer
+     le DOM à chaque événement forçait une mise en page complète et faisait ramer le zoom. */
+  let zoomBounds = null;
+  function measureBounds() {
     const el = zoomTarget();
-    const sr = stage.getBoundingClientRect(), vw = sr.width, vh = sr.height;
+    const sr = stage.getBoundingClientRect();
+    if (mode === "panels" && panelBox && !el.style.transform) {   // case cadrée : position connue sans mesurer (l'animation peut être en cours)
+      zoomBounds = Object.assign({ vw: sr.width, vh: sr.height }, panelBox); return;
+    }
     const m = el.style.transform ? new DOMMatrix(getComputedStyle(el).transform) : new DOMMatrix();
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const im of el.querySelectorAll("img")) {
@@ -503,14 +513,25 @@
       x0 = Math.min(x0, ux); y0 = Math.min(y0, uy); x1 = Math.max(x1, ux + r.width / (m.a || 1)); y1 = Math.max(y1, uy + r.height / (m.d || 1));
     }
     if (!isFinite(x0)) { x0 = 0; y0 = 0; x1 = el.scrollWidth; y1 = el.scrollHeight; }
+    zoomBounds = { x0, y0, x1, y1, vw: sr.width, vh: sr.height };
+  }
+  function clampPan() {
+    if (!zoomBounds) measureBounds();
+    const { x0, y0, x1, y1, vw, vh } = zoomBounds;
     const z = userZoom, cw = (x1 - x0) * z, ch = (y1 - y0) * z;
     // bornes : le bord gauche de l'image (x0*z + panX) ne doit pas dépasser 0, son bord droit pas descendre sous vw
     panX = cw <= vw ? (vw - cw) / 2 - x0 * z : Math.min(-x0 * z, Math.max(vw - x1 * z, panX));
     panY = ch <= vh ? (vh - ch) / 2 - y0 * z : Math.min(-y0 * z, Math.max(vh - y1 * z, panY));
   }
+  /* Une seule écriture de style par image affichée (requestAnimationFrame), même si la molette envoie dix événements entre deux. */
+  let zoomRaf = 0;
   function applyZoom() {
+    if (zoomRaf) return;
+    zoomRaf = requestAnimationFrame(() => { zoomRaf = 0; applyZoomNow(); });
+  }
+  function applyZoomNow() {
     const el = zoomTarget();
-    if (userZoom === 1) { el.style.transform = ""; body.classList.remove("zoomed"); return; }
+    if (userZoom === 1) { el.style.transform = ""; body.classList.remove("zoomed"); zoomBounds = null; return; }
     clampPan();
     el.style.transform = `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px) scale(${userZoom.toFixed(4)})`;
     body.classList.add("zoomed");
@@ -522,38 +543,51 @@
     if (userZoom === 1 && z > 1) {   // on part de la position de défilement courante
       panX = -stage.scrollLeft; panY = -stage.scrollTop; stage.scrollLeft = 0; stage.scrollTop = 0;
       el.style.transformOrigin = "0 0";
+      zoomBounds = null;
     }
-    const r = stage.getBoundingClientRect();
-    cx = (cx == null ? r.width / 2 : cx - r.left); cy = (cy == null ? r.height / 2 : cy - r.top);
+    // la scène occupe tout l'écran (position fixe) : les coordonnées du pointeur sont déjà celles de la scène
+    const vw = zoomBounds ? zoomBounds.vw : stage.clientWidth, vh = zoomBounds ? zoomBounds.vh : stage.clientHeight;
+    cx = (cx == null ? vw / 2 : cx); cy = (cy == null ? vh / 2 : cy);
     const k = z / userZoom;
     panX = cx - (cx - panX) * k; panY = cy - (cy - panY) * k;
     const back = z === 1 && userZoom > 1;
     userZoom = z;
-    applyZoom();
-    if (back) { const top = -panY; panX = 0; panY = 0; el.style.transform = ""; stage.scrollTop = Math.max(0, top); }
+    if (back) { cancelAnimationFrame(zoomRaf); zoomRaf = 0; const top = -panY; panX = 0; panY = 0; el.style.transform = ""; body.classList.remove("zoomed"); zoomBounds = null; stage.scrollTop = Math.max(0, top); }
+    else applyZoom();
     if (z > 1) flash(`Zoom ${Math.round(z * 100)} %`);
     scheduleRefine();
   }
-  /* Quand on zoome, on va chercher une version plus nette de la page (une fois le geste terminé). */
-  let refineTimer = null;
-  function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, 280); }
+  /* Quand on zoome, on va chercher une version plus nette de la page, une fois le geste terminé. Trois largeurs seulement
+     (1400, 2000, 2600 px) : chaque largeur différente est une image à recalculer côté serveur, et une image trop grande
+     rend le zoom poussif ; une seule demande à la fois, jamais une version moins nette que celle affichée. */
+  const REFINE_LADDER = [1400, 2000, 2600];
+  let refineTimer = null, refining = false, refineAgain = false;
+  function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, 320); }
   async function refineZoom() {
+    if (refining) { refineAgain = true; return; }
     const effective = userZoom * (mode === "panels" && panelIdx >= 0 ? panelScale : 1);
     if (effective <= 1.15 || mode === "scroll" || prefs.reader_quality === "original") return;
     const token = loadToken;
     const targets = mode === "double" ? shown.map((n, i) => [n, i === 0 ? imgA : imgB]) : [[current, img]];
-    for (const [n, el] of targets) {
-      if (!el || el.hidden || !el.src) continue;
-      const dpr = Math.min(3, window.devicePixelRatio || 1);
-      const want = Math.ceil(el.getBoundingClientRect().width / userZoom * userZoom * dpr);   // largeur affichée réelle en pixels physiques
-      if (el.naturalWidth >= want * 0.9) continue;
-      const w = Math.min(3000, Math.ceil(want / 100) * 100);
-      const better = await loadImageAt(n, w);
-      if (token !== loadToken || !better) return;
-      if (better.naturalWidth > el.naturalWidth) el.src = better.src;
+    refining = true;
+    try {
+      for (const [n, el] of targets) {
+        if (!el || el.hidden || !el.src) continue;
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const want = Math.ceil(el.getBoundingClientRect().width * dpr);   // largeur affichée réelle en pixels physiques
+        if (el.naturalWidth >= want * 0.8) continue;
+        const w = REFINE_LADDER.find(x => x >= want) || REFINE_LADDER[REFINE_LADDER.length - 1];
+        if (el.naturalWidth >= w) continue;
+        const better = await loadImageAt(n, w);
+        if (token !== loadToken || !better) return;
+        if (better.naturalWidth > el.naturalWidth) { el.src = better.src; zoomBounds = null; }
+      }
+    } finally {
+      refining = false;
+      if (refineAgain) { refineAgain = false; scheduleRefine(); }
     }
   }
-  function resetZoom(announce = true) { if (userZoom !== 1) { userZoom = 1; panX = panY = 0; zoomTarget().style.transform = ""; spread.style.transform = ""; single.style.transform = ""; body.classList.remove("zoomed"); if (announce) flash("Zoom 100 %"); } }
+  function resetZoom(announce = true) { if (userZoom !== 1) { cancelAnimationFrame(zoomRaf); zoomRaf = 0; userZoom = 1; panX = panY = 0; zoomBounds = null; zoomTarget().style.transform = ""; spread.style.transform = ""; single.style.transform = ""; body.classList.remove("zoomed"); if (announce) flash("Zoom 100 %"); } }
   stage.addEventListener("wheel", e => {
     if (mode === "scroll") return;
     if (e.ctrlKey || e.metaKey) {

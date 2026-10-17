@@ -441,7 +441,7 @@ body.reader { overflow: hidden; height: 100dvh; background: #000; touch-action: 
 body.reader.bg-dark { background: #15171c; }
 body.reader.bg-gray { background: #5a5e68; }
 body.reader.bg-white { background: #f3f1ea; }
-body.reader #stage img { filter: brightness(calc(1 - var(--night, 0))); }
+body.reader.night #stage img { filter: brightness(calc(1 - var(--night, 0))); }   /* seulement en mode nuit : un filtre sur une image zoomée coûte cher */
 body.reader.hide-bars { cursor: none; }
 .rbar {
   position: fixed; left: 0; right: 0; z-index: 10; height: var(--bar-h); display: flex; align-items: center; gap: 10px;
