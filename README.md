@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.12.0)
+# Bulle — lecteur de BD maison (v0.12.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -189,6 +189,9 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - CBR / RAR / 7z : l'archive est décompressée une fois dans le cache (les 20 dernières lues restent décompressées,
   variable `EXTRACT_KEEP`), avec unar, puis 7z et bsdtar en secours ; une archive dont une entrée est abîmée reste
   lisible (les autres pages). Réglages › Images et cache propose « Réessayer les albums en échec ».
+- Arrêter un scan : bouton « ■ Arrêter » dans la notification du scan (ou clic sur ↻ pendant un scan). Arrêté pendant
+  le parcours des dossiers, la bibliothèque reste exactement comme avant ; pendant les couvertures, celles déjà faites
+  restent et les autres se font à l'ouverture des albums.
 - Scan au démarrage : désactivable dans Réglages › Images et cache (plus de scan après chaque mise à jour) ; les
   nouvelles BD arrivent alors avec ↻ ou le rescan automatique. Les guillemets dans la stack (`SCAN_ON_START="0"`) sont
   acceptés.
