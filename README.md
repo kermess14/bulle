@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.3)
+# Bulle — lecteur de BD maison (v0.4)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -8,11 +8,17 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   les dossiers vides sont cachés, le tri est « naturel » (T2 avant T10).
 - **Formats** : CBZ, ZIP, CBR, RAR, PDF (et CB7/7z, CBT/tar). Le vrai format est détecté
   d'après le contenu : un `.cbr` qui est en fait un zip fonctionne.
-- **Lecteur** : page entière / pleine largeur / taille d'origine, clavier, tactile (balayage,
+- **Lecteur** : une page, **double page** (couverture et planches larges seules) ou **défilement
+  continu** (touche `D`), page entière / pleine largeur / taille d'origine, clavier, tactile (balayage,
   zones de tape), sens manga, plein écran, préchargement des pages suivantes, enchaînement
   sur l'album suivant à la fin.
 - **Progression** : reprise là où vous vous êtes arrêté, « Reprendre la lecture » sur l'accueil,
   badges lu / en cours (aussi sur les dossiers : « 3/16 lus »), marquer lu / non lu.
+- **Profils** (« Qui lit ? ») : chacun sa progression et ses réglages d'affichage, code PIN facultatif par
+  profil, et un **code d'accès** général facultatif pour toute la bibliothèque.
+- **Flux OPDS** (`http://<serveur>:2205/opds`) pour lire depuis une appli mobile (Panels, Chunky, Moon+,
+  Mihon…) : navigation par dossiers, reprise, récents, recherche, téléchargement et lecture page par page
+  (OPDS-PSE) sans télécharger l'album.
 - **Recherche** sans tenir compte des accents ni de la casse (« aigles decap » trouve
   « Aigles Décapitées (Les) »), sur les noms de dossiers et de fichiers.
 - **Pages redimensionnées** par le serveur (comme Ubooquity) et mises en cache : rapide sur
@@ -107,8 +113,8 @@ puis ouvrir `http://localhost:2203` (ou le port donné par `PORT`). Pour les CBR
   défiler la page), clic sur les bords de l'image, balayage ou tape sur les bords sur mobile ;
   tape / clic au centre pour afficher ou cacher les barres. Molette = page suivante / précédente
   en mode page entière.
-  `F` change l'ajustement, `M` le sens manga, `P` le plein écran, `Début` / `Fin` première / dernière
-  page, `Échap` revient au dossier.
+  `D` change l'affichage (1 page, 2 pages, défilement), `F` l'ajustement, `M` le sens manga, `P` le plein
+  écran, `Début` / `Fin` première / dernière page, `Échap` revient au dossier.
 - Le lecteur retient l'ajustement choisi et le sens de lecture par album (dans le navigateur),
   et le dernier ajustement choisi devient celui par défaut.
 - À la dernière page, une flèche de plus propose l'album suivant du dossier (`Entrée` pour enchaîner).
@@ -120,6 +126,7 @@ bulle/
   bulle/library.py   scanner des dossiers + base SQLite (albums, dossiers, progression, recherche)
   bulle/comics.py    ouverture CBZ/CBR/PDF, redimensionnement JPEG, cache disque
   bulle/bedetheque.py recherche et lecture des fiches Bédéthèque (poliment, avec cache), comparaison avec un dossier
+  bulle/opds.py      flux OPDS / OPDS-PSE pour les applis de lecture
   bulle/server.py    serveur web Flask (servi par waitress) + API JSON + scan périodique
   bulle/static/      interface : index.html + app.js (navigation), reader.html + reader.js (lecteur), style.css
   stack.yml          la stack à coller dans Dockhand (image ghcr.io/kermess14/bulle)
@@ -144,7 +151,9 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET /api/stats` | nombre d'albums, de dossiers, taille, dernier scan |
 | `GET` `PUT /api/settings` | réglages globaux (serveur) et du profil courant ; `PUT {"global": {...}, "profile": {...}}` |
 | `GET /api/cache` · `POST /api/cache/clear` · `POST /api/covers/rebuild` | taille du cache, vider les pages, régénérer les couvertures |
-| `GET /api/profiles` · `POST /api/profiles/select` | profils de lecture (progression séparée) — interface à venir |
+| `GET` `POST /api/profiles` · `PUT` `DELETE /api/profiles/<id>` · `POST /api/profiles/select` | profils (`{"id", "pin"}` pour choisir) |
+| `GET /api/auth/status` · `POST /api/auth/login` · `POST /api/auth/logout` | code d'accès général (`PUT /api/settings {"global": {"access_pin": "…"}}` pour le définir, `""` pour l'enlever) |
+| `GET /opds` · `/opds/folder/<id>` · `/opds/continue` · `/opds/recent` · `/opds/search?q=` | flux OPDS (authentification Basic avec le code d'accès s'il y en a un) |
 | `POST /api/bdt/analyze/<dossier>` | analyse Bédéthèque d'un dossier (`{"url": …}` pour imposer la série, `{"details": true}` pour les auteurs, `{"force": true}` pour relire) |
 | `GET` `DELETE /api/bdt/series/<dossier>` · `GET /api/bdt/search?q=` | lien existant / oublier · chercher une série |
 | `GET /api/bdt/collection` · `POST` `GET` `DELETE /api/bdt/batch` · `GET /api/bdt/status` | collection · analyse groupée (lancer, suivre, arrêter) · état |
@@ -159,10 +168,8 @@ une fois dans `data/cache/extract` (les 8 derniers albums ouverts sont gardés).
 
 ## Limites du prototype et suite possible
 
-- Pas encore de comptes ni de mot de passe (les profils sont préparés dans la base, l'écran arrive) :
-  à réserver au réseau local (ou derrière un reverse proxy avec authentification).
-- Pas encore de double page ni de lecture en « défilement continu ».
-- Pas de flux OPDS (pour les applis de lecture mobiles) : simple à ajouter ensuite.
+- Le code d'accès et les PIN protègent des curieux du réseau local, pas d'Internet : pour exposer Bulle
+  dehors, passez par un reverse proxy avec authentification et HTTPS.
 - Les métadonnées `ComicInfo.xml` (celles que BDConverter ajoutera) ne sont pas encore lues.
 - Bédéthèque n'a pas d'API : Bulle lit les pages de recherche et de série comme un visiteur, lentement,
   en respectant le robots.txt du site (pas de couvertures ni de pages « ajax »). Si le site refuse les
