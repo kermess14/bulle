@@ -1380,25 +1380,51 @@
     scanBtn.classList.toggle("spin", !!s.running);
     if (s.running) {
       const txt = s.phase === "covers" ? `Couvertures : ${s.covers_done}/${s.covers_total}` : `Scan en cours… ${s.albums} albums`;
-      toast(`<div class="spinner"></div>${txt}`, { sticky: true });
+      const stop = scanStopping ? `<span class="muted">arrêt…</span>` : `<button class="btn mini" type="button" data-stop-scan title="Arrêter (rien n'est perdu)">■ Arrêter</button>`;
+      toast(`<div class="spinner"></div>${txt} ${stop}`, { sticky: true });
       scanTimer = setTimeout(() => pollScan(true), 1500);
     } else if (refreshWhenDone) {
-      if (s.error) toast(`${ICON.warn} Scan impossible : ${esc(s.error)}`);
+      scanStopping = false;
+      if (s.stopped) toast(s.stopped === "covers" ? `Couvertures arrêtées (${s.covers_done}/${s.covers_total}) : les autres se feront à l'ouverture des albums` : "Scan arrêté : la bibliothèque est restée comme avant");
+      else if (s.error) toast(`${ICON.warn} Scan impossible : ${esc(s.error)}`);
       else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.removed ? `, ${s.removed} retirés` : ""}`);
       if (!location.hash.startsWith("#/settings")) route();
       loadStats();
     }
   }
+  let scanStopping = false;
   scanBtn.addEventListener("click", async () => {
+    if (scanBtn.classList.contains("spin")) {   // scan déjà en cours : le bouton propose de l'arrêter
+      if (confirm("Un scan est en cours. L'arrêter ? (rien n'est perdu)")) stopScan();
+      return;
+    }
     try { await fetch("/api/scan", { method: "POST" }); } catch (_) { /* ignore */ }
     pollScan(true);
   });
+  async function stopScan() {
+    scanStopping = true;
+    try { await fetch("/api/scan/stop", { method: "POST" }); } catch (_) { /* ignore */ }
+    pollScan(true);
+  }
+  toastEl.addEventListener("click", e => { if (e.target.closest("[data-stop-scan]")) stopScan(); });
+
+  /* Bulle mis à jour pendant que la page était ouverte : la page garde l'ancien code tant qu'on ne la recharge pas. */
+  const PAGE_VERSION = ($('meta[name="bulle-version"]') || {}).content || "";
+  let updateShown = false;
+  function checkUpdated(serverVersion) {
+    if (!PAGE_VERSION || !serverVersion || serverVersion === PAGE_VERSION || updateShown) return;
+    updateShown = true;
+    toast(`Bulle a été mis à jour (v${esc(serverVersion)}) <button class="btn mini primary" type="button" onclick="location.reload()">Recharger la page</button>`, { sticky: true });
+  }
+  setInterval(() => { if (!document.hidden) loadStats(); }, 5 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadStats(); });
 
   async function loadStats() {
     try {
       const s = await api("/api/stats");
       statsEl.textContent = `${s.albums} albums · ${fmtSize(s.size)}`;
       const ver = $("#ver"); if (ver && s.version) ver.textContent = "v" + s.version;
+      checkUpdated(s.version);
       statsEl.title = `${s.folders} dossiers · ${s.read} lus · dernier scan : ${fmtDate(s.last_scan)}`;
       if (s.scan && s.scan.running) pollScan(true);
     } catch (_) { /* ignore */ }
