@@ -2,9 +2,9 @@ FROM python:3.12-slim
 LABEL org.opencontainers.image.source="https://github.com/kermess14/bulle" \
       org.opencontainers.image.description="Bulle — lecteur de BD maison (CBZ/CBR/PDF), navigation par dossiers"
 
-# unar : ouverture des CBR / RAR (et 7z). Le reste est en pur Python (pypdfium2 pour les PDF).
+# unar : ouverture des CBR / RAR (et 7z) ; 7z et bsdtar (libarchive) en secours si unar bute sur une archive. Le reste est en pur Python.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends unar p7zip-full ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends unar p7zip-full libarchive-tools ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
