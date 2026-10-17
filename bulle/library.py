@@ -5,7 +5,9 @@ Rien n'est deviné d'après les noms de fichiers.
 """
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -43,15 +45,33 @@ CREATE TABLE IF NOT EXISTS nodes(
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id, kind, sort_key);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind_mtime ON nodes(kind, mtime);
+CREATE TABLE IF NOT EXISTS profiles(
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,
+  pin_hash   TEXT,
+  avatar     TEXT,
+  created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS progress(
-  node_id    INTEGER PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+  profile_id INTEGER NOT NULL DEFAULT 1 REFERENCES profiles(id) ON DELETE CASCADE,
+  node_id    INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
   page       INTEGER NOT NULL,
   page_count INTEGER,
   completed  INTEGER NOT NULL DEFAULT 0,
-  updated_at REAL NOT NULL
+  updated_at REAL NOT NULL,
+  PRIMARY KEY(profile_id, node_id)
+);
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS profile_settings(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  key        TEXT NOT NULL,
+  value      TEXT NOT NULL,
+  PRIMARY KEY(profile_id, key)
 );
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 """
+SCHEMA_VERSION = 2
+DEFAULT_PROFILE = 1
 
 
 # ----------------------------------------------------------------------------
@@ -129,7 +149,110 @@ class Library:
         }
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         with self._write_lock:
+            self._migrate()
             self.conn.executescript(SCHEMA)
+            self.conn.execute("INSERT OR IGNORE INTO profiles(id, name, created_at) VALUES(?, 'Moi', ?)",
+                              (DEFAULT_PROFILE, time.time()))
+            self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
+                              (str(SCHEMA_VERSION),))
+            self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Base v1 (progression sans profil) → v2 : on recrée la table progress avec le profil 1."""
+        conn = self.conn
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(progress)")]
+        if cols and "profile_id" not in cols:
+            log.info("Migration de la base : progression rattachée au profil par défaut")
+            conn.executescript(f"""
+                BEGIN;
+                CREATE TABLE IF NOT EXISTS profiles(id INTEGER PRIMARY KEY, name TEXT NOT NULL, pin_hash TEXT,
+                                                    avatar TEXT, created_at REAL NOT NULL);
+                INSERT OR IGNORE INTO profiles(id, name, created_at) VALUES({DEFAULT_PROFILE}, 'Moi', {time.time()});
+                ALTER TABLE progress RENAME TO progress_v1;
+                CREATE TABLE progress(
+                  profile_id INTEGER NOT NULL DEFAULT 1 REFERENCES profiles(id) ON DELETE CASCADE,
+                  node_id    INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                  page       INTEGER NOT NULL,
+                  page_count INTEGER,
+                  completed  INTEGER NOT NULL DEFAULT 0,
+                  updated_at REAL NOT NULL,
+                  PRIMARY KEY(profile_id, node_id)
+                );
+                INSERT INTO progress(profile_id, node_id, page, page_count, completed, updated_at)
+                  SELECT {DEFAULT_PROFILE}, node_id, page, page_count, completed, updated_at FROM progress_v1;
+                DROP TABLE progress_v1;
+                COMMIT;
+            """)
+
+    # -- réglages --------------------------------------------------------------
+    def get_settings(self, profile_id: Optional[int] = None) -> dict:
+        """Réglages globaux (profile_id=None) ou d'un profil, sous forme de dict (valeurs JSON)."""
+        if profile_id is None:
+            rows = self.conn.execute("SELECT key, value FROM settings").fetchall()
+        else:
+            rows = self.conn.execute("SELECT key, value FROM profile_settings WHERE profile_id=?",
+                                     (profile_id,)).fetchall()
+        out = {}
+        for r in rows:
+            try:
+                out[r["key"]] = json.loads(r["value"])
+            except ValueError:
+                out[r["key"]] = r["value"]
+        return out
+
+    def set_settings(self, values: dict, profile_id: Optional[int] = None) -> None:
+        """Enregistre (fusionne) des réglages ; une valeur None efface la clé (retour au défaut)."""
+        with self._write_lock:
+            for key, val in values.items():
+                if profile_id is None:
+                    if val is None:
+                        self.conn.execute("DELETE FROM settings WHERE key=?", (key,))
+                    else:
+                        self.conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?,?)",
+                                          (key, json.dumps(val, ensure_ascii=False)))
+                else:
+                    if val is None:
+                        self.conn.execute("DELETE FROM profile_settings WHERE profile_id=? AND key=?",
+                                          (profile_id, key))
+                    else:
+                        self.conn.execute(
+                            "INSERT OR REPLACE INTO profile_settings(profile_id, key, value) VALUES(?,?,?)",
+                            (profile_id, key, json.dumps(val, ensure_ascii=False)))
+            self.conn.commit()
+
+    # -- profils ---------------------------------------------------------------
+    def profiles(self) -> list[dict]:
+        rows = self.conn.execute("SELECT id, name, avatar, pin_hash IS NOT NULL AS has_pin FROM profiles "
+                                 "ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+    def profile(self, profile_id: int) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
+        return dict(r) if r else None
+
+    def add_profile(self, name: str, pin_hash: Optional[str] = None, avatar: Optional[str] = None) -> dict:
+        with self._write_lock:
+            cur = self.conn.execute("INSERT INTO profiles(name, pin_hash, avatar, created_at) VALUES(?,?,?,?)",
+                                    (name.strip() or "Lecteur", pin_hash, avatar, time.time()))
+            self.conn.commit()
+            return self.profile(cur.lastrowid)
+
+    def update_profile(self, profile_id: int, **fields) -> Optional[dict]:
+        allowed = {k: v for k, v in fields.items() if k in ("name", "pin_hash", "avatar")}
+        if allowed:
+            with self._write_lock:
+                sets = ", ".join(f"{k}=?" for k in allowed)
+                self.conn.execute(f"UPDATE profiles SET {sets} WHERE id=?", (*allowed.values(), profile_id))
+                self.conn.commit()
+        return self.profile(profile_id)
+
+    def delete_profile(self, profile_id: int) -> bool:
+        if profile_id == DEFAULT_PROFILE:
+            return False
+        with self._write_lock:
+            cur = self.conn.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
+            self.conn.commit()
+            return cur.rowcount > 0
 
     # -- connexion par thread --------------------------------------------------
     @property
@@ -375,37 +498,48 @@ class Library:
                 break
         return prev, nxt
 
-    def all_progress(self) -> list[dict]:
+    # -- progression (par profil) -----------------------------------------------
+    @staticmethod
+    def is_complete(page: int, page_count: Optional[int], threshold: float = 1.0) -> bool:
+        """Lu si on a atteint la dernière page, ou la part `threshold` de l'album (ex. 0.9 = 90 %)."""
+        if not page_count:
+            return False
+        needed = min(page_count - 1, max(0, int(math.ceil(page_count * threshold)) - 1))
+        return page >= needed
+
+    def all_progress(self, profile_id: int = DEFAULT_PROFILE) -> list[dict]:
         rows = self.conn.execute(
             "SELECT p.node_id, p.page, p.page_count, p.completed, p.updated_at, n.path "
-            "FROM progress p JOIN nodes n ON n.id=p.node_id").fetchall()
+            "FROM progress p JOIN nodes n ON n.id=p.node_id WHERE p.profile_id=?", (profile_id,)).fetchall()
         return [dict(r) for r in rows]
 
-    def progress(self, node_id: int) -> Optional[dict]:
-        r = self.conn.execute("SELECT * FROM progress WHERE node_id=?", (node_id,)).fetchone()
+    def progress(self, node_id: int, profile_id: int = DEFAULT_PROFILE) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM progress WHERE profile_id=? AND node_id=?",
+                              (profile_id, node_id)).fetchone()
         return dict(r) if r else None
 
     def set_progress(self, node_id: int, page: int, page_count: Optional[int],
-                     completed: Optional[bool] = None) -> dict:
+                     completed: Optional[bool] = None, profile_id: int = DEFAULT_PROFILE,
+                     threshold: float = 1.0) -> dict:
         if page_count is None:
             page_count = (self.node(node_id) or {}).get("page_count")
         page = max(0, int(page))
         if page_count:
             page = min(page, page_count - 1)
         if completed is None:
-            completed = bool(page_count) and page >= page_count - 1
+            completed = self.is_complete(page, page_count, threshold)
         with self._write_lock:
             self.conn.execute(
-                "INSERT INTO progress(node_id, page, page_count, completed, updated_at) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(node_id) DO UPDATE SET page=excluded.page, page_count=excluded.page_count, "
-                "completed=excluded.completed, updated_at=excluded.updated_at",
-                (node_id, page, page_count, 1 if completed else 0, time.time()))
+                "INSERT INTO progress(profile_id, node_id, page, page_count, completed, updated_at) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id, node_id) DO UPDATE SET page=excluded.page, "
+                "page_count=excluded.page_count, completed=excluded.completed, updated_at=excluded.updated_at",
+                (profile_id, node_id, page, page_count, 1 if completed else 0, time.time()))
             self.conn.commit()
-        return self.progress(node_id)
+        return self.progress(node_id, profile_id)
 
-    def clear_progress(self, node_id: int) -> None:
+    def clear_progress(self, node_id: int, profile_id: int = DEFAULT_PROFILE) -> None:
         with self._write_lock:
-            self.conn.execute("DELETE FROM progress WHERE node_id=?", (node_id,))
+            self.conn.execute("DELETE FROM progress WHERE profile_id=? AND node_id=?", (profile_id, node_id))
             self.conn.commit()
 
     def set_pages(self, node_id: int, page_count: Optional[int], error: Optional[str]) -> None:
@@ -419,32 +553,32 @@ class Library:
                     "WHERE node_id=?", (page_count, page_count, node_id))
             self.conn.commit()
 
-    def continue_reading(self, limit: int = 20) -> list[dict]:
+    _ALBUM_WITH_PROGRESS = ("SELECT n.*, p.page AS p_page, p.page_count AS p_count, p.completed AS p_completed, "
+                            "p.updated_at AS p_updated FROM nodes n "
+                            "LEFT JOIN progress p ON p.node_id=n.id AND p.profile_id=? ")
+
+    def continue_reading(self, limit: int = 20, profile_id: int = DEFAULT_PROFILE) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT n.*, p.page AS p_page, p.page_count AS p_count, p.completed AS p_completed, "
-            "p.updated_at AS p_updated FROM progress p JOIN nodes n ON n.id=p.node_id "
-            "WHERE p.completed=0 ORDER BY p.updated_at DESC LIMIT ?", (limit,)).fetchall()
+            self._ALBUM_WITH_PROGRESS + "WHERE p.completed=0 ORDER BY p.updated_at DESC LIMIT ?",
+            (profile_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
-    def recent(self, limit: int = 24) -> list[dict]:
+    def recent(self, limit: int = 24, profile_id: int = DEFAULT_PROFILE) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT n.*, p.page AS p_page, p.page_count AS p_count, p.completed AS p_completed, "
-            "p.updated_at AS p_updated FROM nodes n LEFT JOIN progress p ON p.node_id=n.id "
-            "WHERE n.kind='album' ORDER BY n.added_at DESC, n.mtime DESC LIMIT ?", (limit,)).fetchall()
+            self._ALBUM_WITH_PROGRESS + "WHERE n.kind='album' ORDER BY n.added_at DESC, n.mtime DESC LIMIT ?",
+            (profile_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
-    def search(self, query: str, limit: int = 120) -> list[dict]:
+    def search(self, query: str, limit: int = 120, profile_id: int = DEFAULT_PROFILE) -> list[dict]:
         words = [w for w in normalize(query).split(" ") if w]
         if not words:
             return []
         where = " AND ".join("search_text LIKE ? ESCAPE '\\'" for _ in words)
         params = ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for w in words]
         rows = self.conn.execute(
-            f"SELECT n.*, p.page AS p_page, p.page_count AS p_count, p.completed AS p_completed, "
-            f"p.updated_at AS p_updated FROM nodes n LEFT JOIN progress p ON p.node_id=n.id "
-            f"WHERE n.path<>'' AND {where} "
+            self._ALBUM_WITH_PROGRESS + f"WHERE n.path<>'' AND {where} "
             f"ORDER BY CASE n.kind WHEN 'folder' THEN 0 ELSE 1 END, n.sort_key LIMIT ?",
-            (*params, limit * 4)).fetchall()
+            (profile_id, *params, limit * 4)).fetchall()
         q = " ".join(words)
 
         def rank(r):
@@ -478,14 +612,14 @@ class Library:
             self.conn.commit()
             return cur.rowcount
 
-    def stats(self) -> dict:
+    def stats(self, profile_id: int = DEFAULT_PROFILE) -> dict:
         r = self.conn.execute(
             "SELECT SUM(CASE WHEN kind='album' THEN 1 ELSE 0 END) AS albums, "
             "SUM(CASE WHEN kind='folder' AND path<>'' THEN 1 ELSE 0 END) AS folders, "
             "SUM(CASE WHEN kind='album' THEN size ELSE 0 END) AS size FROM nodes").fetchone()
         p = self.conn.execute(
             "SELECT SUM(completed) AS done, SUM(CASE WHEN completed=0 THEN 1 ELSE 0 END) AS reading "
-            "FROM progress").fetchone()
+            "FROM progress WHERE profile_id=?", (profile_id,)).fetchone()
         last = self.conn.execute("SELECT value FROM meta WHERE key='last_scan'").fetchone()
         return {"albums": r["albums"] or 0, "folders": r["folders"] or 0, "size": r["size"] or 0,
                 "read": p["done"] or 0, "reading": p["reading"] or 0,

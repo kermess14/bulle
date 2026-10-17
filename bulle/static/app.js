@@ -1,4 +1,4 @@
-/* Bulle — navigation dans la bibliothèque */
+/* Bulle — navigation dans la bibliothèque + page Réglages */
 (() => {
   "use strict";
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -31,8 +31,62 @@
     }
     return r.json();
   }
+  const putJson = (url, body) => api(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-  // ---------------------------------------------------------------- toasts
+  // ================================================================ réglages
+  const PROFILE_DEFAULTS = {
+    thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", sort: "natural", hide_read: false,
+    show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
+    remember_folder: false,
+    reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
+    reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
+  };
+  const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
+  const HOVER = { none: 1, light: 1.05, strong: 1.12 };
+  const settings = { profile: Object.assign({}, PROFILE_DEFAULTS), global: {}, meta: {} };
+  try { Object.assign(settings.profile, JSON.parse(localStorage.getItem("bulle:profile") || "{}")); } catch (_) { /* ignore */ }
+
+  function applyAppearance() {
+    const p = settings.profile, root = document.documentElement;
+    root.style.setProperty("--thumb", (THUMB[p.thumb_size] || THUMB.m) + "px");
+    root.style.setProperty("--hover-scale", String(HOVER[p.hover_zoom] ?? 1.05));
+    const theme = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : p.theme;
+    root.dataset.theme = theme === "light" ? "light" : "dark";
+    $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
+  }
+  matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyAppearance);
+  applyAppearance();
+
+  async function loadSettings() {
+    try {
+      const s = await api("/api/settings");
+      settings.global = s.global; settings.meta = s;
+      settings.profile = Object.assign({}, PROFILE_DEFAULTS, s.profile || {});
+      try { localStorage.setItem("bulle:profile", JSON.stringify(settings.profile)); } catch (_) { /* ignore */ }
+      applyAppearance();
+    } catch (_) { /* hors ligne : on garde la copie locale */ }
+  }
+  let saveTimer = null, pendingProfile = {}, pendingGlobal = {};
+  function saveSettings(profilePatch, globalPatch) {
+    if (profilePatch) { Object.assign(settings.profile, profilePatch); Object.assign(pendingProfile, profilePatch); }
+    if (globalPatch) { Object.assign(settings.global, globalPatch); Object.assign(pendingGlobal, globalPatch); }
+    try { localStorage.setItem("bulle:profile", JSON.stringify(settings.profile)); } catch (_) { /* ignore */ }
+    applyAppearance();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      const body = {};
+      if (Object.keys(pendingProfile).length) body.profile = pendingProfile;
+      if (Object.keys(pendingGlobal).length) body.global = pendingGlobal;
+      pendingProfile = {}; pendingGlobal = {};
+      try {
+        const s = await putJson("/api/settings", body);
+        settings.global = s.global; settings.meta = s;
+        toast("Réglages enregistrés");
+      } catch (e) { toast(`${ICON.warn} Réglage non enregistré : ${esc(e.message)}`); }
+    }, 500);
+  }
+
+  // ================================================================ toasts
   let toastTimer = null;
   function toast(html, { sticky = false } = {}) {
     toastEl.innerHTML = html;
@@ -40,9 +94,8 @@
     clearTimeout(toastTimer);
     if (!sticky) toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3500);
   }
-  const hideToast = () => { toastEl.hidden = true; clearTimeout(toastTimer); };
 
-  // ---------------------------------------------------------------- cartes
+  // ================================================================ cartes
   function coverHtml(item, inner = "") {
     const id = item.kind === "folder" ? item.cover_id : item.id;
     const v = item.kind === "folder" ? ("f" + item.cover_id) : item.mtime;
@@ -70,37 +123,69 @@
     return `<span class="badge" title="En cours">p. ${p.page + 1}</span>`;
   }
 
-  function card(item, { sub } = {}) {
-    if (item.kind === "folder") {
-      const read = item.read_count ? `<div class="sub">${item.read_count}/${item.album_count} lus${item.reading_count ? " · " + plural(item.reading_count, "en cours", "en cours") : ""}</div>`
-        : item.reading_count ? `<div class="sub">${plural(item.reading_count, "album en cours", "albums en cours")}</div>` : "";
-      return `<a class="card" href="#/f/${item.id}" data-letter="${esc(letterOf(item.name))}">
-        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>`)}
-        <div class="title">${esc(item.name)}</div>${read || `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`}
-      </a>`;
-    }
-    const badge = item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress);
-    const href = item.error ? "#" : `/read/${item.id}`;
-    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${esc(letterOf(item.name))}">
-      ${coverHtml(item, badge)}
-      <button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>
-      <div class="title">${esc(item.name)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
-    </a>`;
-  }
-
   function letterOf(name) {
     const c = norm(name).replace(/^(le |la |les |l'|the |un |une |des )/, "").trim()[0] || "#";
     return /[a-z]/.test(c) ? c.toUpperCase() : "#";
   }
 
-  function lettersHtml(children) {
-    if (children.length < 40) return "";
-    const present = new Set(children.map(c => letterOf(c.name)));
+  function card(item, { sub } = {}) {
+    const letter = esc(letterOf(item.name));
+    if (item.kind === "folder") {
+      const read = item.read_count ? `<div class="sub">${item.read_count}/${item.album_count} lus${item.reading_count ? " · " + plural(item.reading_count, "en cours", "en cours") : ""}</div>`
+        : item.reading_count ? `<div class="sub">${plural(item.reading_count, "album en cours", "albums en cours")}</div>` : "";
+      const done = item.album_count && item.read_count >= item.album_count ? `<span class="badge ok" title="Tout lu">${ICON.check}</span>` : "";
+      return `<a class="card" href="#/f/${item.id}" data-letter="${letter}">
+        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}`)}
+        <div class="title">${esc(item.name)}</div>${read || `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`}
+      </a>`;
+    }
+    const badge = item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress);
+    const href = item.error ? "#" : `/read/${item.id}`;
+    const line2 = sub ? esc(sub) : (settings.profile.show_pages && item.pages ? plural(item.pages, "page", "pages") : "");
+    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}">
+      ${coverHtml(item, badge)}
+      <button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>
+      <div class="title">${esc(item.name)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
+    </a>`;
+  }
+
+  // ================================================================ tri, filtre, pages, lettres
+  function arrange(children) {
+    const p = settings.profile;
+    let list = children.slice();
+    if (p.hide_read) {
+      list = list.filter(c => c.kind === "folder" ? !(c.album_count && c.read_count >= c.album_count) : !(c.progress && c.progress.completed));
+    }
+    if (p.sort === "recent") {
+      list.sort((a, b) => (a.kind !== b.kind ? (a.kind === "folder" ? -1 : 1) : a.kind === "folder" ? 0 : (b.added - a.added) || (b.mtime - a.mtime)));
+    } else if (p.sort === "unread") {
+      const rank = c => c.kind === "folder" ? (c.album_count && c.read_count >= c.album_count ? 2 : 0) : !c.progress ? 0 : c.progress.completed ? 2 : 1;
+      list.sort((a, b) => (a.kind !== b.kind ? (a.kind === "folder" ? -1 : 1) : rank(a) - rank(b)));
+    }
+    return list;
+  }
+
+  function pagerHtml(page, pages, total) {
+    if (pages <= 1) return "";
+    const btn = (n, label = n, cls = "") => `<button type="button" class="pg ${cls} ${n === page ? "on" : ""}" data-page="${n}" ${n < 1 || n > pages ? "disabled" : ""}>${label}</button>`;
+    const nums = new Set([1, pages, page - 1, page, page + 1, page - 2, page + 2].filter(n => n >= 1 && n <= pages));
+    const sorted = [...nums].sort((a, b) => a - b);
+    let items = "", prev = 0;
+    for (const n of sorted) { if (n - prev > 1) items += `<span class="dots">…</span>`; items += btn(n); prev = n; }
+    return `<nav class="pager" aria-label="Pages">${btn(page - 1, "‹", "arrow")}${items}${btn(page + 1, "›", "arrow")}
+      <span class="pginfo">Page ${page} sur ${pages} · ${plural(total, "entrée", "entrées")}</span></nav>`;
+  }
+
+  function lettersHtml(list, mode) {
+    const pref = settings.profile.letters;
+    if (pref === "never" || settings.profile.sort !== "natural") return "";
+    if (pref === "auto" && list.length < 40) return "";
+    const present = new Set(list.map(c => letterOf(c.name)));
     const all = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"];
     return `<div class="letters" id="letters">${all.map(l => `<button type="button" data-letter="${l}" class="${present.has(l) ? "on" : ""}" ${present.has(l) ? "" : "disabled"}>${l}</button>`).join("")}</div>`;
   }
 
-  // ---------------------------------------------------------------- vues
+  // ================================================================ vues
   function setCrumbs(list, tail) {
     const parts = list.map((c, i) => i === list.length - 1 && !tail
       ? `<span class="cur">${esc(c.name)}</span>`
@@ -118,31 +203,41 @@
     if (running) pollScan(true);
   }
 
-  async function viewFolder(id) {
+  let view = { children: [], list: [], page: 1, pages: 1, id: 0 };
+  function gridFor(list, page) {
+    const per = +settings.profile.per_page || 0;
+    const pages = per ? Math.max(1, Math.ceil(list.length / per)) : 1;
+    page = Math.min(Math.max(1, page), pages);
+    const slice = per ? list.slice((page - 1) * per, page * per) : list;
+    view.page = page; view.pages = pages; view.list = list;
+    return `${pagerHtml(page, pages, list.length)}
+      ${list.length ? `<div class="grid" id="grid">${slice.map(c => card(c)).join("")}</div>` : `<div class="empty">${settings.profile.hide_read ? "Tout est lu ici (les albums lus sont masqués dans les réglages)." : "Dossier vide"}</div>`}
+      ${pages > 1 ? pagerHtml(page, pages, list.length) : ""}`;
+  }
+
+  async function viewFolder(id, page) {
+    const p = settings.profile;
     const [data, cont, recent] = await Promise.all([
       api(id ? `/api/browse/${id}` : "/api/browse"),
-      id ? null : api("/api/continue"),
-      id ? null : api("/api/recent?n=18"),
+      id || !p.show_continue ? null : api("/api/continue"),
+      id || !p.show_recent ? null : api(`/api/recent?n=${+p.recent_count || 18}`),
     ]);
     if (data.empty) return renderEmpty(data.scan);
     setCrumbs(data.breadcrumb);
     document.title = (id ? data.folder.name + " — " : "") + "Bulle";
-    const children = data.children;
+    view.children = data.children; view.id = id;
+    const list = arrange(data.children);
     let html = "";
     if (!id) {
-      if (cont && cont.length) {
-        html += `<h2>Reprendre la lecture</h2><div class="row">${cont.map(a => card(a, { sub: a.folder })).join("")}</div>`;
-      }
-      if (recent && recent.length && children.length) {
-        html += `<h2>Ajouts récents</h2><div class="row">${recent.map(a => card(a, { sub: a.folder })).join("")}</div>`;
-      }
-      html += `<h2>Bibliothèque <small class="muted">${plural(children.length, "entrée", "entrées")}</small></h2>`;
+      if (cont && cont.length) html += `<h2>Reprendre la lecture</h2><div class="row">${cont.map(a => card(a, { sub: a.folder })).join("")}</div>`;
+      if (recent && recent.length && data.children.length) html += `<h2>Ajouts récents</h2><div class="row">${recent.map(a => card(a, { sub: a.folder })).join("")}</div>`;
+      html += `<h2>Bibliothèque <small class="muted">${plural(list.length, "entrée", "entrées")}</small></h2>`;
     } else {
-      const folders = children.filter(c => c.kind === "folder").length, albums = children.length - folders;
-      html += `<h1>${esc(data.folder.name)} <small class="muted" style="font-size:14px;font-weight:400">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small></h1>`;
+      const folders = list.filter(c => c.kind === "folder").length, albums = list.length - folders;
+      html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small></h1>`;
     }
-    html += lettersHtml(children);
-    html += children.length ? `<div class="grid" id="grid">${children.map(c => card(c)).join("")}</div>` : `<div class="empty">Dossier vide</div>`;
+    html += lettersHtml(list);
+    html += gridFor(list, page || 1);
     main.innerHTML = html;
   }
 
@@ -159,7 +254,113 @@
     main.innerHTML = html;
   }
 
-  // ---------------------------------------------------------------- fiche album
+  // ================================================================ page Réglages
+  function field(label, control, help = "") {
+    return `<div class="field"><div class="flabel"><span>${label}</span>${help ? `<small>${help}</small>` : ""}</div>${control}</div>`;
+  }
+  const sel = (scope, key, opts, val) => `<select data-scope="${scope}" data-key="${key}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(val) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const chk = (scope, key, val) => `<label class="switch"><input type="checkbox" data-scope="${scope}" data-key="${key}" ${val ? "checked" : ""}><i></i></label>`;
+  const num = (scope, key, val, min, max, step = 1) => `<input type="number" data-scope="${scope}" data-key="${key}" value="${val}" min="${min}" max="${max}" step="${step}">`;
+
+  async function viewSettings() {
+    setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
+    document.title = "Réglages — Bulle";
+    main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    await loadSettings();
+    let cache = {}, stats = {};
+    try { [cache, stats] = await Promise.all([api("/api/cache"), api("/api/stats")]); } catch (_) { /* ignore */ }
+    const p = settings.profile, g = settings.global;
+    main.innerHTML = `<h1>Réglages</h1>
+    <div class="settings">
+      <section>
+        <h2>Bibliothèque</h2>
+        ${field("Taille des vignettes", sel("p", "thumb_size", [["s", "Petites"], ["m", "Moyennes"], ["l", "Grandes"], ["xl", "Très grandes"]], p.thumb_size))}
+        ${field("Zoom au survol", sel("p", "hover_zoom", [["none", "Aucun"], ["light", "Léger"], ["strong", "Prononcé"]], p.hover_zoom))}
+        ${field("Vignettes par page", sel("p", "per_page", [[24, "24"], [48, "48"], [96, "96"], [192, "192"], [0, "Toutes (pas de pages)"]], p.per_page), "Au-delà, la liste est découpée en pages.")}
+        ${field("Accès par lettre", sel("p", "letters", [["auto", "Automatique (dossiers de 40 entrées et plus)"], ["always", "Toujours"], ["never", "Jamais"]], p.letters))}
+        ${field("Tri", sel("p", "sort", [["natural", "Alphabétique naturel (T2 avant T10)"], ["recent", "Ajouts récents d'abord"], ["unread", "Non lus d'abord"]], p.sort))}
+        ${field("Masquer les albums lus", chk("p", "hide_read", p.hide_read))}
+        ${field("Nombre de pages sur les cartes", chk("p", "show_pages", p.show_pages))}
+        ${field("« Reprendre la lecture » sur l'accueil", chk("p", "show_continue", p.show_continue))}
+        ${field("« Ajouts récents » sur l'accueil", chk("p", "show_recent", p.show_recent))}
+        ${field("Nombre d'ajouts récents", num("p", "recent_count", p.recent_count, 6, 60, 6))}
+        ${field("Thème", sel("p", "theme", [["dark", "Sombre"], ["light", "Clair"], ["auto", "Comme l'appareil"]], p.theme))}
+        ${field("Rouvrir le dernier dossier au démarrage", chk("p", "remember_folder", p.remember_folder))}
+      </section>
+      <section>
+        <h2>Lecteur</h2>
+        ${field("Ajustement par défaut", sel("p", "reader_fit", [["page", "Page entière"], ["width", "Pleine largeur"], ["original", "Taille d'origine"]], p.reader_fit))}
+        ${field("Sens manga par défaut", chk("p", "reader_manga", p.reader_manga), "Lecture de droite à gauche.")}
+        ${field("Mémoriser l'ajustement et le sens par album", chk("p", "reader_remember_album", p.reader_remember_album))}
+        ${field("Fond", sel("p", "reader_bg", [["black", "Noir"], ["dark", "Gris foncé"], ["gray", "Gris"], ["white", "Blanc"]], p.reader_bg))}
+        ${field("Qualité des pages", sel("p", "reader_quality", [["normal", "Adaptée à l'écran"], ["high", "Haute (1,5× l'écran)"], ["original", "Fichier d'origine (le plus net, le plus lourd)"]], p.reader_quality))}
+        ${field("Pages préchargées", num("p", "reader_preload", p.reader_preload, 0, 10))}
+        ${field("Délai avant de cacher les barres (s)", num("p", "reader_bars_delay", p.reader_bars_delay, 0.5, 10, 0.5))}
+        ${field("Zones de tape sur les bords", chk("p", "reader_tap_zones", p.reader_tap_zones), "Un clic / une tape sur le bord gauche ou droit tourne la page.")}
+        ${field("Molette = tourner la page (mode page entière)", chk("p", "reader_wheel", p.reader_wheel))}
+        ${field("Mode nuit : assombrir les pages", sel("p", "reader_night", [[0, "Non"], [15, "Un peu (15 %)"], [30, "Moyen (30 %)"], [50, "Beaucoup (50 %)"]], p.reader_night))}
+      </section>
+      <section>
+        <h2>Images (serveur)</h2>
+        ${field("Qualité JPEG", sel("g", "quality", [["eco", "Économique (80, plus rapide sur mobile)"], ["normal", "Normale (90, couleurs intactes)"], ["max", "Maximale (95)"]], g.quality), "Les pages déjà en cache gardent leur ancienne qualité jusqu'à ce qu'on vide le cache.")}
+        ${field("Renforcer la netteté après réduction", chk("g", "sharpen", g.sharpen))}
+        ${field("Largeur des couvertures (px)", sel("g", "cover_width", [[400, "400"], [600, "600"], [800, "800"], [1000, "1000"]], g.cover_width), "Après changement, utilisez « Régénérer les couvertures ».")}
+        ${field("Album considéré lu", sel("g", "read_threshold", [[1, "À la dernière page"], [0.95, "À partir de 95 %"], [0.9, "À partir de 90 %"], [0.8, "À partir de 80 %"]], g.read_threshold))}
+      </section>
+      <section>
+        <h2>Scan et cache (serveur)</h2>
+        ${field("Rescan automatique", sel("g", "scan_interval_hours", [[0, "Jamais (bouton ↻ seulement)"], [1, "Toutes les heures"], [6, "Toutes les 6 h"], [12, "Toutes les 12 h"], [24, "Une fois par jour"], [168, "Une fois par semaine"]], g.scan_interval_hours))}
+        ${field("Couvertures générées après un scan", chk("g", "preload_covers", g.preload_covers))}
+        ${field("Couvertures générées en parallèle", num("g", "preload_threads", g.preload_threads, 1, 8), "Baisser à 1 sur un petit serveur.")}
+        ${field("Taille maximale du cache des pages (Go)", num("g", "cache_max_gb", g.cache_max_gb, 0, 1000), "0 = sans limite. Les pages les moins récentes sont supprimées en premier.")}
+        <div class="field"><div class="flabel"><span>Cache actuel</span><small id="cache-size">${cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—"}</small></div>
+          <div class="actions"><button class="btn" type="button" data-action="scan">↻ Scanner maintenant</button>
+          <button class="btn" type="button" data-action="clear-cache">Vider le cache des pages</button>
+          <button class="btn" type="button" data-action="rebuild-covers">Régénérer les couvertures</button></div></div>
+      </section>
+      <section>
+        <h2>À propos</h2>
+        <p class="muted">Bulle ${esc(settings.meta.version || "")} · ${plural(stats.albums || 0, "album", "albums")} dans ${plural(stats.folders || 0, "dossier", "dossiers")} (${fmtSize(stats.size || 0)}) · dernier scan : ${fmtDate(stats.last_scan)}<br>
+        Dossier des BD : <code>${esc(settings.meta.library_root || "")}</code> · <a href="https://github.com/kermess14/bulle" target="_blank" rel="noopener">github.com/kermess14/bulle</a></p>
+        <p><button class="btn" type="button" data-action="reset-profile">Réglages d'affichage par défaut</button></p>
+      </section>
+    </div>`;
+  }
+
+  main.addEventListener("change", e => {
+    const el = e.target.closest("[data-key]");
+    if (!el) return;
+    let val = el.type === "checkbox" ? el.checked : el.value;
+    if (el.type === "number" || (el.tagName === "SELECT" && /^-?\d+(\.\d+)?$/.test(val))) val = Number(val);
+    if (el.dataset.scope === "g") saveSettings(null, { [el.dataset.key]: val });
+    else saveSettings({ [el.dataset.key]: val }, null);
+  });
+
+  async function settingsAction(action, btn) {
+    btn.disabled = true;
+    try {
+      if (action === "scan") { await fetch("/api/scan", { method: "POST" }); pollScan(true); }
+      else if (action === "clear-cache") {
+        const r = await api("/api/cache/clear", { method: "POST" });
+        toast(`Cache des pages vidé (${fmtSize(r.cache.total)} restants : couvertures)`);
+        const el = $("#cache-size"); if (el) el.textContent = `pages ${fmtSize(r.cache.pages)} · couvertures ${fmtSize(r.cache.covers)} · archives décompressées ${fmtSize(r.cache.extract)}`;
+      } else if (action === "rebuild-covers") {
+        if (!confirm("Régénérer toutes les couvertures ? Cela peut prendre un moment sur une grande bibliothèque (elles réapparaissent au fur et à mesure).")) return;
+        const r = await fetch("/api/covers/rebuild", { method: "POST" });
+        if (r.status === 409) toast("Un scan est déjà en cours, réessayez après.");
+        else pollScan(true);
+      } else if (action === "reset-profile") {
+        const patch = {}; for (const k of Object.keys(PROFILE_DEFAULTS)) patch[k] = null;
+        await putJson("/api/settings", { profile: patch });
+        settings.profile = Object.assign({}, PROFILE_DEFAULTS);
+        try { localStorage.setItem("bulle:profile", JSON.stringify(settings.profile)); } catch (_) { /* ignore */ }
+        applyAppearance(); toast("Réglages d'affichage remis par défaut"); route();
+      }
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
+    finally { btn.disabled = false; }
+  }
+
+  // ================================================================ fiche album
   async function openInfo(id) {
     modal.hidden = false;
     modal.innerHTML = `<div class="backdrop"><div class="sheet"><div class="empty"><div class="spinner"></div></div></div></div>`;
@@ -169,7 +370,6 @@
     const pct = p && it.pages ? Math.round(((p.page + 1) / it.pages) * 100) : 0;
     const folder = it.breadcrumb.map(b => b.name).slice(1).join(" › ");
     const parent = it.breadcrumb.length ? it.breadcrumb[it.breadcrumb.length - 1] : null;
-    const fmt = formatLabel(it);
     modal.innerHTML = `<div class="backdrop"><div class="sheet" role="dialog" aria-modal="true" aria-label="Fiche de l'album">
       <button class="iconbtn close" type="button" data-close title="Fermer">${ICON.close}</button>
       ${coverHtml(it)}
@@ -178,7 +378,7 @@
         <div class="path">${esc(folder || "Racine")}</div>
         ${it.error ? `<p class="error">${ICON.warn} ${esc(it.error)}</p>` : ""}
         <dl>
-          <dt>Format</dt><dd>${esc(fmt)}</dd>
+          <dt>Format</dt><dd>${esc(formatLabel(it))}</dd>
           <dt>Taille</dt><dd>${fmtSize(it.size)}</dd>
           <dt>Pages</dt><dd>${it.pages ?? "?"}</dd>
           <dt>Progression</dt><dd>${p ? (p.completed ? "Lu ✓" : `Page ${p.page + 1} sur ${it.pages ?? "?"} — ${pct} %`) : "Non lu"}
@@ -203,20 +403,27 @@
     const t = e.target.closest("[data-close], [data-read], [data-unread], .backdrop");
     if (!t) return;
     if (t.matches(".backdrop") && e.target !== t) return;
-    if (t.dataset.read !== undefined && t.dataset.read !== "") {
-      try { await api(`/api/progress/${t.dataset.read}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ completed: true }) }); }
+    if (t.dataset.read) {
+      try { await putJson(`/api/progress/${t.dataset.read}`, { completed: true }); }
       catch (err) { toast(esc(err.message)); return; }
       closeModal(); route(); return;
     }
-    if (t.dataset.unread !== undefined && t.dataset.unread !== "") {
+    if (t.dataset.unread) {
       await api(`/api/progress/${t.dataset.unread}`, { method: "DELETE" });
       closeModal(); route(); return;
     }
     closeModal();
   });
-  document.addEventListener("keydown", e => { if (e.key === "Escape" && !modal.hidden) closeModal(); });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !modal.hidden) { closeModal(); return; }
+    if (e.target.matches("input, select, textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (view.pages > 1 && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+      const n = view.page + (e.key === "ArrowRight" ? 1 : -1);
+      if (n >= 1 && n <= view.pages) goPage(n);
+    }
+  });
 
-  // ---------------------------------------------------------------- scan
+  // ================================================================ scan
   let scanTimer = null;
   async function pollScan(refreshWhenDone) {
     clearTimeout(scanTimer);
@@ -224,15 +431,14 @@
     try { s = await api("/api/scan"); } catch (_) { return; }
     scanBtn.classList.toggle("spin", !!s.running);
     if (s.running) {
-      const txt = s.phase === "covers"
-        ? `Couvertures : ${s.covers_done}/${s.covers_total}`
-        : `Scan en cours… ${s.albums} albums`;
+      const txt = s.phase === "covers" ? `Couvertures : ${s.covers_done}/${s.covers_total}` : `Scan en cours… ${s.albums} albums`;
       toast(`<div class="spinner"></div>${txt}`, { sticky: true });
       scanTimer = setTimeout(() => pollScan(true), 1500);
     } else if (refreshWhenDone) {
       if (s.error) toast(`${ICON.warn} Scan impossible : ${esc(s.error)}`);
-      else toast(`Scan terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.removed ? `, ${s.removed} retirés` : ""}`);
-      route(); loadStats();
+      else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.removed ? `, ${s.removed} retirés` : ""}`);
+      if (!location.hash.startsWith("#/settings")) route();
+      loadStats();
     }
   }
   scanBtn.addEventListener("click", async () => {
@@ -249,7 +455,7 @@
     } catch (_) { /* ignore */ }
   }
 
-  // ---------------------------------------------------------------- recherche
+  // ================================================================ recherche
   let searchTimer = null;
   searchInput.addEventListener("input", () => {
     clearTimeout(searchTimer);
@@ -261,50 +467,89 @@
   });
   $("#search-form").addEventListener("submit", e => { e.preventDefault(); const q = searchInput.value.trim(); if (q.length >= 2) location.hash = "#/s/" + encodeURIComponent(q); searchInput.blur(); });
 
-  // ---------------------------------------------------------------- clics dans la grille
+  // ================================================================ clics dans la page
+  function goPage(n, scrollToLetter) {
+    const base = view.id ? `#/f/${view.id}` : "#/";
+    const target = n > 1 ? `${base}${base.endsWith("/") ? "" : "/"}p${n}` : base;
+    pendingLetter = scrollToLetter || null;
+    if (location.hash === target || (target === "#/" && (location.hash === "" || location.hash === "#"))) route();
+    else location.hash = target;
+  }
+  let pendingLetter = null;
+  function scrollToCard(el, smooth) {
+    const y = el.getBoundingClientRect().top + window.scrollY - 56 - 52;
+    window.scrollTo({ top: y, behavior: smooth ? "smooth" : "auto" });
+  }
   main.addEventListener("click", e => {
     const info = e.target.closest("[data-info]");
     if (info) { e.preventDefault(); openInfo(info.dataset.info); return; }
+    const action = e.target.closest("[data-action]");
+    if (action) { settingsAction(action.dataset.action, action); return; }
+    const pg = e.target.closest(".pager .pg");
+    if (pg) { goPage(+pg.dataset.page); return; }
     const letter = e.target.closest(".letters button");
     if (letter) {
-      const target = main.querySelector(`#grid .card[data-letter="${letter.dataset.letter}"]`);
-      if (target) {
-        const y = target.getBoundingClientRect().top + window.scrollY - 56 - 48;
-        window.scrollTo({ top: y, behavior: "smooth" });
-      }
+      const L = letter.dataset.letter;
+      const idx = view.list.findIndex(c => letterOf(c.name) === L);
+      if (idx < 0) return;
+      const per = +settings.profile.per_page || 0;
+      const page = per ? Math.floor(idx / per) + 1 : 1;
+      if (page !== view.page) { goPage(page, L); return; }
+      const target = main.querySelector(`#grid .card[data-letter="${L}"]`);
+      if (target) scrollToCard(target, true);
       return;
     }
     const album = e.target.closest("a.card.album");
     if (album && album.getAttribute("href") === "#") { e.preventDefault(); openInfo(album.dataset.id); }
   });
 
-  // ---------------------------------------------------------------- routeur (#/, #/f/<id>, #/s/<q>)
+  // ================================================================ routeur (#/, #/p2, #/f/<id>, #/f/<id>/p2, #/s/<q>, #/settings)
   const scrollMemory = new Map();
   let currentKey = null;
   async function route() {
     if (currentKey !== null) scrollMemory.set(currentKey, window.scrollY);
     const h = location.hash || "#/";
     currentKey = h;
+    try { if (!h.startsWith("#/s/")) localStorage.setItem("bulle:lastHash", h); } catch (_) { /* ignore */ }
     try {
       let m;
-      if ((m = /^#\/f\/(\d+)/.exec(h))) {
-        await viewFolder(+m[1]);
+      if ((m = /^#\/f\/(\d+)(?:\/p(\d+))?/.exec(h))) {
+        await viewFolder(+m[1], m[2] ? +m[2] : 1);
       } else if ((m = /^#\/s\/(.+)/.exec(h))) {
         const q = decodeURIComponent(m[1]);
         if (searchInput.value.trim() !== q) searchInput.value = q;
         await viewSearch(q);
+      } else if (h.startsWith("#/settings")) {
+        await viewSettings();
       } else {
-        if (!h.startsWith("#/s/")) searchInput.value = "";
-        await viewFolder(0);
+        searchInput.value = "";
+        m = /^#\/p(\d+)/.exec(h);
+        await viewFolder(0, m ? +m[1] : 1);
       }
     } catch (e) {
       main.innerHTML = `<div class="empty"><strong>Oups.</strong><p>${esc(e.message)}</p><p><a class="btn" href="#/">Retour à l'accueil</a></p></div>`;
+    }
+    if (pendingLetter) {
+      const L = pendingLetter; pendingLetter = null;
+      requestAnimationFrame(() => { const t = main.querySelector(`#grid .card[data-letter="${L}"]`); if (t) scrollToCard(t, false); });
+      return;
     }
     const y = scrollMemory.get(h);
     requestAnimationFrame(() => window.scrollTo(0, y || 0));
   }
   window.addEventListener("hashchange", route);
   window.addEventListener("pageshow", e => { if (e.persisted) route(); });
-  route();
-  loadStats();
+
+  (async () => {
+    await loadSettings();
+    try {
+      if (settings.profile.remember_folder && !sessionStorage.getItem("bulle:visited") && (location.hash === "" || location.hash === "#/")) {
+        const last = localStorage.getItem("bulle:lastHash");
+        if (last && last.startsWith("#/f/")) location.replace(last);
+      }
+      sessionStorage.setItem("bulle:visited", "1");
+    } catch (_) { /* ignore */ }
+    route();
+    loadStats();
+  })();
 })();
