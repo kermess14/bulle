@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (prototype v0.1)
+# Bulle — lecteur de BD maison (v0.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -19,6 +19,11 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   mobile, même avec des CBZ de 400 Mo.
 - **Scan** automatique au démarrage puis toutes les 12 h (réglable), ou à la demande (bouton ↻).
   Les couvertures se génèrent en arrière-plan après le scan.
+- **Réglages** (bouton ⚙) : taille des vignettes et zoom au survol, nombre de vignettes par page
+  (la liste est alors découpée en pages, flèches ← → du clavier), accès par lettre, tri, masquer les
+  albums lus, thème sombre / clair, réglages du lecteur (ajustement, sens, fond, qualité, préchargement,
+  mode nuit…), qualité des images côté serveur, seuil « album lu », fréquence du scan, taille du cache.
+  Les réglages d'affichage sont enregistrés sur le serveur (ils vous suivent d'un appareil à l'autre).
 - Ne modifie **jamais** vos fichiers : le dossier des BD est monté en lecture seule.
 
 Dépôt : https://github.com/kermess14/bulle
@@ -71,6 +76,9 @@ Après une modification du code, `python3 make_stack.py` régénère ce fichier.
 | `THREADS` | `8` | nombre de requêtes servies en parallèle |
 | `PRELOAD_THREADS` | `3` | couvertures générées en parallèle après un scan (baisser à 1 sur un petit serveur) |
 
+Ces variables ne sont que des valeurs de départ : la page ⚙ Réglages de Bulle les modifie (et les
+mémorise dans la base) sans redémarrer le conteneur.
+
 ### Sans Docker (pour essayer sur un PC)
 
 ```
@@ -85,7 +93,8 @@ puis ouvrir `http://localhost:2203` (ou le port donné par `PORT`). Pour les CBR
 - Cliquer sur une couverture : ouvre le dossier, ou lance la lecture de l'album (reprise automatique).
 - Le petit « i » sur un album : fiche (taille, pages, progression, marquer lu / non lu,
   recommencer, télécharger, ouvrir le dossier). Un album illisible y explique pourquoi.
-- Dans les gros dossiers (40 entrées et plus), une barre de lettres permet de sauter directement à une lettre.
+- Dans les gros dossiers (40 entrées et plus, ou toujours selon le réglage), une barre de lettres permet de
+  sauter directement à une lettre, même si la liste est découpée en pages.
 - Dans le lecteur : `←` `→` ou `Espace` pour tourner les pages (en mode largeur, `Espace` fait d'abord
   défiler la page), clic sur les bords de l'image, balayage ou tape sur les bords sur mobile ;
   tape / clic au centre pour afficher ou cacher les barres. Molette = page suivante / précédente
@@ -124,17 +133,22 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET /api/search?q=` | recherche dans les noms (sans accents ni casse) |
 | `POST /api/scan` · `GET /api/scan` | lancer un scan · état du scan et des couvertures |
 | `GET /api/stats` | nombre d'albums, de dossiers, taille, dernier scan |
+| `GET` `PUT /api/settings` | réglages globaux (serveur) et du profil courant ; `PUT {"global": {...}, "profile": {...}}` |
+| `GET /api/cache` · `POST /api/cache/clear` · `POST /api/covers/rebuild` | taille du cache, vider les pages, régénérer les couvertures |
+| `GET /api/profiles` · `POST /api/profiles/select` | profils de lecture (progression séparée) — interface à venir |
 | `GET /api/download/<id>` | télécharger le fichier d'origine |
 | `GET /read/<id>` | la page du lecteur (`?page=0` pour recommencer au début) |
 
-Les largeurs de pages servies sont arrondies à 400, 600, 800, 1000, 1200, 1600, 2000 ou 2400 px
-pour que le cache reste raisonnable (~300 Ko par page lue en 1200 px). Les CBR sont décompressés
+Les largeurs de pages servies sont arrondies à la centaine supérieure (300 à 3000 px) : le navigateur
+reçoit une image au moins aussi grande que ce qu'il affiche, jamais agrandie. Les JPEG sont encodés en
+qualité 90 sans sous-échantillonnage de la couleur (réglable), avec un léger renforcement de netteté
+après réduction (~400 Ko par page lue en 1200 px). Les CBR sont décompressés
 une fois dans `data/cache/extract` (les 8 derniers albums ouverts sont gardés).
 
 ## Limites du prototype et suite possible
 
-- Pas de comptes utilisateurs ni de mot de passe : à réserver au réseau local (ou derrière
-  un reverse proxy avec authentification).
+- Pas encore de comptes ni de mot de passe (les profils sont préparés dans la base, l'écran arrive) :
+  à réserver au réseau local (ou derrière un reverse proxy avec authentification).
 - Pas encore de double page ni de lecture en « défilement continu ».
 - Pas de flux OPDS (pour les applis de lecture mobiles) : simple à ajouter ensuite.
 - Les métadonnées `ComicInfo.xml` (celles que BDConverter ajoutera) ne sont pas encore lues ;
