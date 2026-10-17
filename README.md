@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.14.0)
+# Bulle — lecteur de BD maison (v0.14.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -178,6 +178,8 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   disparaissent, puis les couvertures sont refaites (le scan complet fait de même pour toute la bibliothèque).
   Les albums « retirés » de Bulle restent ignorés même s'ils sont sur le disque : la page de la série les liste
   avec un bouton « Remettre ».
+- Fichier renommé ou déplacé sur le disque : au scan (ou dès qu'on l'ouvre), Bulle le retrouve (même taille, même
+  date) et garde sa fiche : lecture en cours, favoris, listes, couverture choisie. Un fichier jeté disparaît.
 - Couverture choisie à la main : dans le lecteur, clic droit (ou T) ouvre les miniatures ; au survol d'une page,
   « ★ Couverture » en fait la couverture de l'album (gardé dans la base de Bulle, le fichier n'est pas touché ;
   re-choisir la page 1 revient au comportement normal).
