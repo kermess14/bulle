@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.12.2"
+VERSION = "0.13.0"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -91,7 +91,7 @@ GLOBAL_TYPES = {
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
-    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "adult_hide_tab": (bool,),
+    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
 }
 
 
@@ -905,6 +905,32 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         start_scan_thread()
         time.sleep(0.2)
         return jsonify(lib.status), 202
+
+    @app.route("/api/ignore/<int:node_id>", methods=["POST"])
+    def api_ignore(node_id: int):
+        """Retire un album ou un dossier de Bulle (le fichier reste sur le disque, les scans l'ignorent)."""
+        node = get_node(node_id)
+        if not node.get("path"):
+            abort(400, description="La bibliothèque entière ne peut pas être retirée")
+        if lib.status["running"]:
+            abort(409, description="Un scan est en cours : réessayez quand il est fini")
+        res = lib.ignore_node(node_id)
+        res.pop("ids", None)
+        res["parent_id"] = node.get("parent_id")
+        return jsonify(res)
+
+    @app.route("/api/ignored", methods=["GET"])
+    def api_ignored():
+        return jsonify(sorted(lib.ignored_paths()))
+
+    @app.route("/api/ignored", methods=["DELETE"])
+    def api_unignore():
+        """Remet un chemin retiré ; un scan est lancé pour le faire réapparaître."""
+        body = request.get_json(force=True, silent=True) or {}
+        paths = lib.unignore_path(body.get("path") or "")
+        if not lib.status["running"]:
+            start_scan_thread()
+        return jsonify(paths)
 
     @app.route("/api/scan/stop", methods=["POST"])
     def api_scan_stop():

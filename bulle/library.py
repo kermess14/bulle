@@ -381,8 +381,10 @@ class Library:
                                duration=round(time.time() - t0, 1))
             self.scan_lock.release()
 
-    def _walk(self):
-        """Parcours itératif ; renvoie (chemin relatif, sous-dossiers, fichiers albums)."""
+    def _walk(self, ignored: Optional[set] = None):
+        """Parcours itératif ; renvoie (chemin relatif, sous-dossiers, fichiers albums). Les chemins de `ignored`
+        (dossiers ou fichiers retirés de Bulle) sont sautés."""
+        ignored = ignored or set()
         stack = [""]
         while stack:
             rel = stack.pop()
@@ -396,6 +398,8 @@ class Library:
             for e in entries:
                 name = e.name
                 if name.startswith(".") or name in SKIP_DIRS:
+                    continue
+                if ignored and (f"{rel}/{name}" if rel else name) in ignored:
                     continue
                 try:
                     if e.is_dir(follow_symlinks=True):
@@ -416,10 +420,11 @@ class Library:
         gen = int(time.time())
         now = time.time()
 
-        # 1) Tout lire en mémoire
+        # 1) Tout lire en mémoire (sans les fichiers et dossiers retirés de Bulle : ils restent sur le disque)
+        ignored = self.ignored_paths()
         folders: dict[str, dict] = {}
         albums: list[dict] = []
-        for rel, dirs, files in self._walk():
+        for rel, dirs, files in self._walk(ignored):
             if self.stop_requested.is_set():
                 raise ScanStopped("Scan arrêté")   # avant toute écriture : la base reste comme avant le scan
             parent = rel.rsplit("/", 1)[0] if "/" in rel else ("" if rel else None)
@@ -762,6 +767,64 @@ class Library:
             f"SELECT id, path, format, mtime, page_count, error, cover_page FROM nodes WHERE kind='album' AND {predicate_sql} "
             "ORDER BY sort_key").fetchall()
         return [dict(r) for r in rows]
+
+    # -- fichiers et dossiers retirés de Bulle (restent sur le disque) -----------------
+    def ignored_paths(self) -> set:
+        return {str(p).strip("/") for p in (self.get_settings(None).get("ignored_paths") or []) if str(p).strip("/")}
+
+    def ignore_node(self, node_id: int) -> dict:
+        """Retire un album ou un dossier de Bulle : enlevé de la base (progression, listes… comprises) et ignoré par les
+        scans suivants. Le fichier n'est ni supprimé ni modifié sur le disque. Annulable avec unignore_path()."""
+        n = self.node(node_id)
+        if not n or not n["path"]:
+            raise ValueError("Rien à retirer")
+        path = n["path"].strip("/")
+        rows = self.conn.execute("SELECT id, path, kind FROM nodes").fetchall()
+        gone = [r for r in rows if r["path"] == path or r["path"].startswith(path + "/")]
+        ids = [r["id"] for r in gone]
+        n_albums = sum(1 for r in gone if r["kind"] == "album")
+        with self._write_lock:
+            paths = sorted(self.ignored_paths() | {path})
+            self.set_settings({"ignored_paths": paths}, None)
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                self.conn.execute(f"DELETE FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", chunk)
+            # dossiers parents : un album de moins ; un dossier devenu vide disparaît aussi (comme au scan)
+            parent = path.rsplit("/", 1)[0] if "/" in path else ""
+            while True:
+                self.conn.execute("UPDATE nodes SET album_count = MAX(0, album_count - ?) WHERE path=? AND kind='folder'",
+                                  (n_albums, parent))
+                r = self.conn.execute("SELECT id, album_count FROM nodes WHERE path=?", (parent,)).fetchone()
+                if parent and r and r["album_count"] <= 0:
+                    self.conn.execute("DELETE FROM nodes WHERE id=?", (r["id"],))
+                    ids.append(r["id"])
+                if not parent:
+                    break
+                parent = parent.rsplit("/", 1)[0] if "/" in parent else ""
+            # couvertures de dossiers qui pointaient sur un album retiré : premier album restant du dossier
+            for f in self.conn.execute("SELECT id, path FROM nodes WHERE kind='folder' AND cover_id IS NOT NULL "
+                                       "AND cover_id NOT IN (SELECT id FROM nodes)").fetchall():
+                first = None
+                for a in self.conn.execute("SELECT id, path FROM nodes WHERE kind='album' ORDER BY sort_key").fetchall():
+                    if f["path"] == "" or a["path"].startswith(f["path"] + "/"):
+                        first = a["id"]
+                        break
+                self.conn.execute("UPDATE nodes SET cover_id=? WHERE id=?", (first, f["id"]))
+            self.conn.commit()
+        try:
+            self.panels_clear(ids)
+            self.on_invalidate(ids)
+        except Exception:  # noqa: BLE001
+            log.exception("Invalidation du cache")
+        return {"path": path, "albums": n_albums, "ids": ids}
+
+    def unignore_path(self, path: str) -> list:
+        """Remet un chemin retiré : il réapparaîtra au prochain scan."""
+        path = str(path).strip("/")
+        with self._write_lock:
+            paths = sorted(p for p in self.ignored_paths() if p != path)
+            self.set_settings({"ignored_paths": paths}, None)
+        return paths
 
     def fix_folder_covers(self) -> int:
         """Si la couverture d'un dossier pointe sur un album illisible, prend le premier album lisible."""

@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.12.2)
+# Bulle — lecteur de BD maison (v0.13.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -189,6 +189,10 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - CBR / RAR / 7z : l'archive est décompressée une fois dans le cache (les 20 dernières lues restent décompressées,
   variable `EXTRACT_KEEP`), avec unar, puis 7z et bsdtar en secours ; une archive dont une entrée est abîmée reste
   lisible (les autres pages). Réglages › Images et cache propose « Réessayer les albums en échec ».
+- Retirer de Bulle : « ✕ Retirer de Bulle » dans la fiche d'un album, ou « ✕ Retirer » en haut d'un dossier, l'enlève de
+  la base (progression et listes comprises) et les scans l'ignorent ensuite. Rien n'est supprimé ni modifié sur le
+  disque. Réglages › Bibliothèque › « Retirés de Bulle » permet de le remettre. (Un fichier supprimé du disque, lui,
+  disparaît tout seul au scan suivant.)
 - Arrêter un scan : bouton « ■ Arrêter » dans la notification du scan (ou clic sur ↻ pendant un scan). Arrêté pendant
   le parcours des dossiers, la bibliothèque reste exactement comme avant ; pendant les couvertures, celles déjà faites
   restent et les autres se font à l'ouverture des albums.
