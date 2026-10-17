@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.6)
+# Bulle — lecteur de BD maison (v0.7)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -8,10 +8,11 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   les dossiers vides sont cachés, le tri est « naturel » (T2 avant T10).
 - **Formats** : CBZ, ZIP, CBR, RAR, PDF (et CB7/7z, CBT/tar). Le vrai format est détecté
   d'après le contenu : un `.cbr` qui est en fait un zip fonctionne.
-- **Lecteur** : une page, **double page** (couverture et planches larges seules) ou **défilement
-  continu** (touche `D`), page entière / pleine largeur / taille d'origine, clavier, tactile (balayage,
-  zones de tape), sens manga, plein écran, préchargement des pages suivantes, enchaînement
-  sur l'album suivant à la fin.
+- **Lecteur** : une page, **double page** (couverture et planches larges seules), **défilement
+  continu** ou **case par case** (touche `C` : les cases sont repérées automatiquement d'après les
+  gouttières, le lecteur glisse et zoome de l'une à l'autre ; une planche sans cases reconnues reste
+  entière), page entière / pleine largeur / taille d'origine, clavier, tactile (balayage, zones de tape),
+  sens manga (l'ordre des cases suit), plein écran, préchargement, enchaînement sur l'album suivant.
 - **Progression** : reprise là où vous vous êtes arrêté, « Reprendre la lecture » sur l'accueil,
   badges lu / en cours (aussi sur les dossiers : « 3/16 lus »), marquer lu / non lu.
 - **Colonne de gauche** : Bibliothèque, À lire, ★ Favoris, Listes (personnalisées, chacune affichée
@@ -22,6 +23,14 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
 - **Pochettes** : style « livre » (dos, tranche, fine bordure et ombre de la couleur dominante de la
   couverture, inclinaison 3D au survol, pile d'albums derrière les séries), « halo coloré » ou « simple ».
   La couleur est calculée une fois par couverture, côté serveur.
+- **Habillage bande dessinée** (ligne claire) : contours noirs et ombres dures, lettrage BD (polices
+  libres Bangers, Patrick Hand SC, Comic Neue embarquées), titres en cartouches jaunes, boutons et
+  messages en bulles, petites onomatopées (« HOP ! ») quand on ajoute un favori. Un habillage « sobre »
+  reste disponible. Le lecteur, lui, reste noir et sans fioritures.
+- **Mosaïque de couvertures** en fond de toutes les pages (pas dans le lecteur) : vos propres albums,
+  très assombris, qui dérivent lentement et se remplacent en fondu (ou fixe, ou désactivée).
+- Sur chaque vignette reconnue par Bédéthèque, un bouton « … » à côté du « i » ouvre le résumé dans
+  une bulle.
 - **Profils** (« Qui lit ? ») : chacun sa progression et ses réglages d'affichage, code PIN facultatif par
   profil, et un **code d'accès** général facultatif pour toute la bibliothèque.
 - **Flux OPDS** (`http://<serveur>:2205/opds`) pour lire depuis une appli mobile (Panels, Chunky, Moon+,
@@ -169,6 +178,8 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET /api/auth/status` · `POST /api/auth/login` · `POST /api/auth/logout` | code d'accès général (`PUT /api/settings {"global": {"access_pin": "…"}}` pour le définir, `""` pour l'enlever) |
 | `GET /opds` · `/opds/folder/<id>` · `/opds/continue` · `/opds/recent` · `/opds/search?q=` | flux OPDS (authentification Basic avec le code d'accès s'il y en a un) |
 | `GET` `POST /api/lists` · `GET` `PUT` `DELETE /api/lists/<id>` · `POST /api/lists/<id>/items` · `DELETE /api/lists/<id>/items/<album>` | listes du profil (Favoris et À lire créées d'office) |
+| `GET /api/panels/<id>/<page>` | cases de la planche (fractions de la page, ordre occidental + ordre manga), détectées une fois puis gardées |
+| `GET /api/covers/sample?n=` | couvertures au hasard (mosaïque de fond) |
 | `GET` `POST /api/bdt/album/<id>/summary` · `POST /api/bdt/summaries/<dossier>` · `GET` `DELETE /api/bdt/summaries` | résumé d'un album lié à Bédéthèque (lu une fois, puis gardé) ; résumés de tout un dossier en tâche de fond |
 | `POST /api/favorites/toggle` · `GET /api/history` · `GET /api/random` | favori on/off · albums terminés · un album au hasard |
 | `GET /api/bdt/debug?q=` | diagnostic : ce que Bédéthèque renvoie au serveur |
@@ -196,6 +207,10 @@ une fois dans `data/cache/extract` (les 8 derniers albums ouverts sont gardés).
   « lire la suite sur Bédéthèque ».
 - Le glisser-déposer des vignettes fonctionne à la souris (et sur iPad) ; sur un téléphone, passez par la
   fiche de l'album.
+- La détection des cases repose sur les gouttières (bandes de fond uni qui traversent la planche) : les
+  mises en page très libres (cases qui se chevauchent, fonds sans gouttière, cases en biais) ne sont pas
+  découpées, ou pas toujours comme un œil humain le ferait. Dans ce cas, la planche entière s'affiche et
+  la touche `C` repasse en mode page.
 - Les CBR dépendent de l'outil `unar` installé dans l'image Docker ; ce chemin n'a pas pu être
   testé hors Docker (les CBZ, les PDF et les `.cbr` qui sont en réalité des zip l'ont été).
   Si un album s'affiche « illisible », la fiche (bouton « i ») donne la raison.

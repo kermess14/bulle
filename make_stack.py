@@ -73,8 +73,8 @@ def build_blob() -> str:
     with tarfile.open(fileobj=buf, mode="w:xz", preset=9) as tar:
         def add(path, arcname):
             def filt(ti):
-                if "__pycache__" in ti.name or ti.name.endswith(".pyc"):
-                    return None
+                if "__pycache__" in ti.name or ti.name.endswith(".pyc") or "/static/fonts/" in ti.name:
+                    return None   # les polices (130 Ko) sont téléchargées au premier démarrage par start.sh
                 ti.uid = ti.gid = 0
                 ti.uname = ti.gname = "root"
                 ti.mtime = 0

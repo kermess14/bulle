@@ -129,6 +129,12 @@ CREATE TABLE IF NOT EXISTS list_items(
   added_at REAL NOT NULL,
   PRIMARY KEY(list_id, node_id)
 );
+CREATE TABLE IF NOT EXISTS panels(
+  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  page    INTEGER NOT NULL,
+  data    TEXT NOT NULL,
+  PRIMARY KEY(node_id, page)
+);
 """
 SCHEMA_VERSION = 6
 DEFAULT_PROFILE = 1
@@ -512,6 +518,7 @@ class Library:
                 raise
         if invalidate:
             try:
+                self.panels_clear(invalidate)
                 self.on_invalidate(invalidate)
             except Exception:  # noqa: BLE001
                 log.exception("Invalidation du cache")
@@ -771,6 +778,27 @@ class Library:
             out[d["node_id"]] = d
         return out
 
+    # -- cases détectées (lecture case par case) -------------------------------
+    def panels_get(self, node_id: int, page: int) -> Optional[dict]:
+        r = self.conn.execute("SELECT data FROM panels WHERE node_id=? AND page=?", (node_id, page)).fetchone()
+        return json.loads(r["data"]) if r else None
+
+    def panels_set(self, node_id: int, page: int, data: dict) -> None:
+        with self._write_lock:
+            self.conn.execute("INSERT OR REPLACE INTO panels(node_id, page, data) VALUES(?,?,?)",
+                              (node_id, page, json.dumps(data)))
+            self.conn.commit()
+
+    def panels_clear(self, node_ids) -> None:
+        ids = list(node_ids)
+        if not ids:
+            return
+        with self._write_lock:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                self.conn.execute(f"DELETE FROM panels WHERE node_id IN ({','.join('?' * len(chunk))})", chunk)
+            self.conn.commit()
+
     def bdt_album_update(self, node_id: int, **fields) -> None:
         """Complète les données Bédéthèque d'un album (ex. résumé)."""
         row = self.bdt_album(node_id)
@@ -896,6 +924,13 @@ class Library:
                 return dict(r)
         r = self.conn.execute("SELECT * FROM nodes WHERE kind='album' AND error IS NULL ORDER BY RANDOM() LIMIT 1").fetchone()
         return dict(r) if r else None
+
+    def random_covers(self, n: int = 60) -> list[dict]:
+        """Albums au hasard ayant une couverture (pour la mosaïque de fond)."""
+        rows = self.conn.execute(
+            "SELECT id, mtime, color FROM nodes WHERE kind='album' AND error IS NULL AND page_count IS NOT NULL "
+            "ORDER BY RANDOM() LIMIT ?", (max(1, min(400, n)),)).fetchall()
+        return [dict(r) for r in rows]
 
     def folders_with_albums(self) -> list[dict]:
         """Dossiers contenant directement des albums (candidats à l'analyse Bédéthèque)."""

@@ -31,5 +31,16 @@ if ! cmp -s requirements.txt "$VENV/.requirements.txt"; then
   fi
 fi
 
+# Polices « lettrage BD » (variante autonome : elles ne sont pas dans l'archive embarquée) — facultatif, sans internet
+# Bulle utilise simplement les polices du navigateur.
+FONTS=bulle/static/fonts
+if [ ! -f "$FONTS/Bangers.woff" ]; then
+  mkdir -p "$FONTS"
+  echo "[bulle] téléchargement des polices (facultatif)…"
+  for f in Bangers.woff PatrickHandSC.woff ComicNeue-Regular.woff ComicNeue-Bold.woff; do
+    python3 -c "import urllib.request,sys; urllib.request.urlretrieve('https://raw.githubusercontent.com/kermess14/bulle/main/bulle/static/fonts/$f', '$FONTS/$f')" 2>/dev/null || echo "[bulle] police $f non téléchargée (pas d'accès internet ?)"
+  done
+fi
+
 echo "[bulle] démarrage du serveur"
 exec "$VENV/bin/python" -m bulle.server

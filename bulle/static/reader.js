@@ -1,4 +1,4 @@
-/* Bulle — le lecteur : 1 page, 2 pages (double page) ou défilement continu */
+/* Bulle — le lecteur : 1 page, 2 pages (double page), défilement continu ou case par case */
 (() => {
   "use strict";
   const $ = sel => document.querySelector(sel);
@@ -9,16 +9,16 @@
 
   const id = +(/\/read\/(\d+)/.exec(location.pathname) || [])[1];
   const params = new URLSearchParams(location.search);
-  const FITS = ["page", "width", "original"], MODES = ["single", "double", "scroll"];
+  const FITS = ["page", "width", "original"], MODES = ["single", "double", "scroll", "panels"];
   const FIT_LABEL = { page: "Page", width: "Largeur", original: "1:1" };
-  const MODE_LABEL = { single: "1 page", double: "2 pages", scroll: "Défilement" };
+  const MODE_LABEL = { single: "1 page", double: "2 pages", scroll: "Défilement", panels: "Cases" };
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   // ---------------------------------------------------------------- réglages (profil, serveur) + mémoire par album (navigateur)
   const DEFAULTS = {
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
-    reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100,
+    reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: true,
   };
   const prefs = Object.assign({}, DEFAULTS);
   function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
@@ -49,6 +49,8 @@
   const aspects = {};            // n -> largeur/hauteur de la page (connue après chargement)
   const images = new Map();      // n -> Image (préchargées / chargées)
   let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1;
+  let panelIdx = -1;             // case par case : -1 = page entière, sinon index dans l'ordre de lecture
+  const panelsCache = new Map(); // n -> {panels, rtl}
 
   function showMessage(title, text, actions = "") {
     const el = document.createElement("div");
@@ -102,7 +104,7 @@
     if (mode === "scroll") css = vw * (Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100)) / 100);
     else if (mode === "double") css = Math.min(vw / 2, vh * asp);
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
-    const factor = prefs.reader_quality === "high" ? 1.5 : 1;
+    const factor = mode === "panels" ? 2.2 : prefs.reader_quality === "high" ? 1.5 : 1;
     return Math.ceil(css * dpr * factor);
   }
   let imgTag = "";
@@ -145,12 +147,13 @@
     if (mode !== "double") return [n];
     return computeSpreads().find(sp => sp.includes(n)) || [n];
   }
-  async function go(n, { save = true } = {}) {
+  async function go(n, { save = true, panel = "first" } = {}) {
     if (n < 0) { flash("Début de l'album"); return; }
     if (n >= pages) { showEnd(); return; }
     hideEnd();
     if (mode === "scroll") { scrollToPage(n, save); return; }
     const token = ++loadToken;
+    if (mode === "panels") getPanels(n);
     const spin = setTimeout(() => { if (token === loadToken) loading.hidden = false; }, 180);
     let list;
     if (mode === "double") {
@@ -175,6 +178,13 @@
     clearTimeout(spin); loading.hidden = true;
     current = n; shown = list;
     stage.scrollTop = 0; stage.scrollLeft = 0;
+    if (mode === "panels") {
+      const data = await getPanels(n);
+      if (token !== loadToken) return;
+      const count = data.panels.length;
+      panelIdx = panel === "keep" ? Math.min(panelIdx, count - 1) : panel === "last" ? count - 1 : (prefs.reader_panels_full_first || !count ? -1 : 0);
+      applyPanel(false);
+    }
     updateCounter();
     if (save) saveProgress(n);
     const u = new URL(location.href); u.searchParams.set("page", n); history.replaceState(null, "", u);
@@ -182,8 +192,63 @@
   }
   function updateCounter() {
     const label = shown.length === 2 ? `${shown[0] + 1}-${shown[1] + 1}` : `${current + 1}`;
-    countEl.textContent = `${label} / ${pages}`;
+    let extra = "";
+    if (mode === "panels") {
+      const d = panelsCache.get(current);
+      if (d && d.panels.length) extra = panelIdx < 0 ? ` · ${d.panels.length} cases` : ` · case ${panelIdx + 1}/${d.panels.length}`;
+    }
+    countEl.textContent = `${label} / ${pages}${extra}`;
     slider.value = current + 1;
+  }
+
+  // ---------------------------------------------------------------- case par case
+  async function getPanels(n) {
+    if (panelsCache.has(n)) return panelsCache.get(n);
+    const p = fetch(`/api/panels/${id}/${n}`).then(r => r.ok ? r.json() : { panels: [], rtl: [] }).catch(() => ({ panels: [], rtl: [] }));
+    panelsCache.set(n, p);
+    const d = await p;
+    panelsCache.set(n, d);
+    return d;
+  }
+  function panelRect(d, i) {
+    const order = manga && d.rtl && d.rtl.length === d.panels.length ? d.rtl : null;
+    return d.panels[order ? order[i] : i];
+  }
+  /* Cadre la case courante : l'image reste mise en page « page entière », on la déplace et on l'agrandit (transition CSS). */
+  function applyPanel(animate = true) {
+    const d = panelsCache.get(current);
+    img.classList.toggle("nofx", !animate);
+    if (!d || !(d.panels instanceof Array) || panelIdx < 0 || !d.panels.length || !img.naturalWidth) {
+      img.style.transform = "";
+      if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
+      return;
+    }
+    const r = panelRect(d, panelIdx);
+    const sr = stage.getBoundingClientRect(), ir = img.getBoundingClientRect();
+    // position de l'image sans transformation : on retire la transformation courante
+    const cur = img.style.transform ? new DOMMatrix(getComputedStyle(img).transform) : null;
+    const scale0 = cur ? cur.a : 1;
+    const ix = (ir.left - sr.left) - (cur ? cur.e : 0), iy = (ir.top - sr.top) - (cur ? cur.f : 0);
+    const iw = ir.width / scale0, ih = ir.height / scale0;
+    const px = r[0] * iw, py = r[1] * ih, pw = Math.max(1, (r[2] - r[0]) * iw), ph = Math.max(1, (r[3] - r[1]) * ih);
+    const vw = sr.width, vh = sr.height, pad = 0.03;
+    let s = Math.min(vw * (1 - 2 * pad) / pw, vh * (1 - 2 * pad) / ph);
+    s = Math.max(1, Math.min(6, s));
+    const tx = vw / 2 - ix - s * (px + pw / 2), ty = vh / 2 - iy - s * (py + ph / 2);
+    img.style.transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px) scale(${s.toFixed(4)})`;
+    if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
+  }
+  async function panelStep(dir) {
+    const d = panelsCache.get(current);
+    const count = d && d.panels instanceof Array ? d.panels.length : 0;
+    if (dir > 0) {
+      if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); return; }
+      go(current + 1);
+    } else {
+      if (panelIdx >= 0) { panelIdx -= 1; applyPanel(true); updateCounter(); return; }
+      if (current <= 0) { flash("Début de l'album"); return; }
+      go(current - 1, { panel: "last" });
+    }
   }
   function preloadAround(n) {
     const count = Math.max(0, Math.min(10, +prefs.reader_preload || 0));
@@ -193,10 +258,12 @@
   }
   async function next() {
     if (mode === "scroll") { scrollStep(1); return; }
+    if (mode === "panels") { panelStep(1); return; }
     go(shown.length ? shown[shown.length - 1] + 1 : current + 1);
   }
   async function prev() {
     if (mode === "scroll") { scrollStep(-1); return; }
+    if (mode === "panels") { panelStep(-1); return; }
     if (current <= 0) { flash("Début de l'album"); return; }
     if (mode !== "double") { go(current - 1); return; }
     // double page : on recule d'une planche dans le découpage calculé depuis le début
@@ -304,14 +371,16 @@
 
   // ---------------------------------------------------------------- ajustement / mode / manga / plein écran
   function applyFit() {
-    FITS.forEach(f => body.classList.toggle("fit-" + f, f === fit));
+    const eff = mode === "panels" ? "page" : fit;   // case par case : toujours à partir de la page entière
+    FITS.forEach(f => body.classList.toggle("fit-" + f, f === eff));
     fitBtn.textContent = FIT_LABEL[fit];
     fitBtn.disabled = mode !== "single";
   }
   function applyMode() {
     MODES.forEach(m => body.classList.toggle("mode-" + m, m === mode));
     modeBtn.textContent = MODE_LABEL[mode];
-    single.hidden = mode !== "single"; spread.hidden = mode !== "double"; scrollEl.hidden = mode !== "scroll";
+    single.hidden = mode !== "single" && mode !== "panels"; spread.hidden = mode !== "double"; scrollEl.hidden = mode !== "scroll";
+    if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; }
     if (mode === "scroll") buildScroll();
     applyFit();
   }
@@ -328,7 +397,15 @@
     mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
     images.clear();
     applyMode(); saveAlbumMemory();
-    flash({ single: "Une page", double: "Deux pages (planches larges et couverture seules)", scroll: "Défilement continu" }[mode]);
+    flash({ single: "Une page", double: "Deux pages (planches larges et couverture seules)", scroll: "Défilement continu", panels: "Case par case : → case suivante, ← précédente" }[mode]);
+    if (keep >= 0) go(keep, { save: false });
+  }
+  function togglePanels() {
+    const keep = current;
+    mode = mode === "panels" ? "single" : "panels";
+    images.clear();
+    applyMode(); saveAlbumMemory();
+    flash(mode === "panels" ? "Case par case : → case suivante, ← précédente" : "Une page");
     if (keep >= 0) go(keep, { save: false });
   }
   function applyManga(announce = true) {
@@ -337,7 +414,7 @@
     spread.classList.toggle("rtl", manga);
     if (announce) flash(manga ? "Sens manga : lecture de droite à gauche" : "Sens occidental : lecture de gauche à droite");
   }
-  function toggleManga() { manga = !manga; applyManga(); saveAlbumMemory(); }
+  function toggleManga() { manga = !manga; applyManga(); saveAlbumMemory(); if (mode === "panels") applyPanel(true); }
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen().catch(() => {});
@@ -380,7 +457,7 @@
     if (!touch || e.changedTouches.length !== 1) return;
     const dx = e.changedTouches[0].clientX - touch.x, dy = e.changedTouches[0].clientY - touch.y, dt = Date.now() - touch.t;
     touch = null;
-    if (mode !== "scroll" && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 600 && fit !== "original") {
+    if (mode !== "scroll" && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 600 && (fit !== "original" || mode === "panels")) {
       dx < 0 ? forward() : backward();  // balayage vers la gauche = avancer (sens occidental)
       e.preventDefault();
     }
@@ -395,6 +472,7 @@
   let wheelLock = 0;
   stage.addEventListener("wheel", e => {
     if (mode === "scroll" || !prefs.reader_wheel || (mode === "single" && fit !== "page")) return;
+    if (mode === "panels") { const now2 = Date.now(); if (now2 - wheelLock < 250) return; wheelLock = now2; e.deltaY > 0 ? panelStep(1) : panelStep(-1); return; }
     const now = Date.now(); if (now - wheelLock < 250) return; wheelLock = now;
     if (e.deltaY > 0) next(); else if (e.deltaY < 0) prev();
   }, { passive: true });
@@ -420,6 +498,7 @@
       case "End": go(pages - 1); break;
       case "f": case "F": cycleFit(); break;
       case "d": case "D": cycleMode(); break;
+      case "c": case "C": togglePanels(); break;
       case "m": case "M": toggleManga(); break;
       case "p": case "P": toggleFullscreen(); break;
       case "Escape": if (!endEl.hidden) hideEnd(); else if (document.fullscreenElement) document.exitFullscreen(); else location.href = folderHref; break;
@@ -433,6 +512,7 @@
   $("#prev").addEventListener("click", e => { e.stopPropagation(); prev(); });
   $("#next").addEventListener("click", e => { e.stopPropagation(); next(); });
   modeBtn.addEventListener("click", cycleMode);
+  $("#panels").addEventListener("click", togglePanels);
   fitBtn.addEventListener("click", cycleFit);
   mangaBtn.addEventListener("click", toggleManga);
   fsBtn.addEventListener("click", toggleFullscreen);
@@ -441,7 +521,7 @@
   let resizeTimer = null;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (current >= 0 && mode !== "scroll" && fit !== "original") { images.clear(); go(current, { save: false }); } }, 300);
+    resizeTimer = setTimeout(() => { if (current >= 0 && mode !== "scroll" && (fit !== "original" || mode === "panels")) { images.clear(); go(current, { save: false, panel: "keep" }); } }, 300);
   });
 
   init();

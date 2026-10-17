@@ -120,7 +120,7 @@
   // ================================================================ réglages
   const PROFILE_DEFAULTS = {
     thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", letters_size: "large",
-    tabs_side: "left", cover_style: "book", sort: "natural", hide_read: false,
+    tabs_side: "left", cover_style: "book", skin: "bd", mosaic: "drift", sort: "natural", hide_read: false,
     show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
@@ -141,8 +141,69 @@
     root.dataset.theme = theme === "light" ? "light" : "dark";
     root.dataset.tabs = p.tabs_side === "top" || window.innerWidth <= 700 ? "top" : "left";
     root.dataset.covers = ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
+    root.dataset.skin = p.skin === "sobre" ? "sobre" : "bd";
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    root.dataset.mosaic = p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
     $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
+    setupMosaic();
   }
+
+  // ================================================================ mosaïque de couvertures en fond
+  const TILE_W = 120, TILE_H = 180;
+  let mosaicEl = null, mosaicPool = [], mosaicTimer = null, mosaicCols = 0, mosaicRows = 0;
+  const mosaicUrl = c => `/api/cover/${c.id}?w=150&v=${c.mtime}&t=${encodeURIComponent(settings.global.img_tag || "")}`;
+  async function setupMosaic() {
+    const want = document.documentElement.dataset.mosaic !== "off";
+    if (!want) { clearInterval(mosaicTimer); mosaicTimer = null; if (mosaicEl) { mosaicEl.remove(); mosaicEl = null; } return; }
+    const cols = Math.ceil(window.innerWidth / TILE_W) + 2, rows = Math.ceil(window.innerHeight / TILE_H) + 2;
+    if (mosaicEl && cols === mosaicCols && rows === mosaicRows) return;
+    mosaicCols = cols; mosaicRows = rows;
+    if (!mosaicPool.length) {
+      try { mosaicPool = await api(`/api/covers/sample?n=${Math.min(200, cols * rows * 2)}`); } catch (_) { mosaicPool = []; }
+      if (!mosaicPool.length) return;
+    }
+    if (!mosaicEl) {
+      mosaicEl = document.createElement("div"); mosaicEl.id = "mosaic"; mosaicEl.setAttribute("aria-hidden", "true");
+      document.body.prepend(mosaicEl);
+    }
+    const tiles = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const k = (r * cols + c) % mosaicPool.length;
+      // décalage d'une demi-tuile une ligne sur deux, comme un mur de briques
+      tiles.push(`<img class="mt" alt="" loading="lazy" decoding="async" src="${mosaicUrl(mosaicPool[k])}" style="left:${c * TILE_W - (r % 2 ? TILE_W / 2 : 0)}px;top:${r * TILE_H}px" onerror="this.style.visibility='hidden'">`);
+    }
+    mosaicEl.innerHTML = `<div class="mz" style="width:${cols * TILE_W}px;height:${rows * TILE_H}px">${tiles.join("")}</div>`;
+    clearInterval(mosaicTimer);
+    mosaicTimer = setInterval(swapTile, 2600);
+  }
+  let swapCount = 0;
+  async function swapTile() {
+    if (!mosaicEl || document.hidden || !mosaicPool.length) return;
+    const imgs = mosaicEl.querySelectorAll("img.mt");
+    if (!imgs.length) return;
+    if (++swapCount % 40 === 0) { try { const more = await api(`/api/covers/sample?n=60`); if (more.length) mosaicPool = more; } catch (_) { /* ignore */ } }
+    const im = imgs[Math.floor(Math.random() * imgs.length)];
+    const c = mosaicPool[Math.floor(Math.random() * mosaicPool.length)];
+    im.classList.add("fade");
+    setTimeout(() => { im.src = mosaicUrl(c); im.style.visibility = ""; im.onload = () => im.classList.remove("fade"); im.onerror = () => im.classList.remove("fade"); }, 900);
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && mosaicEl) setupMosaic(); });
+
+  // ================================================================ onomatopées (habillage BD)
+  function pow(text, x, y) {
+    if (document.documentElement.dataset.skin !== "bd") return;
+    const el = document.createElement("div");
+    el.className = "pow"; el.textContent = text;
+    if (x == null) { x = window.innerWidth / 2; y = window.innerHeight / 2; }
+    el.style.left = x + "px"; el.style.top = y + "px";
+    el.style.setProperty("--rot", (Math.random() * 16 - 8).toFixed(1) + "deg");
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1100);
+  }
+  const POW = { fav: ["HOP !", "YES !", "TOP !"], list: ["PAF !", "TCHAC !", "HOP !"], read: ["FINI !", "BRAVO !"], random: ["ZOU !", "TADAM !"] };
+  const powFor = kind => POW[kind][Math.floor(Math.random() * POW[kind].length)];
+  let lastPointer = { x: null, y: null };
+  document.addEventListener("pointerdown", e => { lastPointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
   matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyAppearance);
   let resizeTimer = null;
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(applyAppearance, 120); });
@@ -257,7 +318,7 @@
     }
     const tip = item.meta && item.meta.summary ? ` title="${esc(item.meta.summary.length > 320 ? item.meta.summary.slice(0, 320) + "…" : item.meta.summary)}"` : "";
     return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
-      ${coverHtml(item, badge + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>`)}
+      ${coverHtml(item, badge + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>${item.meta ? `<button class="info sum" type="button" data-sum="${item.id}" title="Résumé" aria-label="Résumé">…</button>` : ""}`)}
       <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;
   }
@@ -603,6 +664,8 @@
         ${field("Taille des lettres", sel("p", "letters_size", [["large", "Grandes"], ["normal", "Normales"]], p.letters_size))}
         ${field("Onglets (À lire, Favoris, Listes…)", sel("p", "tabs_side", [["left", "Colonne à gauche"], ["top", "Rangée en haut"]], p.tabs_side), "Sur mobile, toujours en haut.")}
         ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
+        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["sobre", "Sobre"]], p.skin))}
+        ${field("Mosaïque de couvertures en fond", sel("p", "mosaic", [["drift", "Oui, qui dérive lentement"], ["fixed", "Oui, fixe"], ["off", "Non"]], p.mosaic), "Pas dans le lecteur. Les couvertures changent doucement en fondu.")}
         ${field("Tri", sel("p", "sort", [["natural", "Alphabétique naturel (T2 avant T10)"], ["recent", "Ajouts récents d'abord"], ["unread", "Non lus d'abord"]], p.sort))}
         ${field("Masquer les albums lus", chk("p", "hide_read", p.hide_read))}
         ${field("Nombre de pages sur les cartes", chk("p", "show_pages", p.show_pages))}
@@ -614,8 +677,9 @@
       </section>
       <section>
         <h2>Lecteur</h2>
-        ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
+        ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"], ["panels", "Case par case"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
         ${field("Double page : couverture seule", chk("p", "reader_cover_alone", p.reader_cover_alone), "Les planches larges (paysage) sont toujours affichées seules.")}
+        ${field("Case par case : montrer la page entière d'abord", chk("p", "reader_panels_full_first", p.reader_panels_full_first), "Touche C dans le lecteur. Les cases sont repérées automatiquement (gouttières) ; une planche sans cases reconnues s'affiche entière.")}
         ${field("Défilement continu : largeur", sel("p", "reader_scroll_width", [[100, "Toute la largeur"], [80, "80 %"], [60, "60 %"], [45, "45 %"]], p.reader_scroll_width))}
         ${field("Ajustement par défaut (une page)", sel("p", "reader_fit", [["page", "Page entière"], ["width", "Pleine largeur"], ["original", "Taille d'origine"]], p.reader_fit))}
         ${field("Sens manga par défaut", chk("p", "reader_manga", p.reader_manga), "Lecture de droite à gauche.")}
@@ -838,6 +902,7 @@
       const r = await api("/api/favorites/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) });
       if (btn) { btn.classList.toggle("fav-on", r.fav); btn.textContent = r.fav ? "★ Favori" : "☆ Favori"; }
       toast(r.fav ? "Ajouté aux favoris ★" : "Retiré des favoris");
+      if (r.fav) pow(powFor("fav"), lastPointer.x, lastPointer.y);
       listsCache = null;
       renderSidebar();
       if (!location.hash.startsWith("#/f/") || btn && btn.closest(".sheet")) { /* la grille se rafraîchit à la prochaine navigation */ }
@@ -856,7 +921,7 @@
       const membership = it ? it.lists : [];
       let r;
       if (membership.includes(+listId)) { r = await api(`/api/lists/${listId}/items/${nodeId}`, { method: "DELETE" }); toast("Retiré de la liste"); }
-      else { r = await api(`/api/lists/${listId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) }); toast(`Ajouté à « ${esc((lists.find(l => l.id === +listId) || {}).name || "la liste")} »`); }
+      else { r = await api(`/api/lists/${listId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) }); toast(`Ajouté à « ${esc((lists.find(l => l.id === +listId) || {}).name || "la liste")} »`); pow(powFor("list"), lastPointer.x, lastPointer.y); }
       listsCache = null;
       renderSidebar();
       const box = $("#sheet-lists"); if (box && +box.dataset.id === +nodeId) renderSheetLists(box, nodeId, r.lists);
@@ -950,6 +1015,7 @@
       if (!list) throw new Error("Liste introuvable");
       await api(`/api/lists/${list.id}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) });
       toast(list.kind === "favorites" ? "Ajouté aux favoris ★" : `Ajouté à « ${esc(list.name)} »`);
+      pow(powFor(list.kind === "favorites" ? "fav" : "list"), lastPointer.x, lastPointer.y);
       listsCache = null;
       renderSidebar();
       if (list.kind === "favorites" || location.hash.startsWith("#/list")) route();
@@ -992,7 +1058,7 @@
   async function viewRandom() {
     try {
       const a = await api("/api/random");
-      toast(`Au hasard : ${esc(a.name)}`);
+      toast(`Au hasard : ${esc(a.name)}`); pow(powFor("random"));
       location.href = `/read/${a.id}?page=0`;
     } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); location.hash = "#/"; }
   }
@@ -1004,6 +1070,7 @@
     if (t.dataset.read) {
       try { await putJson(`/api/progress/${t.dataset.read}`, { completed: true }); }
       catch (err) { toast(esc(err.message)); return; }
+      pow(powFor("read"), lastPointer.x, lastPointer.y);
       closeModal(); route(); return;
     }
     if (t.dataset.unread) {
@@ -1078,9 +1145,57 @@
     const y = el.getBoundingClientRect().top + window.scrollY - 56 - 52;
     window.scrollTo({ top: y, behavior: smooth ? "smooth" : "auto" });
   }
+  // bulle de résumé sur une vignette (bouton « … » à côté du « i »)
+  let popEl = null;
+  function closePop() { if (popEl) { popEl.remove(); popEl = null; } }
+  async function openSummaryPop(btn, id) {
+    closePop();
+    const card = btn.closest(".card");
+    const item = (view.children || []).find(c => c.id === +id) || null;
+    popEl = document.createElement("div");
+    popEl.className = "sumpop";
+    popEl.innerHTML = `<div class="sumbody"><b>${esc(item && item.meta && item.meta.title ? item.meta.title : (card ? card.querySelector(".title").textContent : ""))}</b><p class="muted">Résumé en cours de lecture…</p></div>`;
+    document.body.appendChild(popEl);
+    placePop(card || btn);
+    const fill = (text, url) => {
+      if (!popEl) return;
+      popEl.querySelector("p").outerHTML = text
+        ? `<p>${esc(/[.…]$/.test(text) ? text : text + "…")} ${url ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener">lire la suite ↗</a>` : ""}</p>`
+        : `<p class="muted">Pas de résumé sur Bédéthèque pour cet album.</p>`;
+      placePop(card || btn);
+    };
+    try {
+      let r = await api(`/api/bdt/album/${id}/summary`);
+      if (!r.linked) { fill(null); return; }
+      if (!r.summary_at) r = await api(`/api/bdt/album/${id}/summary`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      fill(r.summary, item && item.meta ? item.meta.url : "");
+    } catch (e) { if (popEl) popEl.querySelector("p").textContent = `Résumé indisponible : ${e.message}`; }
+  }
+  function placePop(anchor) {
+    if (!popEl) return;
+    const r = anchor.getBoundingClientRect(), w = Math.min(340, window.innerWidth - 24);
+    popEl.style.width = w + "px";
+    let left = r.left + r.width / 2 - w / 2;
+    left = Math.max(12, Math.min(window.innerWidth - w - 12, left));
+    const h = popEl.offsetHeight;
+    let top = r.top - h - 14, tail = "down";
+    if (top < 70) { top = r.bottom + 14; tail = "up"; }
+    popEl.style.left = left + "px"; popEl.style.top = top + "px";
+    popEl.dataset.tail = tail;
+    popEl.style.setProperty("--tail-x", (r.left + r.width / 2 - left) + "px");
+  }
+  document.addEventListener("click", e => {
+    if (popEl && !e.target.closest(".sumpop") && !e.target.closest("[data-sum]")) closePop();
+  }, true);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+  window.addEventListener("scroll", closePop, { passive: true });
+  window.addEventListener("hashchange", closePop);
+
   main.addEventListener("click", e => {
     const info = e.target.closest("[data-info]");
     if (info) { e.preventDefault(); openInfo(info.dataset.info); return; }
+    const sum = e.target.closest("[data-sum]");
+    if (sum) { e.preventDefault(); if (popEl && popEl.dataset.id === sum.dataset.sum) { closePop(); return; } openSummaryPop(sum, sum.dataset.sum); popEl.dataset.id = sum.dataset.sum; return; }
     const action = e.target.closest("[data-action]");
     if (action) { settingsAction(action.dataset.action, action); return; }
     const unl = e.target.closest("[data-unlist]");
