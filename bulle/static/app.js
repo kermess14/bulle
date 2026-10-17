@@ -25,12 +25,95 @@
   async function api(url, opts) {
     const r = await fetch(url, opts);
     if (!r.ok) {
-      let msg = r.statusText;
-      try { msg = (await r.json()).error || msg; } catch (_) { /* ignore */ }
+      let msg = r.statusText, body = null;
+      try { body = await r.json(); msg = body.error || msg; } catch (_) { /* ignore */ }
+      if (r.status === 401 && body && body.auth_required) showPinScreen();
       throw new Error(msg);
     }
     return r.json();
   }
+
+  // ================================================================ code d'accès (écran)
+  let pinShown = false;
+  function showPinScreen() {
+    if (pinShown) return;
+    pinShown = true;
+    modal.hidden = false;
+    modal.innerHTML = `<div class="backdrop locked"><form class="sheet pin" id="pin-form">
+      <h3>Code d'accès</h3><p class="muted">Cette bibliothèque est protégée. Entrez le code pour continuer.</p>
+      <input type="password" inputmode="numeric" autocomplete="current-password" name="pin" placeholder="Code" autofocus>
+      <div class="actions"><button class="btn primary" type="submit">Entrer</button></div><p class="error" hidden></p></form></div>`;
+    $("#pin-form").addEventListener("submit", async e => {
+      e.preventDefault();
+      const f = e.target, err = f.querySelector(".error");
+      try {
+        const r = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin: f.elements.pin.value }) });
+        if (!r.ok) { err.textContent = (await r.json()).error || "Code incorrect"; err.hidden = false; f.elements.pin.select(); return; }
+        location.reload();
+      } catch (_) { err.textContent = "Serveur injoignable"; err.hidden = false; }
+    });
+  }
+
+  // ================================================================ profils (« qui lit ? »)
+  const initial = n => (n || "?").trim()[0].toUpperCase();
+  function profileTile(p, current) {
+    return `<button type="button" class="ptile ${p.id === current ? "on" : ""}" data-profile="${p.id}" data-haspin="${p.has_pin ? 1 : 0}" data-name="${esc(p.name)}">
+      <span class="pavatar">${esc(p.avatar || initial(p.name))}</span><span class="pname">${esc(p.name)}</span>${p.has_pin ? `<span class="plock" title="Protégé par un code">🔒</span>` : ""}</button>`;
+  }
+  async function openProfiles({ locked = false } = {}) {
+    let data;
+    try { data = await api("/api/profiles"); } catch (_) { return; }
+    modal.hidden = false;
+    modal.innerHTML = `<div class="backdrop ${locked ? "locked" : ""}"><div class="sheet profiles" role="dialog" aria-modal="true">
+      ${locked ? "" : `<button class="iconbtn close" type="button" data-close title="Fermer">${ICON.close}</button>`}
+      <h3>Qui lit ?</h3>
+      <div class="ptiles">${data.profiles.map(p => profileTile(p, data.selected ? data.current : 0)).join("")}
+        <button type="button" class="ptile add" data-profile-add><span class="pavatar">+</span><span class="pname">Nouveau profil</span></button></div>
+      <p class="muted">Chaque profil a sa propre progression de lecture et ses réglages d'affichage.${locked ? "" : ` <a href="#/settings" data-close>Gérer les profils</a>`}</p>
+      <form class="pin-inline" id="profile-pin" hidden><span></span><input type="password" inputmode="numeric" name="pin" placeholder="Code PIN"><button class="btn primary" type="submit">OK</button><p class="error" hidden></p></form>
+      <form class="pin-inline" id="profile-new" hidden><input type="text" name="name" placeholder="Prénom" maxlength="40" required><input type="password" inputmode="numeric" name="pin" placeholder="Code PIN (facultatif)"><button class="btn primary" type="submit">Créer</button></form>
+    </div></div>`;
+    const sheet = $(".sheet.profiles");
+    sheet.addEventListener("click", e => {
+      const t = e.target.closest("[data-profile], [data-profile-add]");
+      if (!t) return;
+      if (t.hasAttribute("data-profile-add")) { $("#profile-new").hidden = false; $("#profile-pin").hidden = true; $("#profile-new input[name=name]").focus(); return; }
+      const id = +t.dataset.profile;
+      if (t.dataset.haspin === "1") {
+        const f = $("#profile-pin"); f.hidden = false; f.dataset.id = id; f.querySelector("span").textContent = t.dataset.name + " :"; f.querySelector(".error").hidden = true; f.elements.pin.value = ""; f.elements.pin.focus();
+        $("#profile-new").hidden = true;
+      } else selectProfile(id, "");
+    });
+    $("#profile-pin").addEventListener("submit", e => { e.preventDefault(); selectProfile(+e.target.dataset.id, e.target.elements.pin.value, e.target); });
+    $("#profile-new").addEventListener("submit", async e => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        const p = await api("/api/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: f.elements.name.value, pin: f.elements.pin.value }) });
+        await selectProfile(p.id, f.elements.pin.value);
+      } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
+    });
+  }
+  async function selectProfile(id, pin, form) {
+    try {
+      const r = await api("/api/profiles/select", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, pin }) });
+      closeModal(); toast(`Bonjour ${esc(r.name)} !`);
+      await loadSettings(); updateProfileButton(); route();
+    } catch (e) {
+      if (form) { const err = form.querySelector(".error"); err.textContent = e.message; err.hidden = false; form.elements.pin.select(); }
+      else toast(`${ICON.warn} ${esc(e.message)}`);
+    }
+  }
+  function updateProfileButton() {
+    const btn = $("#profile-btn");
+    if (!btn) return;
+    const list = settings.meta.profiles || [];
+    const cur = list.find(p => p.id === settings.meta.profile_id);
+    btn.innerHTML = `<span class="pavatar small">${esc(cur ? (cur.avatar || initial(cur.name)) : "?")}</span>`;
+    btn.title = cur ? `Profil : ${cur.name} (changer)` : "Profil";
+    btn.hidden = list.length < 2 && !settings.global.require_profile;
+  }
+  document.addEventListener("click", e => { if (e.target.closest("#profile-btn")) openProfiles(); });
   const putJson = (url, body) => api(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
   // ================================================================ réglages
@@ -40,6 +123,7 @@
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
+    reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100,
     bdt_ghosts: true, bdt_titles: false,
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
@@ -479,7 +563,10 @@
       </section>
       <section>
         <h2>Lecteur</h2>
-        ${field("Ajustement par défaut", sel("p", "reader_fit", [["page", "Page entière"], ["width", "Pleine largeur"], ["original", "Taille d'origine"]], p.reader_fit))}
+        ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
+        ${field("Double page : couverture seule", chk("p", "reader_cover_alone", p.reader_cover_alone), "Les planches larges (paysage) sont toujours affichées seules.")}
+        ${field("Défilement continu : largeur", sel("p", "reader_scroll_width", [[100, "Toute la largeur"], [80, "80 %"], [60, "60 %"], [45, "45 %"]], p.reader_scroll_width))}
+        ${field("Ajustement par défaut (une page)", sel("p", "reader_fit", [["page", "Page entière"], ["width", "Pleine largeur"], ["original", "Taille d'origine"]], p.reader_fit))}
         ${field("Sens manga par défaut", chk("p", "reader_manga", p.reader_manga), "Lecture de droite à gauche.")}
         ${field("Mémoriser l'ajustement et le sens par album", chk("p", "reader_remember_album", p.reader_remember_album))}
         ${field("Fond", sel("p", "reader_bg", [["black", "Noir"], ["dark", "Gris foncé"], ["gray", "Gris"], ["white", "Blanc"]], p.reader_bg))}
@@ -507,6 +594,17 @@
           <div class="actions"><button class="btn" type="button" data-action="scan">↻ Scanner maintenant</button>
           <button class="btn" type="button" data-action="clear-cache">Vider le cache des pages</button>
           <button class="btn" type="button" data-action="rebuild-covers">Régénérer les couvertures</button></div></div>
+      </section>
+      <section>
+        <h2>Profils et accès</h2>
+        ${field("Demander « qui lit ? » à l'ouverture", chk("g", "require_profile", g.require_profile), "Chaque profil a sa progression et ses réglages d'affichage.")}
+        <div class="field"><div class="flabel"><span>Profils</span><small>Un code PIN par profil est facultatif.</small></div>
+          <div class="plist">${(settings.meta.profiles || []).map(p => `<span class="prow"><span class="pavatar small">${esc(p.avatar || initial(p.name))}</span> ${esc(p.name)}${p.has_pin ? " 🔒" : ""}
+            <button class="btn mini" type="button" data-action="profile-edit" data-id="${p.id}" data-name="${esc(p.name)}">Modifier</button>${p.id === 1 ? "" : `<button class="btn mini" type="button" data-action="profile-delete" data-id="${p.id}" data-name="${esc(p.name)}">Supprimer</button>`}</span>`).join("")}
+            <button class="btn mini" type="button" data-action="profile-add">+ Ajouter un profil</button></div></div>
+        <div class="field"><div class="flabel"><span>Code d'accès à Bulle</span><small>${g.access_pin_set ? "Un code est demandé à l'ouverture (et pour le flux OPDS : mot de passe = ce code)." : "Aucun code : tout le réseau local peut ouvrir Bulle."}</small></div>
+          <div class="actions"><button class="btn" type="button" data-action="access-pin-set">${g.access_pin_set ? "Changer le code" : "Définir un code"}</button>${g.access_pin_set ? `<button class="btn" type="button" data-action="access-pin-clear">Supprimer le code</button>` : ""}</div></div>
+        ${field("Flux OPDS pour les applis mobiles", chk("g", "opds_enabled", g.opds_enabled), `Adresse à donner à l'appli (Panels, Chunky, Moon+, Mihon…) : <code>${esc(location.origin)}/opds</code>`)}
       </section>
       <section>
         <h2>Bédéthèque</h2>
@@ -547,6 +645,26 @@
         const r = await fetch("/api/covers/rebuild", { method: "POST" });
         if (r.status === 409) toast("Un scan est déjà en cours, réessayez après.");
         else pollScan(true);
+      } else if (action === "profile-add") {
+        const name = prompt("Prénom du nouveau profil :"); if (!name) return;
+        const pin = prompt("Code PIN (laisser vide pour aucun) :") || "";
+        await api("/api/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, pin }) });
+        await loadSettings(); updateProfileButton(); route();
+      } else if (action === "profile-edit") {
+        const name = prompt("Nom du profil :", btn.dataset.name); if (name === null) return;
+        const pin = prompt("Nouveau code PIN (vide = aucun code) :"); if (pin === null) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, { name, pin });
+        await loadSettings(); updateProfileButton(); route();
+      } else if (action === "profile-delete") {
+        if (!confirm(`Supprimer le profil « ${btn.dataset.name} » et sa progression de lecture ?`)) return;
+        await api(`/api/profiles/${btn.dataset.id}`, { method: "DELETE" });
+        await loadSettings(); updateProfileButton(); route();
+      } else if (action === "access-pin-set") {
+        const pin = prompt("Code d'accès (chiffres ou mot de passe) :"); if (!pin) return;
+        await putJson("/api/settings", { global: { access_pin: pin } }); toast("Code d'accès enregistré"); route();
+      } else if (action === "access-pin-clear") {
+        if (!confirm("Supprimer le code d'accès ?")) return;
+        await putJson("/api/settings", { global: { access_pin: "" } }); toast("Code d'accès supprimé"); route();
       } else if (action === "reset-profile") {
         const patch = {}; for (const k of Object.keys(PROFILE_DEFAULTS)) patch[k] = null;
         await putJson("/api/settings", { profile: patch });
@@ -752,6 +870,8 @@
 
   (async () => {
     await loadSettings();
+    updateProfileButton();
+    if (settings.global.require_profile && settings.meta.profile_selected === false) openProfiles({ locked: true });
     try {
       if (settings.profile.remember_folder && !sessionStorage.getItem("bulle:visited") && (location.hash === "" || location.hash === "#/")) {
         const last = localStorage.getItem("bulle:lastHash");
