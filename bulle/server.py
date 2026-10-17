@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.12.0"
+VERSION = "0.12.1"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -893,6 +893,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         time.sleep(0.2)
         return jsonify(lib.status), 202
 
+    @app.route("/api/scan/stop", methods=["POST"])
+    def api_scan_stop():
+        """Arrête le scan (la base reste comme avant) ou la génération des couvertures en cours (celles déjà faites
+        restent, les autres seront faites à l'ouverture des albums ou au prochain scan)."""
+        if lib.status["running"]:
+            lib.stop_requested.set()
+        return jsonify(lib.status)
+
     @app.route("/api/download/<int:node_id>")
     def api_download(node_id: int):
         node = get_node(node_id, "album")
@@ -1389,11 +1397,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def preload_albums(todo: list[dict], label: str, force: bool = False) -> None:
         """Ouvre chaque album une fois : nombre de pages + couverture, en parallèle (`force` : couverture refaite
         même si elle existe, à partir de la première page)."""
-        lib.status.update(phase="covers", covers_total=len(todo), covers_done=0)
+        lib.stop_requested.clear()
+        lib.status.update(phase="covers", covers_total=len(todo), covers_done=0, stopped=False)
         t0 = time.time()
         counter_lock = threading.Lock()
 
         def one(n: dict) -> None:
+            if lib.stop_requested.is_set():   # « Arrêter » : les albums pas encore commencés sont laissés pour plus tard
+                return
             try:
                 count = comics.inspect(n, lib.abs_path(n["path"]), make_cover=True, force=force)
                 lib.set_pages(n["id"], count, None)
@@ -1416,6 +1427,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 log.info("Couvertures de dossiers corrigées : %d", fixed)
         except Exception:  # noqa: BLE001
             log.exception("Correction des couvertures de dossiers")
+        if lib.stop_requested.is_set():
+            lib.status["stopped"] = "covers"
+            log.info("%s arrêté à la demande après %d albums", label, lib.status["covers_done"])
         lib.status.update(phase="idle")
         log.info("%s : %d albums traités en %.0f s", label, lib.status["covers_done"], time.time() - t0)
 

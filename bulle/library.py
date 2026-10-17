@@ -207,6 +207,10 @@ def detect_format(path: str, filename: str) -> Optional[str]:
 # ----------------------------------------------------------------------------
 # La bibliothèque
 # ----------------------------------------------------------------------------
+class ScanStopped(RuntimeError):
+    """Scan arrêté à la demande : rien n'a été écrit dans la base."""
+
+
 class Library:
     def __init__(self, root: str, db_path: str,
                  on_invalidate: Optional[Callable[[Iterable[int]], None]] = None):
@@ -216,6 +220,7 @@ class Library:
         self._local = threading.local()
         self._write_lock = threading.RLock()
         self.scan_lock = threading.Lock()
+        self.stop_requested = threading.Event()   # « Arrêter » : le scan ou la génération des couvertures s'interrompt
         self.status = {
             "running": False, "phase": "idle", "started_at": None, "finished_at": None,
             "duration": None, "albums": 0, "folders": 0, "added": 0, "removed": 0,
@@ -356,12 +361,17 @@ class Library:
         if not self.scan_lock.acquire(blocking=False):
             raise RuntimeError("Un scan est déjà en cours")
         t0 = time.time()
+        self.stop_requested.clear()
         self.status.update(running=True, phase="scan", started_at=t0, finished_at=None,
-                           error=None, added=0, removed=0, changed=0)
+                           error=None, added=0, removed=0, changed=0, stopped=False)
         try:
             result = self._scan()
             self.status.update(**result)
             return result
+        except ScanStopped:
+            log.info("Scan arrêté à la demande : base inchangée")
+            self.status["stopped"] = "scan"
+            raise
         except Exception as e:  # noqa: BLE001
             log.exception("Scan failed")
             self.status["error"] = str(e)
@@ -410,6 +420,8 @@ class Library:
         folders: dict[str, dict] = {}
         albums: list[dict] = []
         for rel, dirs, files in self._walk():
+            if self.stop_requested.is_set():
+                raise ScanStopped("Scan arrêté")   # avant toute écriture : la base reste comme avant le scan
             parent = rel.rsplit("/", 1)[0] if "/" in rel else ("" if rel else None)
             folders[rel] = {"path": rel, "parent": parent, "name": rel.rsplit("/", 1)[-1] if rel else "",
                             "direct": len(files), "count": 0}
@@ -461,6 +473,8 @@ class Library:
                             added += 1
                 # Albums
                 for a in albums:
+                    if self.stop_requested.is_set():
+                        raise ScanStopped("Scan arrêté")   # ROLLBACK plus bas : rien n'est gardé de ce scan
                     parent_id = ids[a["parent"]]
                     row = existing.get(a["path"])
                     if row:
