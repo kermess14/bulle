@@ -874,7 +874,8 @@
         <div class="field"><div class="flabel"><span>Cache actuel</span><small id="cache-size">${cacheLine}</small></div>
           <div class="actions"><button class="btn" type="button" data-action="scan">↻ Scanner maintenant</button>
           <button class="btn" type="button" data-action="clear-cache">Vider le cache des pages</button>
-          <button class="btn" type="button" data-action="rebuild-covers">Régénérer toutes les couvertures</button></div></div>
+          <button class="btn" type="button" data-action="rebuild-covers">Régénérer toutes les couvertures</button>
+          ${stats.errors ? `<button class="btn" type="button" data-action="retry-errors">↻ Réessayer les ${plural(stats.errors, "album en échec", "albums en échec")}</button>` : ""}</div></div>
         <p class="muted">Pour une seule série : bouton « ↻ Couvertures » en haut de sa page. Pour un seul album : le petit ↻ en bas à droite de sa pochette (au survol), ou « Refaire la couverture » dans sa fiche.</p>`,
       bdt: () => `
         ${field("Autoriser les requêtes vers bedetheque.com", chk("g", "bdt_enabled", g.bdt_enabled), "Uniquement quand vous cliquez « Analyser » (ou l'analyse groupée de la page Collection).")}
@@ -992,6 +993,10 @@
         const j = await r.json();
         toast(`${plural(j.count, "couverture", "couvertures")} en cours de régénération…`);
         pollScan(true);
+      } else if (action === "retry-errors") {
+        const r = await fetch("/api/covers/retry-errors", { method: "POST" });
+        if (r.status === 409) { toast("Un scan est déjà en cours, réessayez après."); return; }
+        const j = await r.json(); toast(`${plural(j.count, "album réessayé", "albums réessayés")} en tâche de fond…`); pollScan(true);
       } else if (action === "adult-unlock") {
         if (await adultPrompt()) route();
       } else if (action === "adult-lock") {

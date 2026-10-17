@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.10.7)
+# Bulle — lecteur de BD maison (v0.10.8)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -175,6 +175,9 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   à droite) ou « Refaire la couverture » dans la fiche relit le fichier et refait la couverture, même si elle existe.
   Les couvertures et pages en cache sont liées à la date du fichier : un fichier remplacé ou un numéro d'album
   réattribué ne peut plus afficher une ancienne image.
+- CBR / RAR / 7z : l'archive est décompressée une fois dans le cache (les 20 dernières lues restent décompressées,
+  variable `EXTRACT_KEEP`), avec unar, puis 7z et bsdtar en secours ; une archive dont une entrée est abîmée reste
+  lisible (les autres pages). Réglages › Images et cache propose « Réessayer les albums en échec ».
 - Scan (Réglages › Images et cache) : rapide (liste seulement, couvertures faites à l'affichage), normal (couvertures
   manquantes en tâche de fond) ou minutieux (chaque album rouvert, pages recomptées, couverture refaite — long sur un
   NAS, mais rien ne reste faux).

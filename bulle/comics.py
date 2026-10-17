@@ -37,7 +37,7 @@ PDF_ORIGINAL_WIDTH = 2400
 JPEG_QUALITY = 90
 # Profils de qualité réglables : (qualité JPEG, sous-échantillonnage de la couleur : 0 = aucun, 2 = 4:2:0)
 QUALITY_PROFILES = {"eco": (80, 2), "normal": (90, 0), "max": (95, 0)}
-MAX_EXTRACTED = 8  # nombre d'archives CBR/7z gardées décompressées sur le disque
+MAX_EXTRACTED = max(2, int(os.environ.get("EXTRACT_KEEP", "20")))  # archives CBR/7z gardées décompressées sur le disque (les plus récentes)
 
 # Outils externes pour les RAR / 7z, par ordre de préférence.
 EXTRACT_TOOLS = (
@@ -211,6 +211,7 @@ class ExtractedAlbum(Album):
     def __init__(self, path: str, dest: str):
         super().__init__(path)
         self.dest = dest
+        self.partial = ""   # message de l'outil quand une partie seulement de l'archive a pu être lue
         marker = os.path.join(dest, ".bulle-ok")
         if not os.path.exists(marker):
             self._extract(dest)
@@ -237,27 +238,62 @@ class ExtractedAlbum(Album):
                 return name, cmd
         return None
 
+    @staticmethod
+    def _count_images(folder: str) -> int:
+        n = 0
+        for dirpath, dirnames, filenames in os.walk(folder):
+            dirnames[:] = [d for d in dirnames if d != "__MACOSX"]
+            n += sum(1 for fn in filenames if is_image_name(fn))
+        return n
+
     def _extract(self, dest: str) -> None:
-        tool = self.available_tool()
-        if not tool:
+        """Décompresse avec le premier outil qui réussit ; si tous échouent mais qu'un outil a sorti des pages (une entrée
+        abîmée dans l'archive, par exemple), on garde ce résultat partiel plutôt que de refuser tout l'album."""
+        tools = [(name, cmd) for name, cmd in EXTRACT_TOOLS if shutil.which(name)]
+        if not tools:
             raise AlbumError("Aucun outil pour ouvrir les CBR/RAR (installez « unar », présent dans l'image Docker)")
-        name, cmd = tool
         if os.path.isdir(dest):
             shutil.rmtree(dest, ignore_errors=True)
-        os.makedirs(dest, exist_ok=True)
-        argv = [a.format(dest=dest, archive=self.path) for a in cmd]
-        try:
-            proc = subprocess.run(argv, capture_output=True, text=True, timeout=900)
-        except subprocess.TimeoutExpired as e:
-            shutil.rmtree(dest, ignore_errors=True)
-            raise AlbumError(f"Décompression trop longue avec {name}") from e
-        except OSError as e:
-            shutil.rmtree(dest, ignore_errors=True)
-            raise AlbumError(f"Impossible de lancer {name} : {e}") from e
-        if proc.returncode != 0:
+        best: Optional[tuple[int, str, str]] = None   # (nombre d'images, dossier, message d'erreur)
+        first_error = ""
+        for name, cmd in tools:
+            tmp = f"{dest}.{name}.tmp"
+            shutil.rmtree(tmp, ignore_errors=True)
+            os.makedirs(tmp, exist_ok=True)
+            argv = [a.format(dest=tmp, archive=self.path) for a in cmd]
+            try:
+                proc = subprocess.run(argv, capture_output=True, text=True, timeout=900)
+            except subprocess.TimeoutExpired:
+                shutil.rmtree(tmp, ignore_errors=True)
+                first_error = first_error or f"Décompression trop longue avec {name}"
+                continue
+            except OSError as e:
+                shutil.rmtree(tmp, ignore_errors=True)
+                first_error = first_error or f"Impossible de lancer {name} : {e}"
+                continue
+            count = self._count_images(tmp)
+            if proc.returncode == 0 and count:
+                os.replace(tmp, dest)
+                if best:
+                    shutil.rmtree(best[1], ignore_errors=True)
+                self.partial = ""
+                return
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
-            shutil.rmtree(dest, ignore_errors=True)
-            raise AlbumError(f"Archive illisible ({name}, code {proc.returncode}) : {' / '.join(tail)}")
+            msg = (f"Archive illisible ({name}, code {proc.returncode}) : {' / '.join(tail)}" if proc.returncode
+                   else f"Aucune image trouvée par {name}")
+            first_error = first_error or msg
+            if count > (best[0] if best else 0):
+                if best:
+                    shutil.rmtree(best[1], ignore_errors=True)
+                best = (count, tmp, msg)
+            else:
+                shutil.rmtree(tmp, ignore_errors=True)
+        if best and best[0] > 0:
+            os.replace(best[1], dest)
+            self.partial = best[2]
+            log.warning("Archive partiellement lue (%d images) : %s — %s", best[0], self.path, best[2])
+            return
+        raise AlbumError(first_error or "Archive illisible")
 
     def read(self, index: int) -> tuple[bytes, str]:
         self._check(index)
@@ -509,16 +545,27 @@ class Comics:
         raise AlbumError(f"Format non géré : {fmt or 'inconnu'}")
 
     def _evict_extracted(self, keep: str) -> None:
+        """Garde au plus MAX_EXTRACTED archives décompressées (les moins récemment lues partent). Une décompression en cours
+        (pas encore de marqueur) n'est jamais touchée : la supprimer sous les pieds de l'outil faisait échouer un fichier
+        au hasard de presque chaque CBR quand plusieurs couvertures se faisaient en parallèle."""
         try:
             entries = []
+            now = time.time()
             for name in os.listdir(self.extract_dir):
-                if name == keep:
+                if name == keep or name.endswith(".tmp"):
                     continue
                 marker = os.path.join(self.extract_dir, name, ".bulle-ok")
                 try:
-                    entries.append((os.path.getmtime(marker), name))
+                    used = os.path.getmtime(marker)
+                    if now - used > 120:   # lue il y a moins de deux minutes : un autre fil est peut-être encore dessus
+                        entries.append((used, name))
                 except OSError:
-                    entries.append((0, name))
+                    # pas de marqueur : décompression en cours (on n'y touche pas) ou restes d'un plantage vieux de plus d'une heure
+                    try:
+                        if now - os.path.getmtime(os.path.join(self.extract_dir, name)) > 3600:
+                            shutil.rmtree(os.path.join(self.extract_dir, name), ignore_errors=True)
+                    except OSError:
+                        pass
             entries.sort()
             while len(entries) >= MAX_EXTRACTED:
                 _, name = entries.pop(0)
