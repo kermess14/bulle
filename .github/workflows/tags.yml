@@ -1,0 +1,61 @@
+# Pose un tag Git (et une « release » GitHub) pour chaque version de Bulle.
+# - À chaque modification de main : si la version de bulle/server.py (VERSION = "x.y.z") n'a pas encore de tag,
+#   le tag vx.y.z est posé sur ce commit.
+# - Au premier passage (ou à la main, onglet Actions → « Tags de version » → Run workflow), il rattrape tout
+#   l'historique : chaque version reçoit son tag sur le dernier commit de main qui la porte. Un tag existant n'est
+#   jamais déplacé.
+name: Tags de version
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Poser les tags manquants
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags --force
+          # version portée par chaque commit de main (premier parent), du plus ancien au plus récent
+          git log --first-parent --reverse --format=%H HEAD | while read -r c; do
+            v=$(git show "$c:bulle/server.py" 2>/dev/null | sed -n 's/^VERSION = "\(.*\)"/\1/p' | head -n1)
+            [ -n "$v" ] && echo "$v $c"
+          done > versions.txt
+          # dernier commit de chaque version, dans l'ordre d'apparition des versions
+          awk '{ if (!($1 in last)) order[++n] = $1; last[$1] = $2 } END { for (i = 1; i <= n; i++) print order[i], last[order[i]] }' versions.txt > tags.txt
+          cat tags.txt
+          created=""
+          while read -r v c; do
+            t="v$v"
+            if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
+              echo "$t : déjà taggé"
+            else
+              git tag -a "$t" "$c" -m "Bulle $v"
+              created="$created $t"
+              echo "$t : tag posé sur $c"
+            fi
+          done < tags.txt
+          if [ -n "$created" ]; then
+            git push origin $created
+            for t in $created; do
+              c=$(git rev-list -n1 "$t")
+              title=$(git log -1 --format=%b "$c" | head -n1)
+              [ -z "$title" ] && title=$(git log -1 --format=%s "$c")
+              gh release create "$t" --verify-tag --title "Bulle ${t#v}" \
+                --notes "$title
+
+          Image Docker : \`ghcr.io/${{ github.repository }}:${t#v}\` (versions construites à partir de la 0.10.12 ; avant, \`latest\` seulement)." || true
+            done
+          fi

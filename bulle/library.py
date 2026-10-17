@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS nodes(
   album_count INTEGER NOT NULL DEFAULT 0,
   cover_id    INTEGER,
   color       TEXT,
+  cover_page  INTEGER,
   added_at    REAL NOT NULL,
   seen        INTEGER NOT NULL DEFAULT 0
 );
@@ -136,7 +137,7 @@ CREATE TABLE IF NOT EXISTS panels(
   PRIMARY KEY(node_id, page)
 );
 """
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 DEFAULT_PROFILE = 1
 
 
@@ -178,11 +179,14 @@ def display_name(filename: str) -> str:
 
 def detect_format(path: str, filename: str) -> Optional[str]:
     """Vrai format d'après les premiers octets (un .cbr qui est un zip fonctionne)."""
-    try:
-        with open(path, "rb") as f:
-            head = f.read(512)
-    except OSError:
-        head = b""
+    head = b""
+    for attempt in range(3):   # disque réseau lent ou en veille : on réessaie avant de se rabattre sur l'extension
+        try:
+            with open(path, "rb") as f:
+                head = f.read(512)
+            break
+        except OSError:
+            time.sleep(0.4 * (attempt + 1))
     if head.startswith(b"PK\x03\x04") or head.startswith(b"PK\x05\x06"):
         return "zip"
     if head.startswith(b"Rar!\x1a\x07"):
@@ -233,6 +237,9 @@ class Library:
         node_cols = [r["name"] for r in conn.execute("PRAGMA table_info(nodes)")]
         if node_cols and "color" not in node_cols:
             conn.execute("ALTER TABLE nodes ADD COLUMN color TEXT")
+            conn.commit()
+        if node_cols and "cover_page" not in node_cols:
+            conn.execute("ALTER TABLE nodes ADD COLUMN cover_page INTEGER")   # page choisie comme couverture (sinon la 1re)
             conn.commit()
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(progress)")]
         if cols and "profile_id" not in cols:
@@ -423,7 +430,7 @@ class Library:
         conn = self.conn
         with self._write_lock:
             existing = {r["path"]: dict(r) for r in conn.execute(
-                "SELECT id, path, kind, size, mtime FROM nodes")}
+                "SELECT id, path, kind, size, mtime, format, error FROM nodes")}
             ids: dict[str, int] = {}
             added = changed = 0
             invalidate: list[int] = []
@@ -467,6 +474,17 @@ class Library:
                                  natural_key(a["name"]), fmt, a["size"], a["mtime"], gen, row["id"]))
                             invalidate.append(row["id"])
                             changed += 1
+                        elif row.get("error"):
+                            # album en échec : son format a peut-être été mal lu la dernière fois (disque qui n'a pas
+                            # répondu) ; on relit les premiers octets et on lui redonne sa chance s'il a changé
+                            fmt = detect_format(self.abs_path(a["path"]), a["file"])
+                            if fmt != row.get("format"):
+                                cur.execute("UPDATE nodes SET parent_id=?, format=?, page_count=NULL, error=NULL, seen=? "
+                                            "WHERE id=?", (parent_id, fmt, gen, row["id"]))
+                                invalidate.append(row["id"])
+                                changed += 1
+                            else:
+                                cur.execute("UPDATE nodes SET parent_id=?, seen=? WHERE id=?", (parent_id, gen, row["id"]))
                         else:
                             cur.execute("UPDATE nodes SET parent_id=?, seen=? WHERE id=?",
                                         (parent_id, gen, row["id"]))
@@ -533,6 +551,26 @@ class Library:
         return result
 
     # -- lecture ---------------------------------------------------------------
+    def refresh_file(self, node_id: int) -> Optional[dict]:
+        """Relit un album sur le disque : taille, date, vrai format (d'après ses premiers octets), erreur effacée.
+        Pour rattraper un raté du scan (disque réseau lent qui n'a pas répondu, fichier remplacé depuis…).
+        Renvoie le nœud à jour, ou None si le fichier n'existe plus."""
+        n = self.node(node_id)
+        if not n or n["kind"] != "album":
+            return n
+        path = self.abs_path(n["path"])
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        fmt = detect_format(path, os.path.basename(path))
+        with self._write_lock:
+            self.conn.execute("UPDATE nodes SET format=?, size=?, mtime=?, page_count=NULL, error=NULL WHERE id=?",
+                              (fmt, st.st_size, st.st_mtime, node_id))
+            self.conn.commit()
+        self.panels_clear([node_id])
+        return self.node(node_id)
+
     def node(self, node_id: int) -> Optional[dict]:
         r = self.conn.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
         return dict(r) if r else None
@@ -617,6 +655,12 @@ class Library:
             self.conn.execute("DELETE FROM progress WHERE profile_id=? AND node_id=?", (profile_id, node_id))
             self.conn.commit()
 
+    def set_cover_page(self, node_id: int, page: Optional[int]) -> None:
+        """Page choisie comme couverture (None = la première). Seulement dans la base : le fichier n'est pas touché."""
+        with self._write_lock:
+            self.conn.execute("UPDATE nodes SET cover_page=? WHERE id=?", (page, node_id))
+            self.conn.commit()
+
     def set_color(self, node_id: int, color: Optional[str]) -> None:
         with self._write_lock:
             self.conn.execute("UPDATE nodes SET color=? WHERE id=?", (color, node_id))
@@ -695,13 +739,13 @@ class Library:
         """Albums d'un dossier et de ses sous-dossiers."""
         prefix = folder_path.strip("/")
         rows = self.conn.execute(
-            "SELECT id, path, format, mtime, page_count, error FROM nodes WHERE kind='album' AND (path LIKE ? OR ?='') "
+            "SELECT id, path, format, mtime, page_count, error, cover_page FROM nodes WHERE kind='album' AND (path LIKE ? OR ?='') "
             "ORDER BY sort_key", (prefix + "/%", prefix)).fetchall()
         return [dict(r) for r in rows]
 
     def albums_without(self, predicate_sql: str = "1=1") -> list[dict]:
         rows = self.conn.execute(
-            f"SELECT id, path, format, mtime, page_count, error FROM nodes WHERE kind='album' AND {predicate_sql} "
+            f"SELECT id, path, format, mtime, page_count, error, cover_page FROM nodes WHERE kind='album' AND {predicate_sql} "
             "ORDER BY sort_key").fetchall()
         return [dict(r) for r in rows]
 

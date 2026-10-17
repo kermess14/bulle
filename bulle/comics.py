@@ -760,8 +760,17 @@ class Comics:
                 if make_cover and (force or not os.path.exists(self.cover_path(node))):
                     if force:
                         self.clear_cover(node["id"])
-                    self._write_atomic(self.cover_path(node), self._render(album, 0, self.cover_width))
+                    self._write_atomic(self.cover_path(node), self._render(album, self.cover_index(node, n), self.cover_width))
                 return n
+
+    @staticmethod
+    def cover_index(node, page_count: int) -> int:
+        """Page qui sert de couverture : celle choisie dans le lecteur si elle existe encore, sinon la première."""
+        try:
+            p = node["cover_page"]
+        except (KeyError, IndexError, TypeError):
+            p = None
+        return p if isinstance(p, int) and 0 <= p < page_count else 0
 
     def cover_color(self, node: dict, abs_path: str) -> Optional[str]:
         """Couleur dominante de la couverture (génère la couverture si besoin)."""
