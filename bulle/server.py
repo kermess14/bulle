@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.10.10"
+VERSION = "0.10.11"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -69,6 +69,7 @@ def global_defaults() -> dict:
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
         "tools_url": "auto",          # BDConverter dans le menu caché (champignon) : adresse, "auto" = même machine, port 3111, "" = masqué
         "adult_paths": [],            # dossiers de la rubrique Adulte (chemins relatifs), cachés tant que le code n'est pas entré
+        "adult_hide_tab": False,      # l'entrée « Adulte » n'apparaît pas dans le menu (accès par Réglages › Adulte)
     }
 
 
@@ -78,7 +79,7 @@ GLOBAL_TYPES = {
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
-    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,),
+    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "adult_hide_tab": (bool,),
 }
 
 
@@ -619,7 +620,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     abort(403, description="adult_locked")
                 pin = str(g.pop("adult_pin") or "").strip()
                 lib.set_settings({"adult_pin_hash": hash_pin(pin) if pin else None}, None)
-            if "adult_paths" in g and adult_pin_hash() and not adult_unlocked():
+            if ("adult_paths" in g or "adult_hide_tab" in g) and adult_pin_hash() and not adult_unlocked():
                 abort(403, description="adult_locked")
             lib.set_settings(validate_global(g), None)
             apply_settings(settings())
