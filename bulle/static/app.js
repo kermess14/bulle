@@ -409,7 +409,7 @@
   }
   function coverUrl(item, cssWidth) {
     const id = item.kind === "folder" ? item.cover_id : item.id;
-    const v = item.kind === "folder" ? ("f" + item.cover_id) : item.mtime;
+    const v = (item.kind === "folder" ? "f" + item.cover_id + "-" : "") + (item.cover_ver || item.mtime);   // cover_ver : refaite = nouvelle adresse
     return `/api/cover/${id}?w=${coverWidth(cssWidth)}&v=${v}&t=${encodeURIComponent(settings.global.img_tag || "")}${item.bust ? "&r=" + item.bust : ""}`;
   }
   function coverHtml(item, inner = "", cssWidth) {
