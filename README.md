@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.10.8)
+# Bulle — lecteur de BD maison (v0.10.9)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -170,7 +170,8 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - Habillages (Réglages › Affichage) : Bande dessinée, Bling-bling, Girly, Néon arcade ou Sobre, pour tout le
   site ; le lecteur reste sobre. Les réglages s'affichent en « signets » (une rubrique à la fois) ou en
   « briques » (tout sur une page).
-- Couvertures : toujours la première page de l'album, dans l'ordre naturel des noms de fichiers. « ↻ Couvertures »
+- Couvertures : la première page de l'album dans l'ordre naturel des noms de fichiers — et un fichier nommé comme une
+  couverture (« cover », « couv », « front »…) passe en tête même s'il se trie après les pages numérotées. « ↻ Couvertures »
   en haut d'une série refait celles de tous ses albums ; sur n'importe quelle pochette, un petit ↻ (au survol, en bas
   à droite) ou « Refaire la couverture » dans la fiche relit le fichier et refait la couverture, même si elle existe.
   Les couvertures et pages en cache sont liées à la date du fichier : un fichier remplacé ou un numéro d'album
