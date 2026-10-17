@@ -23,9 +23,9 @@ from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, comp
                          parse_album_name, query_from_folder)
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
-from .panels import detect_panels
+from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -420,7 +420,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         """Cases de la planche (détectées une fois, puis gardées en base) pour la lecture case par case."""
         node = get_node(node_id, "album")
         cached = lib.panels_get(node_id, index)
-        if cached is not None:
+        if cached is not None and cached.get("v") == PANELS_VERSION:
             return jsonify(cached)
         try:
             path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
@@ -431,7 +431,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             abort(415, description=str(e))
         except Exception as e:  # noqa: BLE001
             log.warning("Détection des cases %s p.%d : %s", node["path"], index, e)
-            result = {"panels": [], "rtl": []}
+            result = {"panels": [], "rtl": [], "v": PANELS_VERSION}
         lib.panels_set(node_id, index, result)
         return jsonify(result)
 

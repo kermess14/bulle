@@ -13,10 +13,11 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-WORK_WIDTH = 480          # largeur de travail (px) : suffisant pour voir les gouttières, rapide
+PANELS_VERSION = 2        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+WORK_WIDTH = 640          # largeur de travail (px) : assez fine pour les gouttières minces, rapide
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
 BG_TOLERANCE = 46         # écart de gris toléré autour de la couleur de fond
-MIN_GUTTER = 0.006        # largeur minimale d'une gouttière (fraction du grand côté)
+MIN_GUTTER = 0.003        # largeur minimale d'une gouttière (fraction du grand côté, au moins 2 px)
 MIN_PANEL = 0.055         # côté minimal d'une case (fraction de la dimension de la page)
 MIN_AREA = 0.012          # surface minimale d'une case (fraction de la page) — élimine numéros, titres
 PAD = 0.012               # marge ajoutée autour de chaque case (fraction de la page)
@@ -130,7 +131,7 @@ def detect_panels(img: Image.Image) -> dict:
     w, h = gray.size
     bg = _background_value(gray)
     mask = _mask(gray, bg)
-    min_gutter = max(2, round(max(w, h) * MIN_GUTTER))
+    min_gutter = max(2, int(max(w, h) * MIN_GUTTER))
     min_side = max(6, round(min(w, h) * MIN_PANEL))
     full = (0, 0, w, h)
 
@@ -140,10 +141,10 @@ def detect_panels(img: Image.Image) -> dict:
 
     ltr = leaves(False)
     if len(ltr) < 2:
-        return {"panels": [], "rtl": []}
+        return {"panels": [], "rtl": [], "v": PANELS_VERSION}
     page_area = w * h
     if len(ltr) == 1 or max((b[2] - b[0]) * (b[3] - b[1]) for b in ltr) > 0.85 * page_area:
-        return {"panels": [], "rtl": []}
+        return {"panels": [], "rtl": [], "v": PANELS_VERSION}
     rtl = leaves(True)
     pad_x, pad_y = PAD * w, PAD * h
 
@@ -156,4 +157,4 @@ def detect_panels(img: Image.Image) -> dict:
     order = [index.get(tuple(rel(b)), i) for i, b in enumerate(rtl)]
     if sorted(order) != list(range(len(panels))):
         order = list(range(len(panels)))
-    return {"panels": panels, "rtl": order}
+    return {"panels": panels, "rtl": order, "v": PANELS_VERSION}
