@@ -603,6 +603,13 @@ class Comics:
             for d in (os.path.join(self.pages_dir, str(nid)), os.path.join(self.extract_dir, str(nid))):
                 shutil.rmtree(d, ignore_errors=True)
 
+    def clear_cover(self, node_id: int) -> None:
+        for p in glob.glob(os.path.join(self.covers_dir, f"{node_id}-*.jpg")) + [os.path.join(self.covers_dir, f"{node_id}.jpg")]:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
     def clear_pages(self) -> int:
         n = 0
         for name in os.listdir(self.pages_dir):

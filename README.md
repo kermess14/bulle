@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.9.1)
+# Bulle — lecteur de BD maison (v0.10.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -157,6 +157,16 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - Le lecteur retient l'ajustement choisi et le sens de lecture par album (dans le navigateur),
   et le dernier ajustement choisi devient celui par défaut.
 - À la dernière page, une flèche de plus propose l'album suivant du dossier (`Entrée` pour enchaîner).
+- Rubrique Adulte : en haut d'une série, le bouton « 18+ » la range dans la rubrique ; avec un code défini
+  (Réglages › Adulte), ces séries disparaissent de partout — accueil, recherche, hasard, mosaïque, OPDS —
+  tant que le code n'est pas entré (entrée « Adulte » de la colonne de gauche, ou invite automatique en
+  ouvrant une série 18+ par un lien). Une fois entré, le code vaut 12 heures sur l'appareil. Rien n'est
+  déplacé ni modifié dans les fichiers.
+- Habillages (Réglages › Affichage) : Bande dessinée, Bling-bling, Girly, Néon arcade ou Sobre, pour tout le
+  site ; le lecteur reste sobre. Les réglages s'affichent en « signets » (une rubrique à la fois) ou en
+  « briques » (tout sur une page).
+- Couvertures : « ↻ Couvertures » en haut d'une série refait celles de tous ses albums ; un album dont la
+  couverture manque ou qui est en échec montre un petit ↻ en haut à droite de sa pochette pour le relire.
 
 ## Comment c'est fait
 

@@ -683,6 +683,18 @@ class Library:
 
         return [dict(r) for r in sorted(rows, key=rank)[:limit]]
 
+    def node_by_path(self, path: str) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM nodes WHERE path=?", (path.strip("/"),)).fetchone()
+        return dict(r) if r else None
+
+    def albums_under(self, folder_path: str) -> list[dict]:
+        """Albums d'un dossier et de ses sous-dossiers."""
+        prefix = folder_path.strip("/")
+        rows = self.conn.execute(
+            "SELECT id, path, format, mtime, page_count, error FROM nodes WHERE kind='album' AND (path LIKE ? OR ?='') "
+            "ORDER BY sort_key", (prefix + "/%", prefix)).fetchall()
+        return [dict(r) for r in rows]
+
     def albums_without(self, predicate_sql: str = "1=1") -> list[dict]:
         rows = self.conn.execute(
             f"SELECT id, path, format, mtime, page_count, error FROM nodes WHERE kind='album' AND {predicate_sql} "
@@ -932,7 +944,7 @@ class Library:
     def random_covers(self, n: int = 60) -> list[dict]:
         """Albums au hasard ayant une couverture (pour la mosaïque de fond)."""
         rows = self.conn.execute(
-            "SELECT id, mtime, color FROM nodes WHERE kind='album' AND error IS NULL AND page_count IS NOT NULL "
+            "SELECT id, path, mtime, color FROM nodes WHERE kind='album' AND error IS NULL AND page_count IS NOT NULL "
             "ORDER BY RANDOM() LIMIT ?", (max(1, min(400, n)),)).fetchall()
         return [dict(r) for r in rows]
 
