@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.10.11"
+VERSION = "0.11.0"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -298,6 +298,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             "mtime": int(n.get("mtime") or 0), "added": int(n.get("added_at") or 0),
             "pages": n.get("page_count"), "error": n.get("error"), "color": n.get("color"),
         }
+        if n["kind"] == "album" and n.get("cover_page") is not None:
+            d["cover_page"] = n.get("cover_page")
         if n["kind"] == "album" and n.get("page_count"):
             # version de la couverture (date du fichier de cache) : refaite = nouvelle adresse, le navigateur ne peut pas
             # ressortir l'ancienne image de son cache
@@ -695,22 +697,48 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         folder = get_node(folder_id, "folder")
         if lib.status["running"]:
             return jsonify(lib.status), 409
-        todo = lib.albums_under(folder["path"])
-        for n in todo:
-            lib.set_pages(n["id"], None, None)
-        threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, f"Couvertures de {folder['name']}", force=True)),
+        todo = []
+        for n in lib.albums_under(folder["path"]):
+            fresh = lib.refresh_file(n["id"])   # relit taille, date et format sur le disque (rattrape les ratés du scan)
+            if fresh:
+                comics.invalidate([n["id"]])
+                todo.append(fresh)
+        threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, f"Rescan de {folder['name']}", force=True)),
                          name="bulle-covers", daemon=True).start()
         time.sleep(0.2)
         return jsonify({"count": len(todo), "scan": lib.status}), 202
+
+    @app.route("/api/covers/page/<int:node_id>", methods=["POST"])
+    def api_covers_page(node_id: int):
+        """Choisit la page qui sert de couverture (depuis le lecteur) ; {"page": null} revient à la première page.
+        Rien n'est écrit dans le fichier : le choix est gardé dans la base de Bulle."""
+        node = get_node(node_id, "album")
+        body = request.get_json(force=True, silent=True) or {}
+        page = body.get("page")
+        if page is not None:
+            try:
+                page = int(page)
+            except (TypeError, ValueError):
+                abort(400, description="Numéro de page invalide")
+            if page < 0 or (node.get("page_count") and page >= node["page_count"]):
+                abort(400, description="Cette page n'existe pas dans l'album")
+            if page == 0:
+                page = None
+        lib.set_cover_page(node["id"], page)
+        node = lib.node(node["id"])
+        try:
+            comics.inspect(node, lib.abs_path(node["path"]), make_cover=True, force=True)
+            lib.set_color(node["id"], comics.cover_color(node, lib.abs_path(node["path"])))
+        except AlbumError as e:
+            abort(415, description=str(e))
+        return jsonify(album_json(lib.node(node["id"]), with_progress=False))
 
     @app.route("/api/covers/retry-errors", methods=["POST"])
     def api_covers_retry_errors():
         """Réessaie tous les albums en échec, en tâche de fond (après une correction, ou un disque réseau revenu)."""
         if lib.status["running"]:
             return jsonify(lib.status), 409
-        todo = lib.albums_without("error IS NOT NULL")
-        for n in todo:
-            lib.set_pages(n["id"], None, None)
+        todo = [f for f in (lib.refresh_file(n["id"]) for n in lib.albums_without("error IS NOT NULL")) if f]
         threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, "Albums en échec réessayés", force=True)),
                          name="bulle-covers", daemon=True).start()
         time.sleep(0.2)
@@ -721,9 +749,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         """Réessaie un album en échec (ou refait sa couverture) tout de suite."""
         node = get_node(node_id, "album")
         comics.invalidate([node["id"]])
-        lib.set_pages(node["id"], None, None)
-        node["page_count"], node["error"] = None, None
-        node = ensure_pages(node)
+        fresh = lib.refresh_file(node["id"])   # taille, date et vrai format relus sur le disque
+        if fresh is None:
+            abort(404, description="Fichier introuvable sur le disque (déplacé ou supprimé) : lancez un scan")
+        node = ensure_pages(fresh)
         return jsonify(album_json(node, with_progress=False))
 
     @app.route("/api/auth/status")
