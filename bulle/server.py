@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.10.7"
+VERSION = "0.10.8"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -685,6 +685,19 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         for n in todo:
             lib.set_pages(n["id"], None, None)
         threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, f"Couvertures de {folder['name']}", force=True)),
+                         name="bulle-covers", daemon=True).start()
+        time.sleep(0.2)
+        return jsonify({"count": len(todo), "scan": lib.status}), 202
+
+    @app.route("/api/covers/retry-errors", methods=["POST"])
+    def api_covers_retry_errors():
+        """Réessaie tous les albums en échec, en tâche de fond (après une correction, ou un disque réseau revenu)."""
+        if lib.status["running"]:
+            return jsonify(lib.status), 409
+        todo = lib.albums_without("error IS NOT NULL")
+        for n in todo:
+            lib.set_pages(n["id"], None, None)
+        threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, "Albums en échec réessayés", force=True)),
                          name="bulle-covers", daemon=True).start()
         time.sleep(0.2)
         return jsonify({"count": len(todo), "scan": lib.status}), 202

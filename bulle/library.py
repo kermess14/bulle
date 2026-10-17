@@ -959,11 +959,12 @@ class Library:
         r = self.conn.execute(
             "SELECT SUM(CASE WHEN kind='album' THEN 1 ELSE 0 END) AS albums, "
             "SUM(CASE WHEN kind='folder' AND path<>'' THEN 1 ELSE 0 END) AS folders, "
-            "SUM(CASE WHEN kind='album' THEN size ELSE 0 END) AS size FROM nodes").fetchone()
+            "SUM(CASE WHEN kind='album' THEN size ELSE 0 END) AS size, "
+            "SUM(CASE WHEN kind='album' AND error IS NOT NULL THEN 1 ELSE 0 END) AS errors FROM nodes").fetchone()
         p = self.conn.execute(
             "SELECT SUM(completed) AS done, SUM(CASE WHEN completed=0 THEN 1 ELSE 0 END) AS reading "
             "FROM progress WHERE profile_id=?", (profile_id,)).fetchone()
         last = self.conn.execute("SELECT value FROM meta WHERE key='last_scan'").fetchone()
-        return {"albums": r["albums"] or 0, "folders": r["folders"] or 0, "size": r["size"] or 0,
+        return {"albums": r["albums"] or 0, "folders": r["folders"] or 0, "size": r["size"] or 0, "errors": r["errors"] or 0,
                 "read": p["done"] or 0, "reading": p["reading"] or 0,
                 "last_scan": float(last["value"]) if last else None}
