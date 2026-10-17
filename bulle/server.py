@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.12.1"
+VERSION = "0.12.2"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -449,13 +449,26 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         return out
 
     # ------------------------------------------------------------------ pages
+    def html_page(name: str) -> Response:
+        """Page HTML avec le numéro de version collé aux adresses des fichiers (style.css?v=…) : après une mise à jour,
+        le navigateur ne peut plus garder l'ancienne feuille de style ou l'ancien script en mémoire."""
+        with open(os.path.join(STATIC_DIR, name), encoding="utf-8") as f:
+            html = f.read()
+        for asset in ("style.css", "app.js", "reader.js"):
+            html = html.replace(f'"/static/{asset}"', f'"/static/{asset}?v={VERSION}"')
+        html = html.replace("<head>", f'<head>\n<meta name="bulle-version" content="{VERSION}">', 1)
+        resp = make_response(html)
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     @app.route("/")
     def index():
-        return send_from_directory(STATIC_DIR, "index.html", max_age=0)
+        return html_page("index.html")
 
     @app.route("/read/<int:node_id>")
     def read_page(node_id: int):
-        return send_from_directory(STATIC_DIR, "reader.html", max_age=0)
+        return html_page("reader.html")
 
     @app.route("/static/<path:filename>")
     def static_files(filename: str):
