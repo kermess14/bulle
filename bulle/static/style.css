@@ -519,14 +519,16 @@ body.mode-panels .rbtn#panels, body.mode-panels #panels { color: var(--accent); 
    Mosaïque de couvertures en fond (navigation seulement)
    ====================================================================== */
 #mosaic { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
-#mosaic .mz { position: absolute; left: -60px; top: -90px; opacity: .5; filter: saturate(.85); }
+#mosaic .mz { position: absolute; left: -60px; top: -90px; opacity: var(--mosaic-opacity, .45); filter: saturate(.85) brightness(var(--mosaic-brightness, .7)); }
 :root[data-mosaic="drift"] #mosaic .mz { animation: drift 110s ease-in-out infinite alternate; }
 @keyframes drift { from { transform: translate(0, 0); } to { transform: translate(-60px, -90px); } }
 #mosaic .mt { position: absolute; width: 120px; height: 180px; object-fit: cover; transition: opacity 1s ease; border: 1px solid rgba(0, 0, 0, .35); }
 #mosaic .mt.fade { opacity: 0; }
-#mosaic::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15, 17, 21, .82), rgba(15, 17, 21, .9) 40%, rgba(15, 17, 21, .94)); }
-:root[data-theme="light"] #mosaic::after { background: linear-gradient(180deg, rgba(244, 245, 248, .86), rgba(244, 245, 248, .93)); }
-:root[data-theme="light"] #mosaic .mz { opacity: .45; }
+#mosaic::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15, 17, 21, .35), rgba(15, 17, 21, .55)); }
+:root[data-theme="light"] #mosaic::after { background: linear-gradient(180deg, rgba(244, 245, 248, .5), rgba(244, 245, 248, .65)); }
+.rangewrap { display: inline-flex; align-items: center; gap: 10px; }
+.rangewrap input[type=range] { width: 160px; accent-color: var(--accent); }
+.rangewrap output { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13.5px; }
 .layout, .topbar { position: relative; z-index: 1; }
 .topbar { z-index: 20; }
 body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
@@ -637,3 +639,19 @@ body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, trans
 :root[data-skin="bd"] .tabs .tab.on { background: var(--pop); color: var(--pop-ink); }
 :root[data-skin="bd"] .coltable th { font-family: var(--lettering); font-weight: 400; letter-spacing: .05em; }
 :root[data-skin="bd"] .stats { font-family: var(--hand); font-size: 15px; }
+
+/* colonne de gauche en habillage BD : plus large, plus grande, avec des onomatopées entre les lignes */
+.sidebar .ono { display: none; }
+:root[data-skin="bd"][data-tabs="left"] .sidebar { width: 236px; padding: 16px 12px calc(16px + env(safe-area-inset-bottom)); gap: 4px; }
+:root[data-skin="bd"][data-tabs="left"] .sidebar a { padding: 12px 14px; font-size: 19px; letter-spacing: .06em; gap: 12px; }
+:root[data-skin="bd"][data-tabs="left"] .sidebar a svg { width: 24px; height: 24px; stroke-width: 2.4; }
+:root[data-skin="bd"][data-tabs="left"] .sidebar a.sub { padding: 8px 14px 8px 24px; font-size: 16.5px; }
+:root[data-skin="bd"][data-tabs="left"] .sidebar .ono { display: block; font-family: var(--lettering); font-size: 22px; line-height: 1; color: var(--c1, var(--pop)); -webkit-text-stroke: 1px var(--ink); text-shadow: 2px 2px 0 var(--ink); transform: rotate(var(--rot, -5deg)); margin: 2px 0 2px 10px; pointer-events: none; user-select: none; font-style: normal; letter-spacing: .04em; opacity: .95; }
+:root[data-skin="bd"][data-tabs="left"] .sidebar .ono::before { content: "\2605"; font-size: 11px; vertical-align: middle; margin-right: 4px; opacity: .8; }
+:root[data-skin="bd"][data-tabs="left"] .letters.rail.left { left: 246px; }
+@media (min-width: 701px) and (max-width: 1000px) {
+  :root[data-skin="bd"][data-tabs="left"] .sidebar { width: 62px; padding: 12px 8px; }
+  :root[data-skin="bd"][data-tabs="left"] .sidebar a { padding: 10px 0; }
+  :root[data-skin="bd"][data-tabs="left"] .sidebar .ono { display: none; }
+  :root[data-skin="bd"][data-tabs="left"] .letters.rail.left { left: 70px; }
+}

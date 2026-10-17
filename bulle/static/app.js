@@ -120,7 +120,7 @@
   // ================================================================ réglages
   const PROFILE_DEFAULTS = {
     thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", letters_size: "large",
-    tabs_side: "left", cover_style: "book", skin: "bd", mosaic: "drift", sort: "natural", hide_read: false,
+    tabs_side: "left", cover_style: "book", skin: "bd", mosaic: "drift", mosaic_opacity: 45, mosaic_brightness: 70, sort: "natural", hide_read: false,
     show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
@@ -144,6 +144,8 @@
     root.dataset.skin = p.skin === "sobre" ? "sobre" : "bd";
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     root.dataset.mosaic = p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
+    root.style.setProperty("--mosaic-opacity", String(Math.max(5, Math.min(100, +p.mosaic_opacity || 45)) / 100));
+    root.style.setProperty("--mosaic-brightness", String(Math.max(10, Math.min(150, +p.mosaic_brightness || 70)) / 100));
     $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
     setupMosaic();
   }
@@ -170,9 +172,19 @@
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
       const k = (r * cols + c) % mosaicPool.length;
       // décalage d'une demi-tuile une ligne sur deux, comme un mur de briques
-      tiles.push(`<img class="mt" alt="" loading="lazy" decoding="async" src="${mosaicUrl(mosaicPool[k])}" style="left:${c * TILE_W - (r % 2 ? TILE_W / 2 : 0)}px;top:${r * TILE_H}px" onerror="this.style.visibility='hidden'">`);
+      tiles.push(`<img class="mt" alt="" loading="lazy" decoding="async" src="${mosaicUrl(mosaicPool[k])}" style="left:${c * TILE_W - (r % 2 ? TILE_W / 2 : 0)}px;top:${r * TILE_H}px">`);
     }
     mosaicEl.innerHTML = `<div class="mz" style="width:${cols * TILE_W}px;height:${rows * TILE_H}px">${tiles.join("")}</div>`;
+    mosaicEl.addEventListener("error", e => {
+      const im = e.target;
+      if (!im.matches || !im.matches("img.mt")) return;
+      const bad = im.src;
+      mosaicPool = mosaicPool.filter(c => !bad.includes(`/api/cover/${c.id}?`));
+      const tries = +(im.dataset.tries || 0);
+      if (!mosaicPool.length || tries > 4) { im.remove(); return; }
+      im.dataset.tries = tries + 1;
+      im.src = mosaicUrl(mosaicPool[Math.floor(Math.random() * mosaicPool.length)]);
+    }, true);
     clearInterval(mosaicTimer);
     mosaicTimer = setInterval(swapTile, 2600);
   }
@@ -185,7 +197,7 @@
     const im = imgs[Math.floor(Math.random() * imgs.length)];
     const c = mosaicPool[Math.floor(Math.random() * mosaicPool.length)];
     im.classList.add("fade");
-    setTimeout(() => { im.src = mosaicUrl(c); im.style.visibility = ""; im.onload = () => im.classList.remove("fade"); im.onerror = () => im.classList.remove("fade"); }, 900);
+    setTimeout(() => { im.src = mosaicUrl(c); im.onload = () => im.classList.remove("fade"); }, 900);
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden && mosaicEl) setupMosaic(); });
 
@@ -643,6 +655,7 @@
   const sel = (scope, key, opts, val) => `<select data-scope="${scope}" data-key="${key}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(val) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
   const chk = (scope, key, val) => `<label class="switch"><input type="checkbox" data-scope="${scope}" data-key="${key}" ${val ? "checked" : ""}><i></i></label>`;
   const num = (scope, key, val, min, max, step = 1) => `<input type="number" data-scope="${scope}" data-key="${key}" value="${val}" min="${min}" max="${max}" step="${step}">`;
+  const range = (scope, key, val, min, max, unit = "%") => `<span class="rangewrap"><input type="range" data-scope="${scope}" data-key="${key}" value="${val}" min="${min}" max="${max}" step="5" oninput="this.nextElementSibling.textContent=this.value+'${unit}'"><output>${val}${unit}</output></span>`;
 
   async function viewSettings() {
     setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
@@ -666,6 +679,8 @@
         ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
         ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["sobre", "Sobre"]], p.skin))}
         ${field("Mosaïque de couvertures en fond", sel("p", "mosaic", [["drift", "Oui, qui dérive lentement"], ["fixed", "Oui, fixe"], ["off", "Non"]], p.mosaic), "Pas dans le lecteur. Les couvertures changent doucement en fondu.")}
+        ${field("Mosaïque : opacité", range("p", "mosaic_opacity", p.mosaic_opacity, 5, 100), "Plus c'est bas, plus la mosaïque s'efface derrière le contenu.")}
+        ${field("Mosaïque : luminosité", range("p", "mosaic_brightness", p.mosaic_brightness, 10, 150))}
         ${field("Tri", sel("p", "sort", [["natural", "Alphabétique naturel (T2 avant T10)"], ["recent", "Ajouts récents d'abord"], ["unread", "Non lus d'abord"]], p.sort))}
         ${field("Masquer les albums lus", chk("p", "hide_read", p.hide_read))}
         ${field("Nombre de pages sur les cartes", chk("p", "show_pages", p.show_pages))}
@@ -743,7 +758,7 @@
     const el = e.target.closest("[data-key]");
     if (!el) return;
     let val = el.type === "checkbox" ? el.checked : el.value;
-    if (el.type === "number" || (el.tagName === "SELECT" && /^-?\d+(\.\d+)?$/.test(val))) val = Number(val);
+    if (el.type === "number" || el.type === "range" || (el.tagName === "SELECT" && /^-?\d+(\.\d+)?$/.test(val))) val = Number(val);
     if (el.dataset.scope === "g") saveSettings(null, { [el.dataset.key]: val });
     else saveSettings({ [el.dataset.key]: val }, null);
   });
