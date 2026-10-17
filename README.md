@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.4)
+# Bulle — lecteur de BD maison (v0.5)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -14,6 +14,9 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   sur l'album suivant à la fin.
 - **Progression** : reprise là où vous vous êtes arrêté, « Reprendre la lecture » sur l'accueil,
   badges lu / en cours (aussi sur les dossiers : « 3/16 lus »), marquer lu / non lu.
+- **Onglets** : Bibliothèque, À lire, ★ Favoris, Listes (personnalisées), Historique (albums terminés),
+  Collection, et « Au hasard » qui ouvre un album pas encore lu. Un album ou une série se met en favori
+  ou dans une liste depuis sa fiche (« i ») ou le haut de la page de la série.
 - **Profils** (« Qui lit ? ») : chacun sa progression et ses réglages d'affichage, code PIN facultatif par
   profil, et un **code d'accès** général facultatif pour toute la bibliothèque.
 - **Flux OPDS** (`http://<serveur>:2205/opds`) pour lire depuis une appli mobile (Panels, Chunky, Moon+,
@@ -21,8 +24,8 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   (OPDS-PSE) sans télécharger l'album.
 - **Recherche** sans tenir compte des accents ni de la casse (« aigles decap » trouve
   « Aigles Décapitées (Les) »), sur les noms de dossiers et de fichiers.
-- **Pages redimensionnées** par le serveur (comme Ubooquity) et mises en cache : rapide sur
-  mobile, même avec des CBZ de 400 Mo.
+- **Pages et couvertures redimensionnées** par le serveur (comme Ubooquity) à la taille réellement
+  affichée sur votre écran, puis mises en cache : net et rapide, même avec des CBZ de 400 Mo.
 - **Scan** automatique au démarrage puis toutes les 12 h (réglable), ou à la demande (bouton ↻).
   Les couvertures se génèrent en arrière-plan après le scan.
 - **Réglages** (bouton ⚙) : taille des vignettes et zoom au survol, nombre de vignettes par page
@@ -30,8 +33,8 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   albums lus, thème sombre / clair, réglages du lecteur (ajustement, sens, fond, qualité, préchargement,
   mode nuit…), qualité des images côté serveur, seuil « album lu », fréquence du scan, taille du cache.
   Les réglages d'affichage sont enregistrés sur le serveur (ils vous suivent d'un appareil à l'autre).
-- **Bédéthèque** (à la demande) : dans un dossier d'albums, « Analyser » cherche la série sur
-  bedetheque.com, compare les tomes officiels avec vos fichiers (présents, manquants affichés en
+- **Bédéthèque** (à la demande) : dans un dossier d'albums, « Analyser » cherche la série dans l'index
+  alphabétique de bedetheque.com (une page par lettre, gardée un mois), compare les tomes officiels avec vos fichiers (présents, manquants affichés en
   cartes grisées à leur place, fichiers non reconnus, doublons), retient les titres officiels, l'année
   et, avec « Auteurs et détails », scénario / dessin / couleurs, éditeur, ISBN. La page **Collection**
   (icône livres) récapitule toutes les séries analysées (complètes, incomplètes, en cours de parution)
@@ -142,7 +145,7 @@ L'API (toutes les réponses en JSON, sauf les images) :
 |---|---|
 | `GET /api/browse` · `/api/browse/<id>` | contenu d'un dossier (fil d'Ariane, enfants, progression) |
 | `GET /api/item/<id>` | fiche d'un album (pages, précédent / suivant, progression) |
-| `GET /api/cover/<id>` | couverture (album, ou premier album d'un dossier), 400 px de large |
+| `GET /api/cover/<id>?w=300` | couverture (album, ou premier album d'un dossier) ; `w` = largeur voulue (sinon 600 px) |
 | `GET /api/page/<id>/<n>?w=1200` | page `n` (0 = première) redimensionnée en JPEG ; `w=0` = fichier d'origine |
 | `GET` `PUT` `DELETE /api/progress/<id>` | progression (`{"page": 12}` ou `{"completed": true}`) ; `DELETE` = non lu |
 | `GET /api/continue` · `/api/recent` | reprendre la lecture · ajouts récents |
@@ -154,6 +157,9 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET` `POST /api/profiles` · `PUT` `DELETE /api/profiles/<id>` · `POST /api/profiles/select` | profils (`{"id", "pin"}` pour choisir) |
 | `GET /api/auth/status` · `POST /api/auth/login` · `POST /api/auth/logout` | code d'accès général (`PUT /api/settings {"global": {"access_pin": "…"}}` pour le définir, `""` pour l'enlever) |
 | `GET /opds` · `/opds/folder/<id>` · `/opds/continue` · `/opds/recent` · `/opds/search?q=` | flux OPDS (authentification Basic avec le code d'accès s'il y en a un) |
+| `GET` `POST /api/lists` · `GET` `PUT` `DELETE /api/lists/<id>` · `POST /api/lists/<id>/items` · `DELETE /api/lists/<id>/items/<album>` | listes du profil (Favoris et À lire créées d'office) |
+| `POST /api/favorites/toggle` · `GET /api/history` · `GET /api/random` | favori on/off · albums terminés · un album au hasard |
+| `GET /api/bdt/debug?q=` | diagnostic : ce que Bédéthèque renvoie au serveur |
 | `POST /api/bdt/analyze/<dossier>` | analyse Bédéthèque d'un dossier (`{"url": …}` pour imposer la série, `{"details": true}` pour les auteurs, `{"force": true}` pour relire) |
 | `GET` `DELETE /api/bdt/series/<dossier>` · `GET /api/bdt/search?q=` | lien existant / oublier · chercher une série |
 | `GET /api/bdt/collection` · `POST` `GET` `DELETE /api/bdt/batch` · `GET /api/bdt/status` | collection · analyse groupée (lancer, suivre, arrêter) · état |

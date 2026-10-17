@@ -29,7 +29,9 @@ BASE = "https://www.bedetheque.com"
 USER_AGENT = "Bulle/0.2 (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
 PAGE_TTL = 30 * 24 * 3600          # fiches de séries : 30 jours
 SEARCH_TTL = 7 * 24 * 3600         # résultats de recherche : 7 jours
+INDEX_TTL = 30 * 24 * 3600         # index alphabétique des séries (une page par lettre) : 30 jours
 DETAIL_PER_PAGE = 10               # albums détaillés par page de série
+INDEX_LETTERS = "0ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 class BdtError(Exception):
@@ -39,7 +41,7 @@ class BdtError(Exception):
 # ----------------------------------------------------------------------------
 # Normalisation des noms
 # ----------------------------------------------------------------------------
-ARTICLES = ("le", "la", "les", "l", "the", "un", "une", "des", "a", "an", "der", "die", "das", "el", "los", "las", "il")
+ARTICLES = ("le", "la", "les", "l", "the", "un", "une")
 
 
 def strip_accents(s: str) -> str:
@@ -179,13 +181,51 @@ class BedethequeClient:
         return html
 
     # -- recherche ----------------------------------------------------------
-    def search_series(self, query: str) -> list[dict]:
+    def search_site(self, query: str) -> list[dict]:
+        """La recherche du site lui-même (peut renvoyer une page sans résultats aux lecteurs automatiques)."""
         q = query.strip()
         if len(q) < 2:
             return []
         url = f"{BASE}/search/tout?qs=1&RechWhere=7&RechTexte={urllib.parse.quote(q)}"
         html = self.fetch(url, ttl=SEARCH_TTL)
         return parse_search(html, q)
+
+    def index_letter(self, letter: str, force: bool = False) -> list[dict]:
+        """Toutes les séries d'une lettre (page « Séries BD - A » du site) : [{id, name, url}]."""
+        letter = letter.upper() if letter.upper() in INDEX_LETTERS else "0"
+        html = self.fetch(f"{BASE}/bandes_dessinees_{letter}.html", ttl=INDEX_TTL, force=force)
+        return parse_index(html)
+
+    def search_index(self, query: str, index_rows: list[dict], hint_int: bool = False, limit: int = 12) -> list[dict]:
+        """Recherche locale dans l'index d'une lettre : exact, préfixe, puis ressemblance."""
+        q = norm_title(query)
+        if not q:
+            return []
+        out = []
+        for row in index_rows:
+            name_n = row.get("name_norm") or norm_title(row["name"])
+            if name_n == q:
+                score = 1.0
+            elif name_n.startswith(q + " ") or q.startswith(name_n + " "):
+                score = 0.9 - min(0.2, abs(len(name_n) - len(q)) / 100)
+            else:
+                score = difflib.SequenceMatcher(None, q, name_n).ratio()
+                if score < 0.55:
+                    continue
+            if hint_int:
+                score += 0.25 if "integrale" in name_n else -0.08
+            elif "integrale" in name_n and "integrale" not in q:
+                score -= 0.08
+            out.append({"id": row["id"], "url": row["url"], "name": row["name"], "genre": None, "tomes": None,
+                        "exact": name_n == q, "score": round(min(1.0, score), 3)})
+        out.sort(key=lambda c: -c["score"])
+        return out[:limit]
+
+    def search_series(self, query: str, index_rows: Optional[list[dict]] = None, hint_int: bool = False) -> list[dict]:
+        """Recherche d'une série : par l'index alphabétique si on nous le donne, sinon par la recherche du site."""
+        if index_rows is not None:
+            return self.search_index(query, index_rows, hint_int=hint_int)
+        return self.search_site(query)
 
     def series(self, url_or_id, details: bool = False, force: bool = False) -> dict:
         url = series_url(url_or_id)
@@ -289,6 +329,39 @@ def parse_search(html: str, query: str) -> list[dict]:
                         "name": name, "genre": genre, "tomes": tomes, "exact": exact, "score": round(score, 3)})
     out.sort(key=lambda c: (-c["score"], -(c["tomes"] or 0)))
     return out
+
+
+_INDEX_RE = re.compile(r'href="(?:https?://www\.bedetheque\.com)?(/serie-(\d+)-BD[^"]*?\.html)"[^>]*>(.*?)</a>', re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def parse_index(html: str) -> list[dict]:
+    """Page « Séries BD - A » : liens de séries (nom + adresse), sans passer par BeautifulSoup (page de 3 Mo)."""
+    import html as html_mod
+    out = []
+    seen = set()
+    for m in _INDEX_RE.finditer(html):
+        sid = int(m.group(2))
+        if sid in seen:
+            continue
+        inner = m.group(3)
+        b = re.search(r"<b>(.*?)</b>", inner, re.S)
+        name = html_mod.unescape(_TAG_RE.sub(" ", b.group(1) if b else inner))
+        name = re.sub(r"\s+", " ", name).strip()
+        if not name:
+            continue
+        seen.add(sid)
+        out.append({"id": sid, "name": name, "url": BASE + m.group(1)})
+    return out
+
+
+def index_letter_for(query: str) -> str:
+    """Lettre de l'index où Bédéthèque range une série (articles rejetés à la fin : « Aigles (Les) » → A, chiffres → 0)."""
+    q = norm_title(query)
+    if not q:
+        return "0"
+    c = q[0].upper()
+    return c if c in INDEX_LETTERS and c != "0" else "0"
 
 
 def parse_series(html: str, url: str) -> dict:
@@ -438,6 +511,8 @@ def compare(series: dict, files: list[dict]) -> dict:
             specials = [a for a in series["albums"] if a["kind"] == parsed["kind"] and a["number"] == parsed["number"]]
             if specials:
                 cand, how = specials[0], "num"
+            elif parsed["number"] in by_num:
+                cand, how = by_num[parsed["number"]][0], "num"   # ex. série « L'Intégrale » numérotée normalement
         if cand is None:
             unmatched.append({"id": f["id"], "name": f["name"], "parsed": parsed})
             continue

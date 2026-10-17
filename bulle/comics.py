@@ -572,6 +572,27 @@ class Comics:
         self.inspect(node, abs_path, make_cover=True)
         return p
 
+    def cover_sized(self, node: dict, abs_path: str, width: int) -> str:
+        """Couverture réduite à la largeur demandée (multiple de 50 px), dérivée de la couverture standard."""
+        width = max(100, min(self.cover_width, int(math.ceil(width / 50.0) * 50)))
+        if width >= self.cover_width:
+            return self.cover(node, abs_path)
+        p = os.path.join(self.covers_dir, f"{node['id']}-{width}-{self.profile_tag}.jpg")
+        if os.path.exists(p):
+            return p
+        base = self.cover(node, abs_path)
+        with self.lock(node["id"]):
+            if os.path.exists(p):
+                return p
+            quality, subsampling = self.jpeg
+            try:
+                with open(base, "rb") as f:
+                    data = f.read()
+                self._write_atomic(p, resize_to_jpeg(data, width, quality, subsampling, self.sharpen))
+            except OSError as e:
+                raise AlbumError(f"Couverture illisible : {e}") from e
+        return p
+
     def page(self, node: dict, abs_path: str, index: int, width: int) -> tuple[Optional[str], Optional[bytes], str]:
         """Page `index` à la largeur `width` (0 = originale).
 

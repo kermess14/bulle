@@ -67,6 +67,7 @@
     } catch (e) { showMessage("Impossible de charger l'album", String(e)); return; }
     if (r.status === 401) { showMessage("Code d'accès requis", "Ouvrez d'abord la bibliothèque pour entrer le code.", `<a class="btn" href="/">Ouvrir Bulle</a>`); return; }
     if (s && s.profile) { Object.assign(prefs, pick(s.profile)); fit = prefs.reader_fit; manga = !!prefs.reader_manga; mode = MODES.includes(prefs.reader_mode) ? prefs.reader_mode : "single"; applyPrefs(); }
+    if (s && s.global && s.global.img_tag) imgTag = s.global.img_tag;
     loadAlbumMemory();
     if (!r.ok) { showMessage("Introuvable", item.error || "", `<a class="btn" href="/">Retour</a>`); return; }
     nameEl.textContent = item.meta && item.meta.title ? `${item.meta.number != null ? "T" + item.meta.number + " · " : ""}${item.meta.title}` : item.name;
@@ -104,7 +105,8 @@
     const factor = prefs.reader_quality === "high" ? 1.5 : 1;
     return Math.ceil(css * dpr * factor);
   }
-  const pageUrl = n => `/api/page/${id}/${n}?w=${wantedWidth(n)}&v=${item.mtime}`;
+  let imgTag = "";
+  const pageUrl = n => `/api/page/${id}/${n}?w=${wantedWidth(n)}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
 
   function loadImage(n) {
     const url = pageUrl(n);

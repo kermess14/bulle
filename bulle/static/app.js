@@ -118,7 +118,7 @@
 
   // ================================================================ réglages
   const PROFILE_DEFAULTS = {
-    thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", sort: "natural", hide_read: false,
+    thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", sort: "natural", hide_read: false,
     show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
@@ -181,12 +181,21 @@
   }
 
   // ================================================================ cartes
-  function coverHtml(item, inner = "") {
+  /* Largeur de couverture à demander au serveur : la largeur affichée (en pixels physiques), arrondie à 50 px. */
+  function coverWidth(cssWidth) {
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    return Math.max(100, Math.min(1200, Math.ceil((cssWidth * 1.25 * dpr) / 50) * 50));
+  }
+  function coverUrl(item, cssWidth) {
     const id = item.kind === "folder" ? item.cover_id : item.id;
     const v = item.kind === "folder" ? ("f" + item.cover_id) : item.mtime;
+    return `/api/cover/${id}?w=${coverWidth(cssWidth)}&v=${v}&t=${encodeURIComponent(settings.global.img_tag || "")}`;
+  }
+  function coverHtml(item, inner = "", cssWidth) {
+    const id = item.kind === "folder" ? item.cover_id : item.id;
     const ph = `<div class="ph">${item.kind === "folder" ? ICON.folder : ICON.book}</div>`;
     const img = id && !item.error
-      ? `<img loading="lazy" decoding="async" alt="" src="/api/cover/${id}?v=${v}" onerror="this.remove()">`
+      ? `<img loading="lazy" decoding="async" alt="" src="${coverUrl(item, cssWidth || (THUMB[settings.profile.thumb_size] || THUMB.m))}" onerror="this.remove()">`
       : "";
     return `<div class="cover ${item.kind === "folder" ? "folder" : ""} ${item.error ? "err" : ""}">${ph}${img}${inner}</div>`;
   }
@@ -226,12 +235,12 @@
         const full = item.bdt.present >= item.bdt.total;
         bdt = `<div class="sub bdt ${full ? "full" : ""}" title="Bédéthèque : ${esc(item.bdt.title || "")}${item.bdt.status ? " · " + esc(item.bdt.status) : ""}">${full ? "Série complète" : `${item.bdt.present}/${item.bdt.total} tomes`}<i style="width:${pct}%"></i></div>`;
       }
-      return `<a class="card" href="#/f/${item.id}" data-letter="${letter}">
-        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}`)}
+      return `<a class="card" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}">
+        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${item.fav ? `<span class="fav" title="Favori">★</span>` : ""}`)}
         <div class="title">${esc(item.name)}</div>${read || (bdt ? "" : `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`)}${bdt}
       </a>`;
     }
-    const badge = item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress);
+    const badge = (item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress)) + (item.fav ? `<span class="fav" title="Favori">★</span>` : "");
     const href = item.error ? "#" : `/read/${item.id}`;
     let title = item.name, line2 = sub ? esc(sub) : (settings.profile.show_pages && item.pages ? plural(item.pages, "page", "pages") : "");
     if (settings.profile.bdt_titles && item.meta && item.meta.title) {
@@ -300,7 +309,8 @@
     if (pref === "auto" && list.length < 40) return "";
     const present = new Set(list.map(c => letterOf(c.name)));
     const all = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"];
-    return `<div class="letters" id="letters">${all.map(l => `<button type="button" data-letter="${l}" class="${present.has(l) ? "on" : ""}" ${present.has(l) ? "" : "disabled"}>${l}</button>`).join("")}</div>`;
+    const side = settings.profile.letters_side || "right";
+    return `<div class="letters ${side === "top" ? "" : "rail " + side}" id="letters">${all.map(l => `<button type="button" data-letter="${l}" class="${present.has(l) ? "on" : ""}" ${present.has(l) ? "" : "disabled"}>${l}</button>`).join("")}</div>`;
   }
 
   // ================================================================ vues
@@ -352,7 +362,9 @@
       html += `<h2>Bibliothèque <small class="muted">${plural(list.length, "entrée", "entrées")}</small></h2>`;
     } else {
       const folders = list.filter(c => c.kind === "folder").length, albums = list.length - folders;
-      html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small></h1>`;
+      html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small>
+        <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
+        <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button></span></h1>`;
       html += bdtPanelHtml(data);
     }
     html += lettersHtml(list);
@@ -552,6 +564,7 @@
         ${field("Zoom au survol", sel("p", "hover_zoom", [["none", "Aucun"], ["light", "Léger"], ["strong", "Prononcé"]], p.hover_zoom))}
         ${field("Vignettes par page", sel("p", "per_page", [[24, "24"], [48, "48"], [96, "96"], [192, "192"], [0, "Toutes (pas de pages)"]], p.per_page), "Au-delà, la liste est découpée en pages.")}
         ${field("Accès par lettre", sel("p", "letters", [["auto", "Automatique (dossiers de 40 entrées et plus)"], ["always", "Toujours"], ["never", "Jamais"]], p.letters))}
+        ${field("Position des lettres", sel("p", "letters_side", [["right", "Sur le côté droit"], ["left", "Sur le côté gauche"], ["top", "En haut de la liste"]], p.letters_side))}
         ${field("Tri", sel("p", "sort", [["natural", "Alphabétique naturel (T2 avant T10)"], ["recent", "Ajouts récents d'abord"], ["unread", "Non lus d'abord"]], p.sort))}
         ${field("Masquer les albums lus", chk("p", "hide_read", p.hide_read))}
         ${field("Nombre de pages sur les cartes", chk("p", "show_pages", p.show_pages))}
@@ -665,6 +678,16 @@
       } else if (action === "access-pin-clear") {
         if (!confirm("Supprimer le code d'accès ?")) return;
         await putJson("/api/settings", { global: { access_pin: "" } }); toast("Code d'accès supprimé"); route();
+      } else if (action === "list-new") {
+        const name = prompt("Nom de la nouvelle liste :"); if (!name) return;
+        await api("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+        listsCache = null; route();
+      } else if (action === "list-rename") {
+        const name = prompt("Nouveau nom :", btn.dataset.name); if (!name) return;
+        await putJson(`/api/lists/${btn.dataset.id}`, { name }); listsCache = null; route();
+      } else if (action === "list-delete") {
+        if (!confirm(`Supprimer la liste « ${btn.dataset.name} » ? (les albums ne sont pas touchés)`)) return;
+        await api(`/api/lists/${btn.dataset.id}`, { method: "DELETE" }); listsCache = null; location.hash = "#/lists";
       } else if (action === "reset-profile") {
         const patch = {}; for (const k of Object.keys(PROFILE_DEFAULTS)) patch[k] = null;
         await putJson("/api/settings", { profile: patch });
@@ -688,7 +711,7 @@
     const parent = it.breadcrumb.length ? it.breadcrumb[it.breadcrumb.length - 1] : null;
     modal.innerHTML = `<div class="backdrop"><div class="sheet" role="dialog" aria-modal="true" aria-label="Fiche de l'album">
       <button class="iconbtn close" type="button" data-close title="Fermer">${ICON.close}</button>
-      ${coverHtml(it)}
+      ${coverHtml(it, "", 220)}
       <div>
         <h3>${esc(it.name)}</h3>
         <div class="path">${esc(folder || "Racine")}</div>
@@ -717,9 +740,114 @@
           <a class="btn" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
           ${parent && parent.id ? `<a class="btn" href="#/f/${parent.id}" data-close>Ouvrir le dossier</a>` : ""}
         </div>
+        <div class="lists-row" id="sheet-lists" data-id="${it.id}"></div>
       </div></div></div>`;
+    renderSheetLists($("#sheet-lists"), it.id, it.lists || []);
   }
   const closeModal = () => { modal.hidden = true; modal.innerHTML = ""; };
+
+  // ================================================================ listes, favoris
+  let listsCache = null;
+  async function getLists(force) {
+    if (!listsCache || force) listsCache = await api("/api/lists");
+    return listsCache;
+  }
+  async function renderSheetLists(container, nodeId, membership) {
+    const lists = await getLists();
+    const favList = lists.find(l => l.kind === "favorites");
+    const isFav = favList && membership.includes(favList.id);
+    const others = lists.filter(l => l.kind !== "favorites");
+    container.innerHTML = `<button class="btn ${isFav ? "fav-on" : ""}" type="button" data-fav="${nodeId}">${isFav ? "★ Favori" : "☆ Favori"}</button>
+      <select data-listsel="${nodeId}" aria-label="Ajouter à une liste"><option value="">Ajouter à une liste…</option>
+        ${others.map(l => `<option value="${l.id}">${membership.includes(l.id) ? "✓ " : ""}${esc(l.name)}${membership.includes(l.id) ? " (retirer)" : ""}</option>`).join("")}
+        <option value="new">+ Nouvelle liste…</option></select>`;
+  }
+  async function toggleFav(nodeId, btn) {
+    try {
+      const r = await api("/api/favorites/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) });
+      if (btn) { btn.classList.toggle("fav-on", r.fav); btn.textContent = r.fav ? "★ Favori" : "☆ Favori"; }
+      toast(r.fav ? "Ajouté aux favoris ★" : "Retiré des favoris");
+      listsCache = null;
+      if (!location.hash.startsWith("#/f/") || btn && btn.closest(".sheet")) { /* la grille se rafraîchit à la prochaine navigation */ }
+      if (modal.hidden) route();
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
+  }
+  async function addToList(nodeId, listId, selectEl) {
+    try {
+      if (listId === "new") {
+        const name = prompt("Nom de la nouvelle liste :"); if (!name) { if (selectEl) selectEl.value = ""; return; }
+        const l = await api("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+        listId = l.id; listsCache = null;
+      }
+      const lists = await getLists();
+      const it = await api(`/api/item/${nodeId}`).catch(() => null);
+      const membership = it ? it.lists : [];
+      let r;
+      if (membership.includes(+listId)) { r = await api(`/api/lists/${listId}/items/${nodeId}`, { method: "DELETE" }); toast("Retiré de la liste"); }
+      else { r = await api(`/api/lists/${listId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) }); toast(`Ajouté à « ${esc((lists.find(l => l.id === +listId) || {}).name || "la liste")} »`); }
+      listsCache = null;
+      const box = $("#sheet-lists"); if (box && +box.dataset.id === +nodeId) renderSheetLists(box, nodeId, r.lists);
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
+  }
+  async function pickListFor(nodeId) {
+    const lists = (await getLists()).filter(l => l.kind !== "favorites");
+    const choice = prompt("Ajouter à quelle liste ?\n" + lists.map((l, i) => `${i + 1}. ${l.name}`).join("\n") + `\n${lists.length + 1}. Nouvelle liste…`, "1");
+    if (!choice) return;
+    const n = parseInt(choice, 10);
+    if (n >= 1 && n <= lists.length) addToList(nodeId, lists[n - 1].id);
+    else if (n === lists.length + 1) addToList(nodeId, "new");
+  }
+  document.addEventListener("click", e => {
+    const fav = e.target.closest("[data-fav]");
+    if (fav) { e.preventDefault(); toggleFav(+fav.dataset.fav, fav); return; }
+    const add = e.target.closest("[data-addlist]");
+    if (add) { e.preventDefault(); pickListFor(+add.dataset.addlist); }
+  });
+  document.addEventListener("change", e => {
+    const sel = e.target.closest("[data-listsel]");
+    if (sel && sel.value) { addToList(+sel.dataset.listsel, sel.value, sel); sel.value = ""; }
+  });
+
+  async function viewList(key) {
+    const lists = await getLists(true);
+    const l = /^\d+$/.test(key) ? lists.find(x => x.id === +key) : lists.find(x => x.kind === key);
+    if (!l) { main.innerHTML = `<div class="empty">Liste introuvable.</div>`; return; }
+    setCrumbs([{ id: 0, name: "Accueil" }], l.name);
+    document.title = `${l.name} — Bulle`;
+    main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    const data = await api(`/api/lists/${l.id}`);
+    const icon = l.kind === "favorites" ? "★" : l.kind === "readlater" ? "🔖" : "📚";
+    const empty = l.kind === "favorites" ? "Aucun favori pour l'instant : le bouton ☆ se trouve dans la fiche d'un album (« i ») ou en haut d'une série."
+      : l.kind === "readlater" ? "Rien à lire pour l'instant : « Ajouter à une liste » dans la fiche d'un album ou en haut d'une série."
+        : "Liste vide : « Ajouter à une liste » dans la fiche d'un album ou en haut d'une série.";
+    main.innerHTML = `<div class="listhead"><h1>${icon} ${esc(l.name)} <small class="muted h1sub">${plural(data.items.length, "élément", "éléments")}</small></h1>
+      ${l.kind === "custom" ? `<button class="btn mini" type="button" data-action="list-rename" data-id="${l.id}" data-name="${esc(l.name)}">Renommer</button><button class="btn mini" type="button" data-action="list-delete" data-id="${l.id}" data-name="${esc(l.name)}">Supprimer</button>` : ""}</div>
+      ${data.items.length ? `<div class="grid" id="grid">${data.items.map(it => card(it, { sub: it.folder }).replace("</a>", `<button class="remove" type="button" data-unlist="${l.id}" data-node="${it.id}" title="Retirer de la liste">×</button></a>`)).join("")}</div>` : `<div class="empty">${empty}</div>`}`;
+  }
+  async function viewLists() {
+    setCrumbs([{ id: 0, name: "Accueil" }], "Listes");
+    document.title = "Listes — Bulle";
+    const lists = await getLists(true);
+    const icon = l => l.kind === "favorites" ? "★" : l.kind === "readlater" ? "🔖" : "📚";
+    main.innerHTML = `<div class="listhead"><h1>Listes</h1><button class="btn" type="button" data-action="list-new">+ Nouvelle liste</button></div>
+      <div class="listgrid">${lists.map(l => `<a class="listcard" href="#/list/${l.kind === "custom" ? l.id : l.kind}"><span class="lic">${icon(l)}</span><span><b>${esc(l.name)}</b><small>${plural(l.count, "élément", "éléments")}</small></span></a>`).join("")}</div>
+      <p class="muted" style="margin-top:16px">Les listes et les favoris sont propres à chaque profil. Ajoutez un album depuis sa fiche (« i »), une série depuis le haut de sa page.</p>`;
+  }
+  async function viewHistory() {
+    setCrumbs([{ id: 0, name: "Accueil" }], "Historique");
+    document.title = "Historique — Bulle";
+    main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    const items = await api("/api/history");
+    main.innerHTML = `<h1>Historique <small class="muted h1sub">${plural(items.length, "album lu", "albums lus")}, les plus récents d'abord</small></h1>
+      ${items.length ? `<div class="grid" id="grid">${items.map(it => card(it, { sub: `${it.folder}${it.progress && it.progress.updated_at ? " · " + new Date(it.progress.updated_at * 1000).toLocaleDateString("fr-FR") : ""}` })).join("")}</div>` : `<div class="empty">Aucun album terminé pour l'instant.</div>`}`;
+  }
+  async function viewRandom() {
+    try {
+      const a = await api("/api/random");
+      toast(`Au hasard : ${esc(a.name)}`);
+      location.href = `/read/${a.id}?page=0`;
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); location.hash = "#/"; }
+  }
 
   modal.addEventListener("click", async e => {
     const t = e.target.closest("[data-close], [data-read], [data-unread], .backdrop");
@@ -807,6 +935,12 @@
     if (info) { e.preventDefault(); openInfo(info.dataset.info); return; }
     const action = e.target.closest("[data-action]");
     if (action) { settingsAction(action.dataset.action, action); return; }
+    const unl = e.target.closest("[data-unlist]");
+    if (unl) {
+      e.preventDefault();
+      api(`/api/lists/${unl.dataset.unlist}/items/${unl.dataset.node}`, { method: "DELETE" }).then(() => { listsCache = null; route(); }).catch(err => toast(esc(err.message)));
+      return;
+    }
     const bdtEl = e.target.closest("[data-bdt]:not(form)");
     if (bdtEl) { bdtAction(bdtEl.dataset.bdt, bdtEl); return; }
     const batch = e.target.closest("[data-batch]");
@@ -836,6 +970,8 @@
     if (currentKey !== null) scrollMemory.set(currentKey, window.scrollY);
     const h = location.hash || "#/";
     currentKey = h;
+    const tab = h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/settings") ? "" : "home";
+    for (const a of document.querySelectorAll("#maintabs a")) a.classList.toggle("on", a.dataset.tab === tab);
     try { if (!h.startsWith("#/s/")) localStorage.setItem("bulle:lastHash", h); } catch (_) { /* ignore */ }
     try {
       let m;
@@ -849,6 +985,14 @@
         await viewSettings();
       } else if ((m = /^#\/collection(?:\/(\w+))?/.exec(h))) {
         await viewCollection(m[1]);
+      } else if ((m = /^#\/list\/(\w+)/.exec(h))) {
+        await viewList(m[1]);
+      } else if (h.startsWith("#/lists")) {
+        await viewLists();
+      } else if (h.startsWith("#/history")) {
+        await viewHistory();
+      } else if (h.startsWith("#/random")) {
+        await viewRandom(); return;
       } else {
         searchInput.value = "";
         m = /^#\/p(\d+)/.exec(h);
