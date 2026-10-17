@@ -598,8 +598,17 @@ body.strip-open #stage { filter: blur(2px); }
 .rangewrap { display: inline-flex; align-items: center; gap: 10px; }
 .rangewrap input[type=range] { width: 160px; accent-color: var(--accent); }
 .rangewrap output { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13.5px; }
-.layout, .topbar { position: relative; z-index: 1; }
-.topbar { z-index: 20; }
+.layout { position: relative; z-index: 1; }   /* au-dessus de la mosaïque ; la barre du haut reste « sticky » (fixée en haut) */
+.topbar { position: sticky; top: 0; z-index: 20; }
+/* numéro de version à côté du logo */
+.topbar .ver { flex: none; font-size: 11.5px; font-weight: 700; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; line-height: 18px; white-space: nowrap; margin-left: -4px; }
+.topbar .ver:empty { display: none; }
+.topbar .ver:hover { color: var(--text); border-color: var(--accent); }
+:root[data-skin="bd"] .topbar .ver { font-family: var(--hand); font-size: 14px; font-weight: 400; border: 2px solid var(--ink); background: var(--paper); color: var(--pop-ink); box-shadow: 2px 2px 0 var(--ink); }
+:root[data-skin="bling"] .topbar .ver { font-family: var(--serif); border-color: var(--accent); color: var(--accent); }
+:root[data-skin="girly"] .topbar .ver { border: 2px solid var(--accent); color: var(--accent); }
+:root[data-skin="neon"] .topbar .ver { font-family: var(--mono); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 8px -2px var(--accent); }
+@media (max-width: 700px) { .topbar .ver { display: none; } }
 body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 @media (prefers-reduced-motion: reduce) { #mosaic .mz { animation: none !important; } }
 
