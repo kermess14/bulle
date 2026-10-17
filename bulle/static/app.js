@@ -1394,6 +1394,7 @@
     try {
       const s = await api("/api/stats");
       statsEl.textContent = `${s.albums} albums · ${fmtSize(s.size)}`;
+      const ver = $("#ver"); if (ver && s.version) ver.textContent = "v" + s.version;
       statsEl.title = `${s.folders} dossiers · ${s.read} lus · dernier scan : ${fmtDate(s.last_scan)}`;
       if (s.scan && s.scan.running) pollScan(true);
     } catch (_) { /* ignore */ }
