@@ -365,7 +365,7 @@ class Library:
         t0 = time.time()
         self.stop_requested.clear()
         self.status.update(running=True, phase="scan", started_at=t0, finished_at=None,
-                           error=None, added=0, removed=0, changed=0, stopped=False)
+                           error=None, added=0, removed=0, changed=0, renamed=0, stopped=False)
         try:
             result = self._scan(under)
             self.status.update(**result)
@@ -425,6 +425,10 @@ class Library:
         gen = max(int(time.time()), (self.conn.execute("SELECT MAX(seen) FROM nodes").fetchone()[0] or 0) + 1)
         now = time.time()
         under = (under or "").strip("/")
+        # dossier lui-même renommé ou déplacé : on relit son parent (le plus proche qui existe encore), pour que ses
+        # albums soient retrouvés sous leur nouveau nom au lieu d'être effacés
+        while under and not os.path.isdir(self.abs_path(under)):
+            under = under.rsplit("/", 1)[0] if "/" in under else ""
 
         # 1) Tout lire en mémoire (sans les fichiers et dossiers retirés de Bulle : ils restent sur le disque)
         ignored = self.ignored_paths()
@@ -466,8 +470,6 @@ class Library:
                 albums.append({"path": f"{rel}/{name}" if rel else name, "parent": rel,
                                "name": display_name(name), "file": name, "size": size, "mtime": mtime})
             self.status["albums"] = len(albums)
-        if under and not os.path.isdir(self.abs_path(under)):
-            log.info("Dossier %s introuvable sur le disque : retiré de la base", under)
 
         # 2) Nombre d'albums par dossier (y compris sous-dossiers)
         for rel in sorted(folders, key=lambda p: p.count("/"), reverse=True):
@@ -483,7 +485,14 @@ class Library:
             existing = {r["path"]: dict(r) for r in conn.execute(
                 "SELECT id, path, kind, size, mtime, format, error FROM nodes")}
             ids: dict[str, int] = {}
-            added = changed = 0
+            added = changed = renamed = 0
+            # albums disparus de leur place : si un fichier « nouveau » a la même taille et la même date, c'est le même
+            # album renommé ou déplacé ; on garde sa fiche (lecture en cours, favoris, listes, couverture choisie…)
+            present = {a["path"] for a in albums}
+            orphans: dict[tuple, list[dict]] = {}
+            for r in existing.values():
+                if r["kind"] == "album" and r["path"] not in present and r["size"] is not None:
+                    orphans.setdefault((r["size"], int(round(r["mtime"] or 0))), []).append(r)
             invalidate: list[int] = []
             cur = conn.cursor()
             cur.execute("BEGIN")
@@ -542,6 +551,22 @@ class Library:
                             cur.execute("UPDATE nodes SET parent_id=?, seen=? WHERE id=?",
                                         (parent_id, gen, row["id"]))
                         ids[a["path"]] = row["id"]
+                    elif orphans.get((a["size"], int(round(a["mtime"])))):
+                        cands = orphans[(a["size"], int(round(a["mtime"])))]
+                        # plusieurs candidats : même nom de fichier d'abord (dossier renommé), puis même dossier
+                        best = next((c for c in cands if c["path"].rsplit("/", 1)[-1] == a["file"]), None) or \
+                            next((c for c in cands if (c["path"].rsplit("/", 1)[0] if "/" in c["path"] else "") == a["parent"]), None) or \
+                            cands[0]
+                        cands.remove(best)
+                        row = best
+                        cur.execute(
+                            "UPDATE nodes SET parent_id=?, path=?, name=?, name_norm=?, search_text=?, sort_key=?, "
+                            "error=NULL, seen=? WHERE id=?",
+                            (parent_id, a["path"], a["name"], normalize(a["name"]), normalize(a["path"]),
+                             natural_key(a["name"]), gen, row["id"]))
+                        ids[a["path"]] = row["id"]
+                        renamed += 1
+                        log.info("Renommé ou déplacé : %s → %s", row["path"], a["path"])
                     else:
                         fmt = detect_format(self.abs_path(a["path"]), a["file"])
                         cur.execute(
@@ -598,7 +623,7 @@ class Library:
             except Exception:  # noqa: BLE001
                 log.exception("Invalidation du cache")
         result = {"albums": len(albums), "folders": max(0, len(folders) - 1), "added": added,
-                  "removed": removed, "changed": changed}
+                  "removed": removed, "changed": changed, "renamed": renamed}
         log.info("Scan terminé%s : %%(albums)d albums, %%(folders)d dossiers, +%%(added)d, -%%(removed)d, "
                  "~%%(changed)d modifiés" % (f" ({under})" if under else ""), result)
 
