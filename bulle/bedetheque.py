@@ -26,7 +26,7 @@ from bs4 import BeautifulSoup
 log = logging.getLogger("bulle.bedetheque")
 
 BASE = "https://www.bedetheque.com"
-USER_AGENT = "Bulle/0.2 (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
+USER_AGENT = "Bulle/0.6 (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
 PAGE_TTL = 30 * 24 * 3600          # fiches de séries : 30 jours
 SEARCH_TTL = 7 * 24 * 3600         # résultats de recherche : 7 jours
 INDEX_TTL = 30 * 24 * 3600         # index alphabétique des séries (une page par lettre) : 30 jours
@@ -227,6 +227,10 @@ class BedethequeClient:
             return self.search_index(query, index_rows, hint_int=hint_int)
         return self.search_site(query)
 
+    def album_summary(self, url: str, force: bool = False) -> Optional[str]:
+        """Résumé (début) d'un album d'après sa fiche Bédéthèque."""
+        return parse_album_summary(self.fetch(url, force=force))
+
     def series(self, url_or_id, details: bool = False, force: bool = False) -> dict:
         url = series_url(url_or_id)
         html = self.fetch(url, force=force)
@@ -408,6 +412,22 @@ def parse_series(html: str, url: str) -> dict:
     data = {"id": sid, "url": url, "title": title, "genre": genre, "status": status, "years": years,
             "tomes_count": tomes_count, "albums": albums, "details": parse_details(html)}
     return data
+
+
+def parse_album_summary(html: str) -> Optional[str]:
+    """Début du résumé d'une fiche album (le site ne livre que les premières lignes aux visiteurs sans JavaScript)."""
+    soup = BeautifulSoup(html, "html.parser")
+    el = soup.select_one("p.bdt-ah-resume [itemprop=description]") or soup.select_one("p.bdt-ah-resume")
+    text = ""
+    if el is not None:
+        for a in el.select("a.more-resume"):
+            a.decompose()
+        text = _text(el)
+    if not text:
+        meta = soup.find("meta", attrs={"name": "description"})
+        text = (meta.get("content") or "").strip() if meta else ""
+    text = re.sub(r"\s*(Lire la suite)\s*$", "", text).strip()
+    return text or None
 
 
 def classify_number(raw: str) -> tuple[str, Optional[int], Optional[str]]:

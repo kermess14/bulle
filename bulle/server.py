@@ -22,7 +22,7 @@ from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, comp
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -56,6 +56,7 @@ def global_defaults() -> dict:
         "read_threshold": 1.0,        # 1.0 = lu à la dernière page ; 0.9 = lu à partir de 90 %
         "bdt_enabled": True,          # analyse Bédéthèque à la demande
         "bdt_interval": 2.5,          # secondes entre deux requêtes vers bedetheque.com
+        "bdt_auto_summary": True,     # résumé lu sur la fiche Bédéthèque quand on ouvre la fiche d'un album
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
     }
@@ -65,7 +66,7 @@ GLOBAL_TYPES = {
     "scan_interval_hours": (int, 0, 720), "preload_covers": (bool,), "preload_threads": (int, 1, 8),
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
-    "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0),
+    "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
     "require_profile": (bool,), "opds_enabled": (bool,),
 }
 
@@ -232,7 +233,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             "id": n["id"], "kind": n["kind"], "name": n["name"], "path": n["path"],
             "parent_id": n.get("parent_id"), "format": n.get("format"), "size": n.get("size", 0),
             "mtime": int(n.get("mtime") or 0), "added": int(n.get("added_at") or 0),
-            "pages": n.get("page_count"), "error": n.get("error"),
+            "pages": n.get("page_count"), "error": n.get("error"), "color": n.get("color"),
         }
         if n["kind"] == "folder":
             d["album_count"] = n.get("album_count", 0)
@@ -250,6 +251,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         try:
             n = comics.inspect(node, lib.abs_path(node["path"]), make_cover=True)
             lib.set_pages(node["id"], n, None)
+            lib.set_color(node["id"], comics.cover_color(node, lib.abs_path(node["path"])))
             node["page_count"], node["error"] = n, None
         except AlbumError as e:
             lib.set_pages(node["id"], None, str(e))
@@ -274,7 +276,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 "url": m.get("url"), "how": m.get("how"), "writers": a.get("writers") or [],
                 "pencillers": a.get("pencillers") or [], "colorists": a.get("colorists") or [],
                 "publisher": a.get("publisher"), "collection": a.get("collection"), "isbn": a.get("isbn"),
-                "pages": a.get("pages"), "date": a.get("date")}
+                "pages": a.get("pages"), "date": a.get("date"), "summary": a.get("summary"),
+                "summary_at": a.get("summary_at")}
 
     def folder_payload(folder: dict, profile_id: int) -> dict:
         children = lib.children(folder["id"])
@@ -283,9 +286,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         metas = lib.bdt_albums_for_folder(folder["id"])
         links = lib.bdt_series_for([c["id"] for c in children if c["kind"] == "folder"])
         favs = lib.favorites_ids(profile_id)
+        folder_colors = lib.colors_for([c["cover_id"] for c in children if c["kind"] == "folder" and c.get("cover_id")])
         out = []
         for c in children:
             j = album_json(c, with_progress=False)
+            if c["kind"] == "folder" and c.get("cover_id"):
+                j["color"] = folder_colors.get(c["cover_id"])
             if c["id"] in favs:
                 j["fav"] = True
             if c["kind"] == "album":
@@ -958,6 +964,84 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         lib.bdt_series_delete(folder_id)
         return jsonify(None)
 
+    def fetch_summary(node_id: int, force: bool = False) -> Optional[dict]:
+        """Résumé d'un album lié à Bédéthèque : lu sur la fiche de l'album, puis conservé dans la base."""
+        m = lib.bdt_album(node_id)
+        if not m or not m.get("url"):
+            return None
+        if not force and m["data"].get("summary_at"):
+            return m
+        text = bdt.album_summary(m["url"], force=force)
+        lib.bdt_album_update(node_id, summary=text or "", summary_at=time.time())
+        return lib.bdt_album(node_id)
+
+    @app.route("/api/bdt/album/<int:node_id>/summary", methods=["GET"])
+    def api_bdt_summary_get(node_id: int):
+        get_node(node_id, "album")
+        m = lib.bdt_album(node_id)
+        return jsonify({"linked": bool(m and m.get("url")), "summary": (m or {}).get("data", {}).get("summary"),
+                        "summary_at": (m or {}).get("data", {}).get("summary_at")})
+
+    @app.route("/api/bdt/album/<int:node_id>/summary", methods=["POST"])
+    def api_bdt_summary(node_id: int):
+        """Va chercher le résumé (une requête vers la fiche de l'album, puis mise en cache)."""
+        bdt_check_enabled()
+        get_node(node_id, "album")
+        body = request.get_json(force=True, silent=True) or {}
+        try:
+            m = fetch_summary(node_id, force=bool(body.get("force")))
+        except BdtError as e:
+            abort(502, description=str(e))
+        if not m:
+            abort(409, description="Cet album n'est pas encore lié à Bédéthèque : analysez d'abord sa série.")
+        return jsonify({"linked": True, "summary": m["data"].get("summary"), "summary_at": m["data"].get("summary_at")})
+
+    summary_job: dict = {"running": False, "done": 0, "total": 0, "folder": None, "folder_id": None,
+                         "errors": [], "stop": False}
+
+    @app.route("/api/bdt/summaries/<int:folder_id>", methods=["POST"])
+    def api_bdt_summaries(folder_id: int):
+        """Résumés de tous les albums liés d'un dossier, en tâche de fond (une requête par album)."""
+        bdt_check_enabled()
+        folder = get_node(folder_id, "folder")
+        if summary_job["running"]:
+            return jsonify(summary_job), 409
+        metas = lib.bdt_albums_for_folder(folder_id)
+        ids = [nid for nid, m in metas.items() if m.get("url") and not m["data"].get("summary_at")]
+        summary_job.update(running=True, done=0, total=len(ids), folder=folder["name"], folder_id=folder_id,
+                           errors=[], stop=False)
+
+        def job():
+            try:
+                for nid in ids:
+                    if summary_job["stop"]:
+                        break
+                    try:
+                        fetch_summary(nid)
+                    except BdtError as e:
+                        summary_job["errors"].append(str(e))
+                        if "refuse" in str(e) or "vérification" in str(e):
+                            break
+                    except Exception as e:  # noqa: BLE001
+                        log.exception("Résumé de l'album %s", nid)
+                        summary_job["errors"].append(f"Erreur inattendue : {e}")
+                    summary_job["done"] += 1
+            finally:
+                summary_job["running"] = False
+
+        threading.Thread(target=job, name="bulle-summaries", daemon=True).start()
+        time.sleep(0.2)
+        return jsonify(summary_job), 202
+
+    @app.route("/api/bdt/summaries", methods=["GET"])
+    def api_bdt_summaries_status():
+        return jsonify(summary_job)
+
+    @app.route("/api/bdt/summaries", methods=["DELETE"])
+    def api_bdt_summaries_stop():
+        summary_job["stop"] = True
+        return jsonify(summary_job)
+
     @app.route("/api/bdt/collection")
     def api_bdt_collection():
         rows = lib.bdt_series_all()
@@ -1034,6 +1118,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             try:
                 count = comics.inspect(n, lib.abs_path(n["path"]), make_cover=True)
                 lib.set_pages(n["id"], count, None)
+                lib.set_color(n["id"], comics.cover_color(n, lib.abs_path(n["path"])))
             except AlbumError as e:
                 lib.set_pages(n["id"], None, str(e))
             except Exception as e:  # noqa: BLE001
@@ -1062,6 +1147,17 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         todo = [n for n in lib.albums_without("error IS NULL") if not os.path.exists(comics.cover_path(n["id"]))]
         preload_albums(todo, "Couvertures régénérées")
 
+    def preload_colors() -> None:
+        """Bibliothèques créées avant la v0.6 : calcule la couleur des couvertures existantes."""
+        todo = [n for n in lib.albums_without("color IS NULL AND error IS NULL AND page_count IS NOT NULL")
+                if os.path.exists(comics.cover_path(n["id"]))]
+        if not todo:
+            return
+        t0 = time.time()
+        for n in todo:
+            lib.set_color(n["id"], comics.cover_color(n, lib.abs_path(n["path"])) or "")
+        log.info("Couleurs de %d couvertures calculées en %.0f s", len(todo), time.time() - t0)
+
     def trim_cache() -> None:
         gb = float(settings()["cache_max_gb"])
         if gb > 0:
@@ -1088,6 +1184,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             return
         if settings()["preload_covers"]:
             run_background(preload)
+        try:
+            preload_colors()
+        except Exception:  # noqa: BLE001
+            log.exception("Couleurs des couvertures")
         trim_cache()
 
     def start_scan_thread() -> None:
