@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Lecture — Bulle</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 6C17 6 5 16.5 5 29.5c0 7.5 4 14 10.5 18.3L13 58l12.6-6.7c2 .4 4.2.7 6.4.7 15 0 27-10.5 27-23.5S47 6 32 6z' fill='%23ffb454'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="reader fit-page">
+<header class="rbar top" id="top">
+  <a class="rbtn" id="back" href="/" title="Retour au dossier (Échap)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+  </a>
+  <div class="rtitle"><div class="f" id="rfolder"></div><div class="n" id="rname">Chargement…</div></div>
+  <div class="rcount" id="rcount"></div>
+</header>
+
+<main id="stage">
+  <div class="wrap"><img id="page" alt="" draggable="false"></div>
+  <div class="loading" id="loading" hidden></div>
+</main>
+
+<footer class="rbar bottom" id="bottom">
+  <button class="rbtn" id="prev" type="button" title="Page précédente (←)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <input type="range" id="slider" min="1" max="1" value="1" aria-label="Page">
+  <button class="rbtn" id="next" type="button" title="Page suivante (→ ou Espace)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
+  <div class="rtools">
+    <button class="rbtn text" id="fit" type="button" title="Ajustement : page entière / largeur / taille d'origine (F)">Page</button>
+    <button class="rbtn" id="manga" type="button" title="Sens de lecture manga, de droite à gauche (M)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13m0 0-3-3m3 3-3 3M20 16H7m0 0 3-3m-3 3 3 3"/></svg>
+    </button>
+    <button class="rbtn" id="fs" type="button" title="Plein écran">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    </button>
+  </div>
+</footer>
+
+<div id="end" class="end" hidden></div>
+<script src="/static/reader.js"></script>
+</body>
+</html>

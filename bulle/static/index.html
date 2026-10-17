@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Bulle</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 6C17 6 5 16.5 5 29.5c0 7.5 4 14 10.5 18.3L13 58l12.6-6.7c2 .4 4.2.7 6.4.7 15 0 27-10.5 27-23.5S47 6 32 6z' fill='%23ffb454'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/" title="Accueil">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 6C17 6 5 16.5 5 29.5c0 7.5 4 14 10.5 18.3L13 58l12.6-6.7c2 .4 4.2.7 6.4.7 15 0 27-10.5 27-23.5S47 6 32 6z" fill="#ffb454"/><circle cx="22" cy="30" r="3.2" fill="#231a05"/><circle cx="32" cy="30" r="3.2" fill="#231a05"/><circle cx="42" cy="30" r="3.2" fill="#231a05"/></svg>
+    <b>Bu<span>lle</span></b>
+  </a>
+  <form class="search" id="search-form" role="search" autocomplete="off">
+    <input id="search" type="search" placeholder="Rechercher une série, un album…" aria-label="Rechercher">
+  </form>
+  <span class="stats" id="stats"></span>
+  <button class="iconbtn" id="scan-btn" type="button" title="Rechercher les nouveaux albums (scan)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+  </button>
+</header>
+<nav class="crumbs" id="crumbs" aria-label="Fil d'Ariane"></nav>
+<main id="main"><div class="empty"><div class="spinner"></div>Chargement…</div></main>
+<div id="modal" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
