@@ -25,31 +25,43 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
+def env_str(name: str, default: str = "") -> str:
+    """Variable d'environnement sans espaces ni guillemets autour : dans une stack écrite « - SCAN_ON_START="0" »,
+    Docker garde les guillemets dans la valeur ; on les enlève pour que « "0" » vaille bien 0."""
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return v
+
+
 def env_int(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, default))
+        return int(float(env_str(name, str(default))))
     except ValueError:
         return default
 
 
 def env_bool(name: str, default: bool) -> bool:
-    v = os.environ.get(name)
-    if v is None:
+    if os.environ.get(name) is None:
         return default
-    return v.strip().lower() not in ("0", "false", "no", "off", "")
+    return env_str(name).lower() not in ("0", "false", "no", "non", "off", "")
 
 
 # Réglages globaux (serveur) : défauts tirés des variables d'environnement, modifiables dans la page Réglages.
 def global_defaults() -> dict:
     return {
         "scan_interval_hours": env_int("SCAN_INTERVAL_HOURS", 12),
+        "scan_on_start": env_bool("SCAN_ON_START", True),   # scan au démarrage du conteneur (après une mise à jour)
         "preload_covers": env_bool("PRELOAD_COVERS", True),
         "scan_mode": "normal",        # rapide : liste seulement ; normal : + couvertures manquantes ; minutieux : + chaque album rouvert, couverture refaite
         "preload_threads": max(1, min(8, env_int("PRELOAD_THREADS", 3))),
@@ -74,7 +86,7 @@ def global_defaults() -> dict:
 
 
 GLOBAL_TYPES = {
-    "scan_interval_hours": (int, 0, 720), "preload_covers": (bool,), "scan_mode": (str,), "preload_threads": (int, 1, 8),
+    "scan_interval_hours": (int, 0, 720), "scan_on_start": (bool,), "preload_covers": (bool,), "scan_mode": (str,), "preload_threads": (int, 1, 8),
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
@@ -1484,8 +1496,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     app.extensions["bulle"]["start_scan"] = start_scan_thread
     threading.Thread(target=scheduler, name="bulle-scheduler", daemon=True).start()
-    if env_bool("SCAN_ON_START", True):
+    # Scan au démarrage (après une mise à jour, un redémarrage) : réglable dans la page Réglages, prioritaire sur la
+    # variable SCAN_ON_START. Désactivé sur une bibliothèque vide : la page d'accueil propose alors le bouton ↻.
+    if settings().get("scan_on_start", True):
         start_scan_thread()
+    else:
+        log.info("Scan au démarrage désactivé (Réglages › Images et cache) : bouton ↻ ou rescan automatique")
     return app
 
 
