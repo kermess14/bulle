@@ -14,12 +14,12 @@ COPY bulle ./bulle
 
 ENV LIBRARY_ROOT=/library \
     DATA_DIR=/data \
-    PORT=2203 \
+    PORT=2205 \
     PYTHONUNBUFFERED=1
 
-EXPOSE 2203
+EXPOSE 2205
 VOLUME ["/data"]
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \
-  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/stats' % os.environ.get('PORT', '2203'), timeout=4)" || exit 1
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/stats' % os.environ.get('PORT', '2205'), timeout=4)" || exit 1
 
 CMD ["python", "-m", "bulle.server"]
