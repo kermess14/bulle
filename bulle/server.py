@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import io
 import logging
 import os
 import secrets
@@ -14,6 +15,7 @@ from typing import Any, Optional
 
 from flask import Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory
 from itsdangerous import BadSignature, URLSafeSerializer
+from PIL import Image
 
 from . import opds
 
@@ -21,8 +23,10 @@ from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, comp
                          parse_album_name, query_from_folder)
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
+from .panels import detect_panels
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
+PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -411,6 +415,26 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         resp = send_file(path, mimetype="image/jpeg", conditional=True)
         return cache_headers(resp, immutable="v" in request.args)
 
+    @app.route("/api/panels/<int:node_id>/<int:index>")
+    def api_panels(node_id: int, index: int):
+        """Cases de la planche (détectées une fois, puis gardées en base) pour la lecture case par case."""
+        node = get_node(node_id, "album")
+        cached = lib.panels_get(node_id, index)
+        if cached is not None:
+            return jsonify(cached)
+        try:
+            path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
+            with Image.open(path or io.BytesIO(data)) as im:
+                im.load()
+                result = detect_panels(im)
+        except AlbumError as e:
+            abort(415, description=str(e))
+        except Exception as e:  # noqa: BLE001
+            log.warning("Détection des cases %s p.%d : %s", node["path"], index, e)
+            result = {"panels": [], "rtl": []}
+        lib.panels_set(node_id, index, result)
+        return jsonify(result)
+
     @app.route("/api/page/<int:node_id>/<int:index>")
     def api_page(node_id: int, index: int):
         node = get_node(node_id, "album")
@@ -740,6 +764,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/history")
     def api_history():
         return jsonify(with_folder(lib.history(current_profile(), limit=request.args.get("n", 60, type=int))))
+
+    @app.route("/api/covers/sample")
+    def api_covers_sample():
+        """Couvertures au hasard pour la mosaïque de fond (seulement celles déjà générées : pas de travail serveur)."""
+        n = request.args.get("n", 60, type=int)
+        out = [{"id": r["id"], "mtime": int(r["mtime"] or 0)} for r in lib.random_covers(n * 2)
+               if os.path.exists(comics.cover_path(r["id"]))][:n]
+        return jsonify(out)
 
     @app.route("/api/random")
     def api_random():
