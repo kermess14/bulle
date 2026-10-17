@@ -69,8 +69,44 @@ CREATE TABLE IF NOT EXISTS profile_settings(
   PRIMARY KEY(profile_id, key)
 );
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+-- Bédéthèque : lien dossier ↔ série, métadonnées d'albums (jamais écrites dans les fichiers), cache des pages
+CREATE TABLE IF NOT EXISTS bdt_series(
+  folder_id   INTEGER PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+  bdt_id      INTEGER,
+  url         TEXT NOT NULL,
+  title       TEXT,
+  genre       TEXT,
+  status      TEXT,
+  years       TEXT,
+  tomes_count INTEGER,
+  data        TEXT NOT NULL,
+  score       REAL,
+  manual      INTEGER NOT NULL DEFAULT 0,
+  detailed    INTEGER NOT NULL DEFAULT 0,
+  present     INTEGER,
+  total       INTEGER,
+  fetched_at  REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bdt_albums(
+  node_id    INTEGER PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+  folder_id  INTEGER,
+  url        TEXT,
+  number     INTEGER,
+  kind       TEXT,
+  title      TEXT,
+  year       INTEGER,
+  data       TEXT NOT NULL,
+  how        TEXT,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bdt_albums_folder ON bdt_albums(folder_id);
+CREATE TABLE IF NOT EXISTS bdt_cache(
+  url        TEXT PRIMARY KEY,
+  fetched_at REAL NOT NULL,
+  body       BLOB NOT NULL
+);
 """
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_PROFILE = 1
 
 
@@ -611,6 +647,103 @@ class Library:
                 " WHERE kind='folder' AND cover_id IN (SELECT id FROM nodes WHERE error IS NOT NULL)")
             self.conn.commit()
             return cur.rowcount
+
+    # -- Bédéthèque ----------------------------------------------------------------
+    def bdt_cache_get(self, url: str) -> Optional[tuple[float, bytes]]:
+        r = self.conn.execute("SELECT fetched_at, body FROM bdt_cache WHERE url=?", (url,)).fetchone()
+        return (r["fetched_at"], r["body"]) if r else None
+
+    def bdt_cache_put(self, url: str, body: bytes) -> None:
+        with self._write_lock:
+            self.conn.execute("INSERT OR REPLACE INTO bdt_cache(url, fetched_at, body) VALUES(?,?,?)",
+                              (url, time.time(), body))
+            self.conn.commit()
+
+    def bdt_series_get(self, folder_id: int) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM bdt_series WHERE folder_id=?", (folder_id,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["data"] = json.loads(d["data"])
+        return d
+
+    def bdt_series_set(self, folder_id: int, series: dict, score: Optional[float], manual: bool,
+                       present: Optional[int] = None, total: Optional[int] = None) -> None:
+        with self._write_lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO bdt_series(folder_id, bdt_id, url, title, genre, status, years, tomes_count, "
+                "data, score, manual, detailed, present, total, fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (folder_id, series.get("id"), series["url"], series.get("title"), series.get("genre"),
+                 series.get("status"), series.get("years"), series.get("tomes_count"),
+                 json.dumps(series, ensure_ascii=False), score, 1 if manual else 0,
+                 1 if series.get("detailed") else 0, present, total, time.time()))
+            self.conn.commit()
+
+    def bdt_series_for(self, folder_ids: list[int]) -> dict[int, dict]:
+        """Résumé des liens Bédéthèque pour plusieurs dossiers (cartes des dossiers)."""
+        if not folder_ids:
+            return {}
+        out = {}
+        for i in range(0, len(folder_ids), 500):
+            chunk = folder_ids[i:i + 500]
+            rows = self.conn.execute(
+                f"SELECT folder_id, title, url, status, present, total, score, manual FROM bdt_series "
+                f"WHERE folder_id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+            for r in rows:
+                out[r["folder_id"]] = dict(r)
+        return out
+
+    def bdt_series_delete(self, folder_id: int) -> None:
+        with self._write_lock:
+            self.conn.execute("DELETE FROM bdt_series WHERE folder_id=?", (folder_id,))
+            self.conn.execute("DELETE FROM bdt_albums WHERE folder_id=?", (folder_id,))
+            self.conn.commit()
+
+    def bdt_series_all(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT s.folder_id, s.bdt_id, s.url, s.title, s.genre, s.status, s.years, s.tomes_count, s.score, "
+            "s.manual, s.detailed, s.present, s.total, s.fetched_at, n.name AS folder_name, n.path AS folder_path, "
+            "n.album_count "
+            "FROM bdt_series s JOIN nodes n ON n.id=s.folder_id ORDER BY n.sort_key").fetchall()
+        return [dict(r) for r in rows]
+
+    def bdt_albums_set(self, folder_id: int, matches: list[dict]) -> None:
+        """matches : [{id, how, album}] ; remplace les métadonnées des albums du dossier."""
+        with self._write_lock:
+            self.conn.execute("DELETE FROM bdt_albums WHERE folder_id=?", (folder_id,))
+            now = time.time()
+            for m in matches:
+                a = m["album"]
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO bdt_albums(node_id, folder_id, url, number, kind, title, year, data, how, "
+                    "updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (m["id"], folder_id, a.get("url"), a.get("number"), a.get("kind"), a.get("title"), a.get("year"),
+                     json.dumps(a, ensure_ascii=False), m.get("how"), now))
+            self.conn.commit()
+
+    def bdt_albums_for_folder(self, folder_id: int) -> dict[int, dict]:
+        rows = self.conn.execute("SELECT * FROM bdt_albums WHERE folder_id=?", (folder_id,)).fetchall()
+        out = {}
+        for r in rows:
+            d = dict(r)
+            d["data"] = json.loads(d["data"])
+            out[d["node_id"]] = d
+        return out
+
+    def bdt_album(self, node_id: int) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM bdt_albums WHERE node_id=?", (node_id,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["data"] = json.loads(d["data"])
+        return d
+
+    def folders_with_albums(self) -> list[dict]:
+        """Dossiers contenant directement des albums (candidats à l'analyse Bédéthèque)."""
+        rows = self.conn.execute(
+            "SELECT f.id, f.name, f.path, f.album_count, (SELECT COUNT(*) FROM nodes a WHERE a.parent_id=f.id AND "
+            "a.kind='album') AS direct FROM nodes f WHERE f.kind='folder' AND f.path<>'' ORDER BY f.sort_key").fetchall()
+        return [dict(r) for r in rows if r["direct"] > 0]
 
     def stats(self, profile_id: int = DEFAULT_PROFILE) -> dict:
         r = self.conn.execute(
