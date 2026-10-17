@@ -17,11 +17,12 @@ from itsdangerous import BadSignature, URLSafeSerializer
 
 from . import opds
 
-from .bedetheque import BdtError, BedethequeClient, compare, query_from_folder
+from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, compare, index_letter_for, norm_title,
+                         parse_album_name, query_from_folder)
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -281,9 +282,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         by_id = {p["node_id"]: p for p in prog}
         metas = lib.bdt_albums_for_folder(folder["id"])
         links = lib.bdt_series_for([c["id"] for c in children if c["kind"] == "folder"])
+        favs = lib.favorites_ids(profile_id)
         out = []
         for c in children:
             j = album_json(c, with_progress=False)
+            if c["id"] in favs:
+                j["fav"] = True
             if c["kind"] == "album":
                 j["progress"] = progress_json(by_id.get(c["id"]))
                 if c["id"] in metas:
@@ -299,6 +303,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             out.append(j)
         payload = {"folder": album_json(folder, with_progress=False), "breadcrumb": lib.breadcrumb(folder),
                    "children": out}
+        payload["folder"]["fav"] = folder["id"] in favs
         link = lib.bdt_series_get(folder["id"])
         if link:
             payload["bdt"] = bdt_report(folder, link, children)
@@ -375,6 +380,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         j["breadcrumb"] = lib.breadcrumb(node)[:-1]
         j["prev"], j["next"] = prev_, next_
         j["meta"] = meta_json(lib.bdt_album(node_id))
+        j["lists"] = lib.list_membership(node_id, current_profile())
         if node.get("parent_id"):
             link = lib.bdt_series_get(node["parent_id"])
             if link:
@@ -389,7 +395,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 abort(404, description="Dossier sans album")
             node = get_node(node["cover_id"], "album")
         try:
-            path = comics.cover(node, lib.abs_path(node["path"]))
+            width = request.args.get("w", 0, type=int)
+            path = comics.cover_sized(node, lib.abs_path(node["path"]), width) if width else \
+                comics.cover(node, lib.abs_path(node["path"]))
         except AlbumError as e:
             if not node.get("page_count") and not node.get("error"):
                 lib.set_pages(node["id"], None, str(e))
@@ -467,6 +475,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         g = settings()
         g.pop("access_pin_hash", None)
         g["access_pin_set"] = bool(access_pin_hash())
+        g["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
         return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid,
                         "profile_selected": profile_selected(), "profiles": lib.profiles(), "version": VERSION,
                         "library_root": library_root,
@@ -606,6 +615,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         s["scan"] = lib.status
         s["version"] = VERSION
         s["library_root"] = library_root
+        s["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
         return jsonify(s)
 
     @app.route("/api/scan", methods=["GET"])
@@ -638,6 +648,102 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if request.path.startswith("/api/"):
             return jsonify({"error": getattr(e, "description", str(e))}), e.code
         return e
+
+    # ------------------------------------------------------------------ API : listes, favoris, historique, hasard
+    def list_json(l: dict) -> dict:
+        return {"id": l["id"], "name": l["name"], "kind": l["kind"], "count": l.get("count", 0)}
+
+    @app.route("/api/lists", methods=["GET"])
+    def api_lists():
+        return jsonify([list_json(l) for l in lib.lists(current_profile())])
+
+    @app.route("/api/lists", methods=["POST"])
+    def api_list_create():
+        body = request.get_json(force=True, silent=True) or {}
+        name = str(body.get("name") or "").strip()[:60]
+        if not name:
+            abort(400, description="Il faut un nom de liste")
+        l = lib.list_create(current_profile(), name)
+        return jsonify(list_json(l))
+
+    @app.route("/api/lists/<int:list_id>", methods=["GET"])
+    def api_list_get(list_id: int):
+        pid = current_profile()
+        l = lib.list_get(list_id, pid)
+        if not l:
+            abort(404, description="Liste inconnue")
+        items = []
+        for n in lib.list_items(list_id, pid):
+            j = album_json(n)
+            crumbs = lib.breadcrumb(n)
+            j["folder"] = " › ".join(c["name"] for c in crumbs[1:-1])
+            j["list_added"] = n.get("list_added")
+            if n["kind"] == "folder":
+                j["album_count"] = n.get("album_count", 0)
+            items.append(j)
+        return jsonify({"list": list_json(l), "items": items})
+
+    @app.route("/api/lists/<int:list_id>", methods=["PUT"])
+    def api_list_rename(list_id: int):
+        pid = current_profile()
+        if not lib.list_get(list_id, pid):
+            abort(404, description="Liste inconnue")
+        body = request.get_json(force=True, silent=True) or {}
+        name = str(body.get("name") or "").strip()[:60]
+        if not name:
+            abort(400, description="Il faut un nom de liste")
+        lib.list_rename(list_id, pid, name)
+        return jsonify(list_json(lib.list_get(list_id, pid)))
+
+    @app.route("/api/lists/<int:list_id>", methods=["DELETE"])
+    def api_list_delete(list_id: int):
+        if not lib.list_delete(list_id, current_profile()):
+            abort(400, description="Cette liste ne peut pas être supprimée")
+        return jsonify(None)
+
+    @app.route("/api/lists/<int:list_id>/items", methods=["POST"])
+    def api_list_add(list_id: int):
+        pid = current_profile()
+        if not lib.list_get(list_id, pid):
+            abort(404, description="Liste inconnue")
+        body = request.get_json(force=True, silent=True) or {}
+        node = get_node(int(body.get("node_id", 0)))
+        lib.list_add(list_id, node["id"])
+        return jsonify({"lists": lib.list_membership(node["id"], pid)})
+
+    @app.route("/api/lists/<int:list_id>/items/<int:node_id>", methods=["DELETE"])
+    def api_list_remove(list_id: int, node_id: int):
+        pid = current_profile()
+        if not lib.list_get(list_id, pid):
+            abort(404, description="Liste inconnue")
+        lib.list_remove(list_id, node_id)
+        return jsonify({"lists": lib.list_membership(node_id, pid)})
+
+    @app.route("/api/favorites/toggle", methods=["POST"])
+    def api_fav_toggle():
+        pid = current_profile()
+        body = request.get_json(force=True, silent=True) or {}
+        node = get_node(int(body.get("node_id", 0)))
+        fav = next(l for l in lib.lists(pid) if l["kind"] == "favorites")
+        if node["id"] in lib.favorites_ids(pid):
+            lib.list_remove(fav["id"], node["id"])
+            return jsonify({"fav": False})
+        lib.list_add(fav["id"], node["id"])
+        return jsonify({"fav": True})
+
+    @app.route("/api/history")
+    def api_history():
+        return jsonify(with_folder(lib.history(current_profile(), limit=request.args.get("n", 60, type=int))))
+
+    @app.route("/api/random")
+    def api_random():
+        n = lib.random_album(unread_only=request.args.get("unread", "1") != "0", profile_id=current_profile())
+        if not n:
+            abort(404, description="Aucun album")
+        j = album_json(n)
+        crumbs = lib.breadcrumb(n)
+        j["folder"] = " › ".join(c["name"] for c in crumbs[1:-1])
+        return jsonify(j)
 
     # ------------------------------------------------------------------ OPDS
     def opds_base() -> str:
@@ -714,10 +820,36 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if not settings()["bdt_enabled"]:
             abort(409, description="Les requêtes vers Bédéthèque sont désactivées dans les réglages")
 
+    def bdt_index_for(query: str, force: bool = False) -> Optional[list[dict]]:
+        """Lignes de l'index alphabétique pour la lettre de la requête (téléchargé une fois par mois)."""
+        letter = index_letter_for(query)
+        age = lib.bdt_index_age(letter)
+        if force or age is None or age > INDEX_TTL:
+            rows = bdt.index_letter(letter, force=force)
+            if not rows:
+                raise BdtError(f"La page de l'index Bédéthèque pour la lettre {letter} est vide ou illisible")
+            lib.bdt_index_store(letter, rows, norm_title)
+        return lib.bdt_index_rows(letter)
+
+    def bdt_search(query: str, hint_int: bool = False) -> list[dict]:
+        """Recherche d'une série : index alphabétique d'abord, recherche du site en secours."""
+        try:
+            rows = bdt_index_for(query)
+        except BdtError as e:
+            log.warning("Index Bédéthèque indisponible (%s), recherche du site", e)
+            rows = None
+        if rows:
+            res = bdt.search_index(query, rows, hint_int=hint_int)
+            if res:
+                return res
+        return bdt.search_site(query)
+
     def analyze_folder(folder: dict, url: Optional[str] = None, details: bool = False, force: bool = False) -> dict:
         """Analyse d'un dossier : recherche (ou lien existant / adresse donnée), lecture de la série, comparaison."""
         children = lib.children(folder["id"])
         files = [{"id": c["id"], "name": c["name"]} for c in children if c["kind"] == "album"]
+        kinds = [parse_album_name(f["name"])["kind"] for f in files]
+        hint_int = bool(files) and sum(1 for k in kinds if k == "int") * 2 >= len(files)
         if not files:
             return {"status": "no_albums", "message": "Ce dossier ne contient pas d'albums directement "
                                                       "(analysez ses sous-dossiers)."}
@@ -739,9 +871,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 series = bdt.series(existing["url"], details=details or bool(existing.get("detailed")), force=True)
                 manual = True
             else:
-                candidates = bdt.search_series(query)
+                candidates = bdt_search(query, hint_int)
                 if not candidates and len(query.split()) > 2:
-                    candidates = bdt.search_series(" ".join(query.split()[:2]))
+                    candidates = bdt_search(" ".join(query.split()[:2]), hint_int)
                 if not candidates:
                     return {"status": "not_found", "query": query,
                             "message": f"Aucune série trouvée sur Bédéthèque pour « {query} »."}
@@ -766,7 +898,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         s = settings()
         return jsonify({"enabled": bool(s["bdt_enabled"]), "interval": float(s["bdt_interval"]),
                         "requests_made": bdt.requests_made, "last_error": bdt.last_error, "job": bdt_job,
-                        "linked": len(lib.bdt_series_all()), "candidates": len(lib.folders_with_albums())})
+                        "linked": len(lib.bdt_series_all()), "candidates": len(lib.folders_with_albums()),
+                        "index": lib.bdt_index_stats()})
 
     @app.route("/api/bdt/search")
     def api_bdt_search():
@@ -775,9 +908,28 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if len(q) < 2:
             return jsonify([])
         try:
-            return jsonify(bdt.search_series(q)[:12])
+            return jsonify(bdt_search(q)[:12])
         except BdtError as e:
             abort(502, description=str(e))
+
+    @app.route("/api/bdt/debug")
+    def api_bdt_debug():
+        """Diagnostic : ce que Bédéthèque renvoie au serveur (index et recherche du site)."""
+        bdt_check_enabled()
+        q = (request.args.get("q") or "Blueberry").strip()
+        out = {"query": q, "letter": index_letter_for(q), "index": lib.bdt_index_stats(), "user_agent": USER_AGENT}
+        try:
+            rows = bdt_index_for(q)
+            out["index_rows"] = len(rows)
+            out["index_hits"] = bdt.search_index(q, rows)[:5]
+        except BdtError as e:
+            out["index_error"] = str(e)
+        try:
+            out["site_hits"] = bdt.search_site(q)[:5]
+        except BdtError as e:
+            out["site_error"] = str(e)
+        out["requests_made"], out["last_error"] = bdt.requests_made, bdt.last_error
+        return jsonify(out)
 
     @app.route("/api/bdt/analyze/<int:folder_id>", methods=["POST"])
     def api_bdt_analyze(folder_id: int):

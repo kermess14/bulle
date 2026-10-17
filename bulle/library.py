@@ -105,8 +105,31 @@ CREATE TABLE IF NOT EXISTS bdt_cache(
   fetched_at REAL NOT NULL,
   body       BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS bdt_index(
+  id        INTEGER PRIMARY KEY,
+  letter    TEXT NOT NULL,
+  name      TEXT NOT NULL,
+  name_norm TEXT NOT NULL,
+  url       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bdt_index_letter ON bdt_index(letter);
+CREATE TABLE IF NOT EXISTS bdt_index_letters(letter TEXT PRIMARY KEY, fetched_at REAL NOT NULL, count INTEGER NOT NULL);
+-- Listes par profil : favoris, à lire, listes personnalisées
+CREATE TABLE IF NOT EXISTS lists(
+  id         INTEGER PRIMARY KEY,
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'custom',
+  created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS list_items(
+  list_id  INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+  node_id  INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  added_at REAL NOT NULL,
+  PRIMARY KEY(list_id, node_id)
+);
 """
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 DEFAULT_PROFILE = 1
 
 
@@ -737,6 +760,112 @@ class Library:
         d = dict(r)
         d["data"] = json.loads(d["data"])
         return d
+
+    def bdt_index_age(self, letter: str) -> Optional[float]:
+        r = self.conn.execute("SELECT fetched_at FROM bdt_index_letters WHERE letter=?", (letter,)).fetchone()
+        return (time.time() - r["fetched_at"]) if r else None
+
+    def bdt_index_rows(self, letter: str) -> list[dict]:
+        rows = self.conn.execute("SELECT id, name, name_norm, url FROM bdt_index WHERE letter=?", (letter,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def bdt_index_store(self, letter: str, rows: list[dict], norm) -> None:
+        with self._write_lock:
+            self.conn.execute("DELETE FROM bdt_index WHERE letter=?", (letter,))
+            self.conn.executemany("INSERT OR REPLACE INTO bdt_index(id, letter, name, name_norm, url) VALUES(?,?,?,?,?)",
+                                  [(r["id"], letter, r["name"], norm(r["name"]), r["url"]) for r in rows])
+            self.conn.execute("INSERT OR REPLACE INTO bdt_index_letters(letter, fetched_at, count) VALUES(?,?,?)",
+                              (letter, time.time(), len(rows)))
+            self.conn.commit()
+
+    def bdt_index_stats(self) -> dict:
+        rows = self.conn.execute("SELECT letter, fetched_at, count FROM bdt_index_letters ORDER BY letter").fetchall()
+        return {r["letter"]: {"fetched_at": r["fetched_at"], "count": r["count"]} for r in rows}
+
+    # -- listes (favoris, à lire, personnalisées) ------------------------------------
+    def lists(self, profile_id: int) -> list[dict]:
+        """Listes du profil, en créant « Favoris » et « À lire » si besoin."""
+        rows = self.conn.execute("SELECT kind FROM lists WHERE profile_id=?", (profile_id,)).fetchall()
+        kinds = {r["kind"] for r in rows}
+        with self._write_lock:
+            for kind, name in (("favorites", "Favoris"), ("readlater", "À lire")):
+                if kind not in kinds:
+                    self.conn.execute("INSERT INTO lists(profile_id, name, kind, created_at) VALUES(?,?,?,?)",
+                                      (profile_id, name, kind, time.time()))
+            self.conn.commit()
+        rows = self.conn.execute(
+            "SELECT l.id, l.name, l.kind, l.created_at, (SELECT COUNT(*) FROM list_items i WHERE i.list_id=l.id) AS count "
+            "FROM lists l WHERE l.profile_id=? ORDER BY CASE l.kind WHEN 'favorites' THEN 0 WHEN 'readlater' THEN 1 ELSE 2 END, "
+            "l.created_at", (profile_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_get(self, list_id: int, profile_id: int) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM lists WHERE id=? AND profile_id=?", (list_id, profile_id)).fetchone()
+        return dict(r) if r else None
+
+    def list_create(self, profile_id: int, name: str) -> dict:
+        with self._write_lock:
+            cur = self.conn.execute("INSERT INTO lists(profile_id, name, kind, created_at) VALUES(?,?,'custom',?)",
+                                    (profile_id, name, time.time()))
+            self.conn.commit()
+            return self.list_get(cur.lastrowid, profile_id)
+
+    def list_rename(self, list_id: int, profile_id: int, name: str) -> None:
+        with self._write_lock:
+            self.conn.execute("UPDATE lists SET name=? WHERE id=? AND profile_id=?", (name, list_id, profile_id))
+            self.conn.commit()
+
+    def list_delete(self, list_id: int, profile_id: int) -> bool:
+        with self._write_lock:
+            cur = self.conn.execute("DELETE FROM lists WHERE id=? AND profile_id=? AND kind='custom'", (list_id, profile_id))
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def list_items(self, list_id: int, profile_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT n.*, i.added_at AS list_added, p.page AS p_page, p.page_count AS p_count, p.completed AS p_completed, "
+            "p.updated_at AS p_updated FROM list_items i JOIN nodes n ON n.id=i.node_id "
+            "LEFT JOIN progress p ON p.node_id=n.id AND p.profile_id=? WHERE i.list_id=? ORDER BY i.added_at DESC",
+            (profile_id, list_id)).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_add(self, list_id: int, node_id: int) -> None:
+        with self._write_lock:
+            self.conn.execute("INSERT OR IGNORE INTO list_items(list_id, node_id, added_at) VALUES(?,?,?)",
+                              (list_id, node_id, time.time()))
+            self.conn.commit()
+
+    def list_remove(self, list_id: int, node_id: int) -> None:
+        with self._write_lock:
+            self.conn.execute("DELETE FROM list_items WHERE list_id=? AND node_id=?", (list_id, node_id))
+            self.conn.commit()
+
+    def list_membership(self, node_id: int, profile_id: int) -> list[int]:
+        rows = self.conn.execute("SELECT i.list_id FROM list_items i JOIN lists l ON l.id=i.list_id "
+                                 "WHERE i.node_id=? AND l.profile_id=?", (node_id, profile_id)).fetchall()
+        return [r["list_id"] for r in rows]
+
+    def favorites_ids(self, profile_id: int) -> set[int]:
+        rows = self.conn.execute("SELECT i.node_id FROM list_items i JOIN lists l ON l.id=i.list_id "
+                                 "WHERE l.profile_id=? AND l.kind='favorites'", (profile_id,)).fetchall()
+        return {r["node_id"] for r in rows}
+
+    def history(self, profile_id: int, limit: int = 60) -> list[dict]:
+        rows = self.conn.execute(
+            self._ALBUM_WITH_PROGRESS + "WHERE p.completed=1 ORDER BY p.updated_at DESC LIMIT ?",
+            (profile_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def random_album(self, unread_only: bool = True, profile_id: int = DEFAULT_PROFILE) -> Optional[dict]:
+        if unread_only:
+            r = self.conn.execute(
+                "SELECT n.* FROM nodes n LEFT JOIN progress p ON p.node_id=n.id AND p.profile_id=? "
+                "WHERE n.kind='album' AND n.error IS NULL AND p.node_id IS NULL ORDER BY RANDOM() LIMIT 1",
+                (profile_id,)).fetchone()
+            if r:
+                return dict(r)
+        r = self.conn.execute("SELECT * FROM nodes WHERE kind='album' AND error IS NULL ORDER BY RANDOM() LIMIT 1").fetchone()
+        return dict(r) if r else None
 
     def folders_with_albums(self) -> list[dict]:
         """Dossiers contenant directement des albums (candidats à l'analyse Bédéthèque)."""
