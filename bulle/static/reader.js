@@ -501,14 +501,17 @@
     const delay = Math.max(500, (+prefs.reader_bars_delay || 2.5) * 1000);
     hideTimer = setTimeout(() => { if (!overBar && endEl.hidden) body.classList.add("hide-bars"); }, delay);
   }
+  /* Sur tablette et téléphone, une tape fabrique aussi de faux événements souris (mousemove, mouseenter…) : si on les
+     écoutait, chaque tape ferait apparaître les barres et la barre du bas, une fois touchée, ne se cacherait plus jamais
+     (« mouseleave » n'arrive jamais). Seule la vraie souris compte ici ; au doigt, c'est la tape au centre qui décide. */
   let overBar = false;
   for (const bar of document.querySelectorAll(".rbar")) {
-    bar.addEventListener("mouseenter", () => { overBar = true; });
-    bar.addEventListener("mouseleave", () => { overBar = false; scheduleHide(); });
+    bar.addEventListener("pointerenter", e => { if (e.pointerType === "mouse") overBar = true; });
+    bar.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") { overBar = false; scheduleHide(); } });
   }
   let lastMove = 0;
-  document.addEventListener("mousemove", e => {
-    if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
+  document.addEventListener("pointermove", e => {
+    if (e.pointerType !== "mouse") return;
     const now = Date.now(); if (now - lastMove < 100) return; lastMove = now;
     body.classList.remove("hide-bars"); scheduleHide();
   });
