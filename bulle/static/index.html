@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 6C17 6 5 16.5 5 29.5c0 7.5 4 14 10.5 18.3L13 58l12.6-6.7c2 .4 4.2.7 6.4.7 15 0 27-10.5 27-23.5S47 6 32 6z' fill='%23ffb454'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/style.css">
 <script>/* thème et disposition avant le premier rendu, pour éviter un flash */
-try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; document.documentElement.dataset.skin = p.skin === "sobre" ? "sobre" : "bd"; } catch (e) {}</script>
+try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "neon"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
 </head>
 <body>
 <header class="topbar">
@@ -59,6 +59,9 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 5.2l3.9-1 3.6 14.6-3.9 1z"/></svg>
       <span class="lbl">Collection</span></a>
     <i class="ono" style="--rot:4deg;--c1:#c084fc;margin-left:14px">TADAM !</i>
+    <a href="#/adult" data-tab="adult" id="tab-adult" class="adult" title="Rubrique Adulte" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.2" fill="currentColor"/></svg>
+      <span class="lbl">Adulte</span><span class="cnt adultcnt">18+</span></a>
     <a href="#/random" data-tab="random" title="Ouvre un album pas encore lu, au hasard">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="16" cy="8" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="8" cy="16" r="1.3" fill="currentColor"/><circle cx="16" cy="16" r="1.3" fill="currentColor"/></svg>
       <span class="lbl">Au hasard</span></a>

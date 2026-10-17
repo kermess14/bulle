@@ -28,6 +28,9 @@
       let msg = r.statusText, body = null;
       try { body = await r.json(); msg = body.error || msg; } catch (_) { /* ignore */ }
       if (r.status === 401 && body && body.auth_required) showPinScreen();
+      if (r.status === 403 && body && body.adult_locked && !(opts && opts.noAdultPrompt)) {
+        if (await adultPrompt()) return api(url, opts);
+      }
       throw new Error(msg);
     }
     return r.json();
@@ -52,6 +55,42 @@
         location.reload();
       } catch (_) { err.textContent = "Serveur injoignable"; err.hidden = false; }
     });
+  }
+
+  // ================================================================ rubrique Adulte : invite du code
+  let adultPromise = null;
+  function adultPrompt() {
+    if (adultPromise) return adultPromise;
+    adultPromise = new Promise(resolve => {
+      modal.hidden = false;
+      modal.innerHTML = `<div class="backdrop"><form class="sheet pin adult" id="adult-form">
+        <button class="iconbtn close" type="button" data-adult-cancel title="Annuler">${ICON.close}</button>
+        <h3>Rubrique Adulte</h3><p class="muted">Cette série fait partie de la rubrique Adulte (18+). Entrez le code pour la voir ; elle reste visible 12 heures sur cet appareil.</p>
+        <input type="password" inputmode="numeric" autocomplete="off" name="pin" placeholder="Code" autofocus>
+        <div class="actions"><button class="btn primary" type="submit">Déverrouiller</button></div><p class="error" hidden></p></form></div>`;
+      const f = $("#adult-form"), done = ok => { adultPromise = null; closeModal(); resolve(ok); };
+      f.querySelector("[data-adult-cancel]").addEventListener("click", () => done(false));
+      f.parentElement.addEventListener("click", e => { if (e.target === f.parentElement) done(false); });
+      f.addEventListener("submit", async e => {
+        e.preventDefault();
+        const err = f.querySelector(".error");
+        try {
+          await api("/api/adult/unlock", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin: f.elements.pin.value }), noAdultPrompt: true });
+          settings.global.adult_unlocked = true; updateAdultTab(); pow(powFor("adult"), lastPointer.x, lastPointer.y);
+          done(true);
+        } catch (e2) { err.textContent = e2.message || "Code incorrect"; err.hidden = false; f.elements.pin.select(); }
+      });
+      f.elements.pin.focus();
+    });
+    return adultPromise;
+  }
+  function updateAdultTab() {
+    const a = $("#tab-adult");
+    if (!a) return;
+    const g = settings.global;
+    a.hidden = !(g.adult_count > 0 || g.adult_unlocked && g.adult_pin_set);
+    a.classList.toggle("unlocked", !!g.adult_unlocked);
+    a.title = g.adult_unlocked ? "Rubrique Adulte (déverrouillée)" : "Rubrique Adulte (code demandé)";
   }
 
   // ================================================================ profils (« qui lit ? »)
@@ -120,7 +159,7 @@
   // ================================================================ réglages
   const PROFILE_DEFAULTS = {
     thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", letters_size: "large",
-    tabs_side: "left", cover_style: "book", skin: "bd", mosaic: "drift", mosaic_opacity: 45, mosaic_brightness: 70, mosaic_glass: true, sort: "natural", hide_read: false,
+    tabs_side: "left", cover_style: "book", skin: "bd", settings_layout: "tabs", mosaic: "drift", mosaic_opacity: 45, mosaic_brightness: 70, mosaic_glass: true, sort: "natural", hide_read: false,
     show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
@@ -129,6 +168,20 @@
     bdt_ghosts: true, bdt_titles: false,
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
+  const SKINS = ["bd", "sobre", "bling", "girly", "neon"];
+  /* Onomatopées de la colonne de gauche et des petits éclats, par habillage */
+  const ONO = {
+    bd: ["WIZZ !", "Zzz…", "PAF !", "CLAC", "BOUM", "TADAM !", "ZOU !"],
+    bling: ["BLING !", "$$$", "CHA-CHING", "WOW", "DE LUXE", "VIP", "CASH !"],
+    girly: ["Trop mignon", "♥ ♥ ♥", "Oh la la", "Youpi !", "Bisous", "Chouette !", "Hihi"],
+    neon: ["ZAP !", "GAME ON", "1UP", "BZZT", "INSERT COIN", "HI-SCORE", "COMBO !"],
+  };
+  const POWS = {
+    bd: { fav: ["HOP !", "YES !", "TOP !"], list: ["PAF !", "TCHAC !", "HOP !"], read: ["FINI !", "BRAVO !"], random: ["ZOU !", "TADAM !"], adult: ["CHUT…", "PSSST"] },
+    bling: { fav: ["BLING !", "WOW !"], list: ["CHA-CHING", "VIP !"], read: ["JACKPOT !", "BRAVO !"], random: ["CASH !", "TADAM !"], adult: ["PRIVÉ", "VIP"] },
+    girly: { fav: ["♥ ♥ ♥", "Trop bien !"], list: ["Hop !", "Youpi !"], read: ["Bravo !", "Fini !"], random: ["Surprise !", "Tadam !"], adult: ["Chut…", "Oh !"] },
+    neon: { fav: ["1UP !", "ZAP !"], list: ["COMBO !", "BZZT"], read: ["GAME OVER", "HI-SCORE !"], random: ["RANDOM !", "INSERT COIN"], adult: ["ACCESS", "UNLOCKED"] },
+  };
   const HOVER = { none: 1, light: 1.05, strong: 1.12 };
   const settings = { profile: Object.assign({}, PROFILE_DEFAULTS), global: {}, meta: {} };
   try { Object.assign(settings.profile, JSON.parse(localStorage.getItem("bulle:profile") || "{}")); } catch (_) { /* ignore */ }
@@ -141,7 +194,9 @@
     root.dataset.theme = theme === "light" ? "light" : "dark";
     root.dataset.tabs = p.tabs_side === "top" || window.innerWidth <= 700 ? "top" : "left";
     root.dataset.covers = ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
-    root.dataset.skin = p.skin === "sobre" ? "sobre" : "bd";
+    root.dataset.skin = SKINS.includes(p.skin) ? p.skin : "bd";
+    const words = ONO[root.dataset.skin];
+    if (words) document.querySelectorAll("#maintabs .ono").forEach((el, i) => { el.textContent = words[i % words.length]; });
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     root.dataset.mosaic = p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
     root.dataset.glass = p.mosaic_glass !== false && root.dataset.mosaic !== "off" ? "on" : "off";
@@ -223,7 +278,7 @@
 
   // ================================================================ onomatopées (habillage BD)
   function pow(text, x, y) {
-    if (document.documentElement.dataset.skin !== "bd") return;
+    if (document.documentElement.dataset.skin === "sobre" || !text) return;
     const el = document.createElement("div");
     el.className = "pow"; el.textContent = text;
     if (x == null) { x = window.innerWidth / 2; y = window.innerHeight / 2; }
@@ -232,8 +287,7 @@
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 1100);
   }
-  const POW = { fav: ["HOP !", "YES !", "TOP !"], list: ["PAF !", "TCHAC !", "HOP !"], read: ["FINI !", "BRAVO !"], random: ["ZOU !", "TADAM !"] };
-  const powFor = kind => POW[kind][Math.floor(Math.random() * POW[kind].length)];
+  const powFor = kind => { const t = (POWS[document.documentElement.dataset.skin] || POWS.bd)[kind] || POWS.bd[kind]; return t[Math.floor(Math.random() * t.length)]; };
   let lastPointer = { x: null, y: null };
   document.addEventListener("pointerdown", e => { lastPointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
   matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyAppearance);
@@ -247,7 +301,7 @@
       settings.global = s.global; settings.meta = s;
       settings.profile = Object.assign({}, PROFILE_DEFAULTS, s.profile || {});
       try { localStorage.setItem("bulle:profile", JSON.stringify(settings.profile)); } catch (_) { /* ignore */ }
-      applyAppearance(); updateShroom();
+      applyAppearance(); updateShroom(); updateAdultTab();
     } catch (_) { /* hors ligne : on garde la copie locale */ }
   }
   let saveTimer = null, pendingProfile = {}, pendingGlobal = {};
@@ -264,7 +318,7 @@
       pendingProfile = {}; pendingGlobal = {};
       try {
         const s = await putJson("/api/settings", body);
-        settings.global = s.global; settings.meta = s; updateShroom();
+        settings.global = s.global; settings.meta = s; updateShroom(); updateAdultTab();
         toast("Réglages enregistrés");
       } catch (e) { toast(`${ICON.warn} Réglage non enregistré : ${esc(e.message)}`); }
     }, 500);
@@ -288,15 +342,16 @@
   function coverUrl(item, cssWidth) {
     const id = item.kind === "folder" ? item.cover_id : item.id;
     const v = item.kind === "folder" ? ("f" + item.cover_id) : item.mtime;
-    return `/api/cover/${id}?w=${coverWidth(cssWidth)}&v=${v}&t=${encodeURIComponent(settings.global.img_tag || "")}`;
+    return `/api/cover/${id}?w=${coverWidth(cssWidth)}&v=${v}&t=${encodeURIComponent(settings.global.img_tag || "")}${item.bust ? "&r=" + item.bust : ""}`;
   }
   function coverHtml(item, inner = "", cssWidth) {
     const id = item.kind === "folder" ? item.cover_id : item.id;
     const ph = `<div class="ph">${item.kind === "folder" ? ICON.folder : ICON.book}</div>`;
     const img = id && !item.error
-      ? `<img loading="lazy" decoding="async" alt="" src="${coverUrl(item, cssWidth || (THUMB[settings.profile.thumb_size] || THUMB.m))}" onerror="this.remove()">`
+      ? `<img loading="lazy" decoding="async" alt="" src="${coverUrl(item, cssWidth || (THUMB[settings.profile.thumb_size] || THUMB.m))}" onerror="this.parentNode.classList.add('fail');this.remove()">`
       : "";
-    return `<div class="cover ${item.kind === "folder" ? "folder" : ""} ${item.error ? "err" : ""}">${ph}${img}${inner}</div>`;
+    const retry = item.kind === "album" ? `<button class="retry" type="button" data-retry="${item.id}" title="Réessayer : relire l'album et refaire sa couverture" aria-label="Réessayer">↻</button>` : "";
+    return `<div class="cover ${item.kind === "folder" ? "folder" : ""} ${item.error ? "err" : ""}">${ph}${img}${retry}${inner}</div>`;
   }
   const FORMAT_EXT = { zip: ["CBZ", "ZIP"], rar: ["CBR", "RAR"], pdf: ["PDF"], "7z": ["CB7", "7Z"], tar: ["CBT", "TAR", "TGZ"], ace: ["ACE"] };
   function formatLabel(it) {
@@ -337,7 +392,7 @@
         bdt = `<div class="sub bdt ${full ? "full" : ""}" title="Bédéthèque : ${esc(item.bdt.title || "")}${item.bdt.status ? " · " + esc(item.bdt.status) : ""}">${full ? "Série complète" : `${item.bdt.present}/${item.bdt.total} tomes`}<i style="width:${pct}%"></i></div>`;
       }
       return `<a class="card folder" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}" draggable="true"${colorStyle(item)}>
-        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${item.fav ? FAV : ""}`)}
+        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${item.adult ? `<span class="badge adult" title="Rubrique Adulte">18+</span>` : ""}${item.fav ? FAV : ""}`)}
         <div class="title">${esc(item.name)}</div>${read || (bdt ? "" : `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`)}${bdt}
       </a>`;
     }
@@ -466,7 +521,9 @@
       const folders = list.filter(c => c.kind === "folder").length, albums = list.length - folders;
       html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small>
         <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
-        <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button></span></h1>`;
+        <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
+        <button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>
+        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Refaire les couvertures (et les couleurs) de tous les albums de cette série">↻ Couvertures</button></span></h1>`;
       html += bdtPanelHtml(data);
     }
     html += lettersHtml(list);
@@ -678,42 +735,51 @@
   const txt = (scope, key, val, placeholder = "") => `<input type="text" data-scope="${scope}" data-key="${key}" value="${esc(val ?? "")}" placeholder="${esc(placeholder)}" style="width:min(360px,100%)">`;
   const range = (scope, key, val, min, max, unit = "%") => `<span class="rangewrap"><input type="range" data-scope="${scope}" data-key="${key}" value="${val}" min="${min}" max="${max}" step="5" oninput="this.nextElementSibling.textContent=this.value+'${unit}'"><output>${val}${unit}</output></span>`;
 
-  async function viewSettings() {
+  const SETTINGS_GROUPS = [
+    ["look", "Affichage"], ["library", "Bibliothèque"], ["reader", "Lecteur"], ["images", "Images et cache"],
+    ["bdt", "Bédéthèque"], ["access", "Profils et accès"], ["adult", "Adulte"], ["lab", "Laboratoire"], ["about", "À propos"],
+  ];
+  async function viewSettings(group) {
     setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
     document.title = "Réglages — Bulle";
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-    await loadSettings();
-    let cache = {}, stats = {};
-    try { [cache, stats] = await Promise.all([api("/api/cache"), api("/api/stats")]); } catch (_) { /* ignore */ }
+    if (!Object.keys(pendingProfile).length && !Object.keys(pendingGlobal).length) await loadSettings();   // pas pendant qu'un réglage part vers le serveur
+    let cache = {}, stats = {}, adult = {};
+    try { [cache, stats, adult] = await Promise.all([api("/api/cache"), api("/api/stats"), api("/api/adult")]); } catch (_) { /* ignore */ }
     const p = settings.profile, g = settings.global;
-    main.innerHTML = `<div class="listhead"><h1>Réglages</h1><button class="btn" type="button" data-action="back" title="Revenir à la page précédente (Échap)">✕ Fermer</button></div>
-    <div class="settings">
-      <section>
-        <h2>Bibliothèque</h2>
+    const tabs = p.settings_layout !== "bricks";
+    if (!SETTINGS_GROUPS.some(([k]) => k === group)) group = "look";
+    const cacheLine = cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—";
+    const sections = {
+      look: () => `
+        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["neon", "Néon arcade (nuit, cyan et magenta, grille)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
+        ${field("Thème", sel("p", "theme", [["dark", "Sombre"], ["light", "Clair"], ["auto", "Comme l'appareil"]], p.theme))}
+        ${field("Réglages : présentation", sel("p", "settings_layout", [["tabs", "Signets (une rubrique à la fois)"], ["bricks", "Briques (tout sur une page)"]], p.settings_layout), "Cette page.")}
+        ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
         ${field("Taille des vignettes", sel("p", "thumb_size", [["s", "Petites"], ["m", "Moyennes"], ["l", "Grandes"], ["xl", "Très grandes"]], p.thumb_size))}
         ${field("Zoom au survol", sel("p", "hover_zoom", [["none", "Aucun"], ["light", "Léger"], ["strong", "Prononcé"]], p.hover_zoom))}
-        ${field("Vignettes par page", sel("p", "per_page", [[24, "24"], [48, "48"], [96, "96"], [192, "192"], [0, "Toutes (pas de pages)"]], p.per_page), "Au-delà, la liste est découpée en pages.")}
+        ${field("Onglets (À lire, Favoris, Listes…)", sel("p", "tabs_side", [["left", "Colonne à gauche"], ["top", "Rangée en haut"]], p.tabs_side), "Sur mobile, toujours en haut.")}
         ${field("Accès par lettre", sel("p", "letters", [["auto", "Automatique (dossiers de 40 entrées et plus)"], ["always", "Toujours"], ["never", "Jamais"]], p.letters))}
         ${field("Position des lettres", sel("p", "letters_side", [["right", "Sur le côté droit"], ["left", "Sur le côté gauche"], ["top", "En haut de la liste"]], p.letters_side))}
         ${field("Taille des lettres", sel("p", "letters_size", [["large", "Grandes"], ["normal", "Normales"]], p.letters_size))}
-        ${field("Onglets (À lire, Favoris, Listes…)", sel("p", "tabs_side", [["left", "Colonne à gauche"], ["top", "Rangée en haut"]], p.tabs_side), "Sur mobile, toujours en haut.")}
-        ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
-        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["sobre", "Sobre"]], p.skin))}
         ${field("Mosaïque de couvertures en fond", sel("p", "mosaic", [["drift", "Oui, qui dérive lentement"], ["fixed", "Oui, fixe"], ["off", "Non"]], p.mosaic), "Pas dans le lecteur. Les couvertures changent doucement en fondu.")}
         ${field("Mosaïque : opacité", range("p", "mosaic_opacity", p.mosaic_opacity, 5, 100), "Plus c'est bas, plus la mosaïque s'efface derrière le contenu.")}
         ${field("Mosaïque : luminosité", range("p", "mosaic_brightness", p.mosaic_brightness, 10, 150))}
-        ${field("Mosaïque : effet transparence", chk("p", "mosaic_glass", p.mosaic_glass), "Les panneaux, la colonne et les fiches deviennent translucides (verre dépoli) et laissent voir la mosaïque. Un peu plus lourd pour le navigateur.")}
+        ${field("Mosaïque : effet transparence", chk("p", "mosaic_glass", p.mosaic_glass), "Les panneaux, la colonne et les fiches deviennent translucides (verre dépoli). Un peu plus lourd pour le navigateur.")}
+        <p><button class="btn" type="button" data-action="reset-profile">Réglages d'affichage par défaut</button></p>`,
+      library: () => `
         ${field("Tri", sel("p", "sort", [["natural", "Alphabétique naturel (T2 avant T10)"], ["recent", "Ajouts récents d'abord"], ["unread", "Non lus d'abord"]], p.sort))}
+        ${field("Vignettes par page", sel("p", "per_page", [[24, "24"], [48, "48"], [96, "96"], [192, "192"], [0, "Toutes (pas de pages)"]], p.per_page), "Au-delà, la liste est découpée en pages.")}
         ${field("Masquer les albums lus", chk("p", "hide_read", p.hide_read))}
         ${field("Nombre de pages sur les cartes", chk("p", "show_pages", p.show_pages))}
         ${field("« Reprendre la lecture » sur l'accueil", chk("p", "show_continue", p.show_continue))}
         ${field("« Ajouts récents » sur l'accueil", chk("p", "show_recent", p.show_recent))}
         ${field("Nombre d'ajouts récents", num("p", "recent_count", p.recent_count, 6, 60, 6))}
-        ${field("Thème", sel("p", "theme", [["dark", "Sombre"], ["light", "Clair"], ["auto", "Comme l'appareil"]], p.theme))}
         ${field("Rouvrir le dernier dossier au démarrage", chk("p", "remember_folder", p.remember_folder))}
-      </section>
-      <section>
-        <h2>Lecteur</h2>
+        ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel), d'après Bédéthèque.")}
+        ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
+        ${field("Album considéré lu", sel("g", "read_threshold", [[1, "À la dernière page"], [0.95, "À partir de 95 %"], [0.9, "À partir de 90 %"], [0.8, "À partir de 80 %"]], g.read_threshold))}`,
+      reader: () => `
         ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"], ["panels", "Case par case"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
         ${field("Double page : couverture seule", chk("p", "reader_cover_alone", p.reader_cover_alone), "Les planches larges (paysage) sont toujours affichées seules.")}
         ${field("Case par case : montrer la page entière avant les cases", chk("p", "reader_panels_full_first", p.reader_panels_full_first), "Désactivé : après la dernière case, on enchaîne directement sur la première case de la planche suivante. Touche C dans le lecteur ; une planche sans cases reconnues s'affiche entière.")}
@@ -727,60 +793,64 @@
         ${field("Délai avant de cacher les barres (s)", num("p", "reader_bars_delay", p.reader_bars_delay, 0.5, 10, 0.5))}
         ${field("Zones de tape sur les bords", chk("p", "reader_tap_zones", p.reader_tap_zones), "Un clic / une tape sur le bord gauche ou droit tourne la page.")}
         ${field("Molette = tourner la page (mode page entière)", chk("p", "reader_wheel", p.reader_wheel))}
-        ${field("Mode nuit : assombrir les pages", sel("p", "reader_night", [[0, "Non"], [15, "Un peu (15 %)"], [30, "Moyen (30 %)"], [50, "Beaucoup (50 %)"]], p.reader_night))}
-      </section>
-      <section>
-        <h2>Images (serveur)</h2>
+        ${field("Mode nuit : assombrir les pages", sel("p", "reader_night", [[0, "Non"], [15, "Un peu (15 %)"], [30, "Moyen (30 %)"], [50, "Beaucoup (50 %)"]], p.reader_night))}`,
+      images: () => `
         ${field("Qualité JPEG", sel("g", "quality", [["eco", "Économique (80, plus rapide sur mobile)"], ["normal", "Normale (90, couleurs intactes)"], ["max", "Maximale (95)"]], g.quality), "Les pages déjà en cache gardent leur ancienne qualité jusqu'à ce qu'on vide le cache.")}
         ${field("Renforcer la netteté après réduction", chk("g", "sharpen", g.sharpen))}
         ${field("Largeur des couvertures (px)", sel("g", "cover_width", [[400, "400"], [600, "600"], [800, "800"], [1000, "1000"]], g.cover_width), "Après changement, utilisez « Régénérer les couvertures ».")}
-        ${field("Album considéré lu", sel("g", "read_threshold", [[1, "À la dernière page"], [0.95, "À partir de 95 %"], [0.9, "À partir de 90 %"], [0.8, "À partir de 80 %"]], g.read_threshold))}
-      </section>
-      <section>
-        <h2>Scan et cache (serveur)</h2>
         ${field("Rescan automatique", sel("g", "scan_interval_hours", [[0, "Jamais (bouton ↻ seulement)"], [1, "Toutes les heures"], [6, "Toutes les 6 h"], [12, "Toutes les 12 h"], [24, "Une fois par jour"], [168, "Une fois par semaine"]], g.scan_interval_hours))}
         ${field("Couvertures générées après un scan", chk("g", "preload_covers", g.preload_covers))}
         ${field("Couvertures générées en parallèle", num("g", "preload_threads", g.preload_threads, 1, 8), "Baisser à 1 sur un petit serveur.")}
         ${field("Taille maximale du cache des pages (Go)", num("g", "cache_max_gb", g.cache_max_gb, 0, 1000), "0 = sans limite. Les pages les moins récentes sont supprimées en premier.")}
-        <div class="field"><div class="flabel"><span>Cache actuel</span><small id="cache-size">${cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—"}</small></div>
+        <div class="field"><div class="flabel"><span>Cache actuel</span><small id="cache-size">${cacheLine}</small></div>
           <div class="actions"><button class="btn" type="button" data-action="scan">↻ Scanner maintenant</button>
           <button class="btn" type="button" data-action="clear-cache">Vider le cache des pages</button>
-          <button class="btn" type="button" data-action="rebuild-covers">Régénérer les couvertures</button></div></div>
-      </section>
-      <section>
-        <h2>Profils et accès</h2>
-        ${field("Demander « qui lit ? » à l'ouverture", chk("g", "require_profile", g.require_profile), "Chaque profil a sa progression et ses réglages d'affichage.")}
-        <div class="field"><div class="flabel"><span>Profils</span><small>Un code PIN par profil est facultatif.</small></div>
-          <div class="plist">${(settings.meta.profiles || []).map(p => `<span class="prow"><span class="pavatar small">${esc(p.avatar || initial(p.name))}</span> ${esc(p.name)}${p.has_pin ? " 🔒" : ""}
-            <button class="btn mini" type="button" data-action="profile-edit" data-id="${p.id}" data-name="${esc(p.name)}">Modifier</button>${p.id === 1 ? "" : `<button class="btn mini" type="button" data-action="profile-delete" data-id="${p.id}" data-name="${esc(p.name)}">Supprimer</button>`}</span>`).join("")}
-            <button class="btn mini" type="button" data-action="profile-add">+ Ajouter un profil</button></div></div>
-        <div class="field"><div class="flabel"><span>Code d'accès à Bulle</span><small>${g.access_pin_set ? "Un code est demandé à l'ouverture (et pour le flux OPDS : mot de passe = ce code)." : "Aucun code : tout le réseau local peut ouvrir Bulle."}</small></div>
-          <div class="actions"><button class="btn" type="button" data-action="access-pin-set">${g.access_pin_set ? "Changer le code" : "Définir un code"}</button>${g.access_pin_set ? `<button class="btn" type="button" data-action="access-pin-clear">Supprimer le code</button>` : ""}</div></div>
-        ${field("Flux OPDS pour les applis mobiles", chk("g", "opds_enabled", g.opds_enabled), `Adresse à donner à l'appli (Panels, Chunky, Moon+, Mihon…) : <code>${esc(location.origin)}/opds</code>`)}
-      </section>
-      <section>
-        <h2>Le laboratoire</h2>
-        ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}
-      </section>
-      <section>
-        <h2>Bédéthèque</h2>
+          <button class="btn" type="button" data-action="rebuild-covers">Régénérer toutes les couvertures</button></div></div>
+        <p class="muted">Pour une seule série : bouton « ↻ Couvertures » en haut de sa page. Pour un seul album en échec : le petit ↻ en haut à droite de sa pochette.</p>`,
+      bdt: () => `
         ${field("Autoriser les requêtes vers bedetheque.com", chk("g", "bdt_enabled", g.bdt_enabled), "Uniquement quand vous cliquez « Analyser » (ou l'analyse groupée de la page Collection).")}
         ${field("Requêtes par minute (maximum)", num("g", "bdt_per_minute", g.bdt_per_minute, 1, 60), "Intervalle irrégulier autour de 60 / ce nombre, jamais plus dans une minute glissante. 10 par défaut.")}
         ${field("Pause toutes les N requêtes (tâches de fond)", num("g", "bdt_pause_every", g.bdt_pause_every, 0, 1000, 10), "Analyse groupée et résumés en série ; 0 = pas de pause. Vos clics ne sont jamais mis en pause.")}
         ${field("Durée de la pause (min)", num("g", "bdt_pause_minutes", g.bdt_pause_minutes, 0.5, 30, 0.5), "± 20 % au hasard.")}
         ${field("Délai minimum entre deux requêtes (s)", num("g", "bdt_interval", g.bdt_interval, 1, 30, 0.5))}
-        ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel).")}
-        ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
         ${field("Résumé lu à l'ouverture d'une fiche", chk("g", "bdt_auto_summary", g.bdt_auto_summary), "Une requête vers la fiche de l'album, une seule fois ; le bouton « Résumés » d'une série les lit tous en tâche de fond.")}
-        <p class="muted">Rien n'est jamais écrit dans vos fichiers : les informations Bédéthèque restent dans la base de Bulle. <a href="#/collection">Voir la collection</a>.</p>
-      </section>
-      <section>
-        <h2>À propos</h2>
+        <p class="muted">Rien n'est jamais écrit dans vos fichiers : les informations Bédéthèque restent dans la base de Bulle. <a href="#/collection">Voir la collection</a>.</p>`,
+      access: () => `
+        ${field("Demander « qui lit ? » à l'ouverture", chk("g", "require_profile", g.require_profile), "Chaque profil a sa progression et ses réglages d'affichage.")}
+        <div class="field"><div class="flabel"><span>Profils</span><small>Un code PIN par profil est facultatif.</small></div>
+          <div class="plist">${(settings.meta.profiles || []).map(pr => `<span class="prow"><span class="pavatar small">${esc(pr.avatar || initial(pr.name))}</span> ${esc(pr.name)}${pr.has_pin ? " 🔒" : ""}
+            <button class="btn mini" type="button" data-action="profile-edit" data-id="${pr.id}" data-name="${esc(pr.name)}">Modifier</button>${pr.id === 1 ? "" : `<button class="btn mini" type="button" data-action="profile-delete" data-id="${pr.id}" data-name="${esc(pr.name)}">Supprimer</button>`}</span>`).join("")}
+            <button class="btn mini" type="button" data-action="profile-add">+ Ajouter un profil</button></div></div>
+        <div class="field"><div class="flabel"><span>Code d'accès à Bulle</span><small>${g.access_pin_set ? "Un code est demandé à l'ouverture (et pour le flux OPDS : mot de passe = ce code)." : "Aucun code : tout le réseau local peut ouvrir Bulle."}</small></div>
+          <div class="actions"><button class="btn" type="button" data-action="access-pin-set">${g.access_pin_set ? "Changer le code" : "Définir un code"}</button>${g.access_pin_set ? `<button class="btn" type="button" data-action="access-pin-clear">Supprimer le code</button>` : ""}</div></div>
+        ${field("Flux OPDS pour les applis mobiles", chk("g", "opds_enabled", g.opds_enabled), `Adresse à donner à l'appli (Panels, Chunky, Moon+, Mihon…) : <code>${esc(location.origin)}/opds</code>`)}`,
+      adult: () => `
+        <p class="muted">Les séries marquées « 18+ » (bouton en haut de leur page) disparaissent de partout — accueil, recherche, hasard, mosaïque, OPDS — tant que le code n'est pas entré. Une fois entré, elles restent visibles 12 heures sur l'appareil. Rien n'est déplacé ni modifié dans vos fichiers.</p>
+        <div class="field"><div class="flabel"><span>Code de la rubrique</span><small>${g.adult_pin_set ? (g.adult_unlocked ? "Code défini · rubrique déverrouillée sur cet appareil." : "Code défini · rubrique verrouillée.") : "Aucun code : les séries 18+ sont visibles par tout le monde. Définissez un code pour les cacher."}</small></div>
+          <div class="actions">${g.adult_pin_set && !g.adult_unlocked ? `<button class="btn primary" type="button" data-action="adult-unlock">Déverrouiller</button>` : ""}
+          ${g.adult_pin_set && g.adult_unlocked ? `<button class="btn" type="button" data-action="adult-lock">Verrouiller maintenant</button>` : ""}
+          <button class="btn" type="button" data-action="adult-pin-set">${g.adult_pin_set ? "Changer le code" : "Définir un code"}</button>
+          ${g.adult_pin_set ? `<button class="btn" type="button" data-action="adult-pin-clear">Supprimer le code</button>` : ""}</div></div>
+        <div class="field"><div class="flabel"><span>Séries dans la rubrique</span><small>${plural(g.adult_count || 0, "série", "séries")}${g.adult_count && !adult.folders ? " · entrez le code pour voir la liste" : ""}</small></div>
+          <div class="plist">${(adult.folders || []).map(f => `<span class="prow"><a href="#/f/${f.id}">${esc(f.name)}</a> <button class="btn mini" type="button" data-action="adult-toggle" data-id="${f.id}" data-adult="1" data-stay="1">Retirer</button></span>`).join("")}
+            ${adult.folders && !adult.folders.length ? `<span class="muted">Aucune pour l'instant : ouvrez une série et cliquez « 18+ ».</span>` : ""}</div></div>
+        <p class="muted"><a href="#/adult">Ouvrir la rubrique Adulte</a> (aussi dans la colonne de gauche dès qu'une série y est).</p>`,
+      lab: () => `
+        ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}`,
+      about: () => `
         <p class="muted">Bulle ${esc(settings.meta.version || "")} · ${plural(stats.albums || 0, "album", "albums")} dans ${plural(stats.folders || 0, "dossier", "dossiers")} (${fmtSize(stats.size || 0)}) · dernier scan : ${fmtDate(stats.last_scan)}<br>
         Dossier des BD : <code>${esc(settings.meta.library_root || "")}</code> · <a href="https://github.com/kermess14/bulle" target="_blank" rel="noopener">github.com/kermess14/bulle</a></p>
-        <p><button class="btn" type="button" data-action="reset-profile">Réglages d'affichage par défaut</button></p>
-      </section>
-    </div>`;
+        <p class="muted">Raccourcis : Échap revient en arrière ; dans le lecteur, D change l'affichage, C le case par case, T les miniatures, + / − / 0 le zoom.</p>`,
+    };
+    const section = ([k, name]) => `<section data-group="${k}"><h2>${name}</h2>${sections[k]()}</section>`;
+    const head = `<div class="listhead"><h1>Réglages</h1><button class="btn" type="button" data-action="back" title="Revenir à la page précédente (Échap)">✕ Fermer</button></div>`;
+    if (tabs) {
+      main.innerHTML = `${head}<div class="settings tabbed">
+        <nav class="stabs" aria-label="Rubriques">${SETTINGS_GROUPS.map(([k, name]) => `<a class="tab ${k === group ? "on" : ""}" href="#/settings/${k}">${name}</a>`).join("")}</nav>
+        <div class="spane">${section(SETTINGS_GROUPS.find(([k]) => k === group))}</div></div>`;
+    } else {
+      main.innerHTML = `${head}<div class="settings">${SETTINGS_GROUPS.map(section).join("")}</div>`;
+    }
   }
 
   main.addEventListener("change", e => {
@@ -790,6 +860,7 @@
     if (el.type === "number" || el.type === "range" || (el.tagName === "SELECT" && /^-?\d+(\.\d+)?$/.test(val))) val = Number(val);
     if (el.dataset.scope === "g") saveSettings(null, { [el.dataset.key]: val });
     else saveSettings({ [el.dataset.key]: val }, null);
+    if (el.dataset.key === "settings_layout") route();
   });
 
   async function settingsAction(action, btn) {
@@ -836,6 +907,32 @@
       } else if (action === "list-delete") {
         if (!confirm(`Supprimer la liste « ${btn.dataset.name} » ? (les albums ne sont pas touchés)`)) return;
         await api(`/api/lists/${btn.dataset.id}`, { method: "DELETE" }); listsCache = null; renderSidebar(); location.hash = "#/lists";
+      } else if (action === "adult-toggle") {
+        const on = btn.dataset.adult !== "1";
+        if (on && !settings.global.adult_pin_set && !confirm("Aucun code n'est défini pour la rubrique Adulte : la série y sera rangée mais restera visible. Continuer ? (Le code se définit dans Réglages › Adulte.)")) return;
+        const r = await putJson("/api/adult/folder", { folder_id: +btn.dataset.id, adult: on });
+        settings.global.adult_count = r.count; updateAdultTab();
+        toast(on ? "Série rangée dans la rubrique Adulte" : "Série retirée de la rubrique Adulte");
+        if (on) pow(powFor("adult"), lastPointer.x, lastPointer.y);
+        route();
+      } else if (action === "rebuild-folder") {
+        if (!confirm(`Refaire les couvertures de tous les albums de « ${btn.dataset.name} » ?`)) return;
+        const r = await fetch(`/api/covers/rebuild/folder/${btn.dataset.id}`, { method: "POST" });
+        if (r.status === 409) { toast("Un scan est déjà en cours, réessayez après."); return; }
+        if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+        const j = await r.json();
+        toast(`${plural(j.count, "couverture", "couvertures")} en cours de régénération…`);
+        pollScan(true);
+      } else if (action === "adult-unlock") {
+        if (await adultPrompt()) route();
+      } else if (action === "adult-lock") {
+        await api("/api/adult/lock", { method: "POST" }); settings.global.adult_unlocked = false; updateAdultTab(); toast("Rubrique Adulte verrouillée"); route();
+      } else if (action === "adult-pin-set") {
+        const pin = prompt(settings.global.adult_pin_set ? "Nouveau code de la rubrique Adulte :" : "Code de la rubrique Adulte (chiffres ou mot de passe) :"); if (!pin) return;
+        await putJson("/api/settings", { global: { adult_pin: pin } }); toast("Code de la rubrique Adulte enregistré"); route();
+      } else if (action === "adult-pin-clear") {
+        if (!confirm("Supprimer le code ? Les séries 18+ redeviendront visibles par tout le monde.")) return;
+        await putJson("/api/settings", { global: { adult_pin: "" } }); toast("Code supprimé"); route();
       } else if (action === "reset-profile") {
         const patch = {}; for (const k of Object.keys(PROFILE_DEFAULTS)) patch[k] = null;
         await putJson("/api/settings", { profile: patch });
@@ -1010,7 +1107,7 @@
   function markTab() {
     const h = location.hash || "#/";
     let m;
-    const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
+    const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/adult") ? "adult" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
     for (const a of document.querySelectorAll("#maintabs a")) a.classList.toggle("on", a.dataset.tab === tab);
   }
 
@@ -1082,6 +1179,32 @@
     main.innerHTML = `<div class="listhead"><h1>${icon} ${esc(l.name)} <small class="muted h1sub">${plural(data.items.length, "élément", "éléments")}</small></h1>
       ${l.kind === "custom" ? `<button class="btn mini" type="button" data-action="list-rename" data-id="${l.id}" data-name="${esc(l.name)}">Renommer</button><button class="btn mini" type="button" data-action="list-delete" data-id="${l.id}" data-name="${esc(l.name)}">Supprimer</button>` : ""}</div>
       ${data.items.length ? `<div class="grid" id="grid">${data.items.map(it => card(it, { sub: it.folder }).replace("</a>", `<button class="remove" type="button" data-unlist="${l.id}" data-node="${it.id}" title="Retirer de la liste">×</button></a>`)).join("")}</div>` : `<div class="empty">${empty}</div>`}`;
+  }
+  async function viewAdult() {
+    setCrumbs([{ id: 0, name: "Accueil" }], "Adulte");
+    document.title = "Rubrique Adulte — Bulle";
+    main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    const a = await api("/api/adult");
+    settings.global.adult_unlocked = a.unlocked; settings.global.adult_pin_set = a.pin_set; settings.global.adult_count = a.count; updateAdultTab();
+    if (!a.unlocked) {
+      main.innerHTML = `<div class="listhead"><h1>🔞 Rubrique Adulte</h1></div>
+        <form class="adult-gate" id="adult-gate"><p>${plural(a.count, "série cachée", "séries cachées")}. Entrez le code pour les voir pendant 12 heures sur cet appareil.</p>
+        <div class="pin-inline"><input type="password" inputmode="numeric" autocomplete="off" name="pin" placeholder="Code" autofocus><button class="btn primary" type="submit">Déverrouiller</button><p class="error" hidden></p></div></form>`;
+      $("#adult-gate").addEventListener("submit", async e => {
+        e.preventDefault();
+        const f = e.target, err = f.querySelector(".error");
+        try {
+          await api("/api/adult/unlock", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin: f.elements.pin.value }), noAdultPrompt: true });
+          pow(powFor("adult")); route();
+        } catch (e2) { err.textContent = e2.message; err.hidden = false; f.elements.pin.select(); }
+      });
+      return;
+    }
+    const folders = a.folders || [];
+    main.innerHTML = `<div class="listhead"><h1>🔞 Rubrique Adulte <small class="muted h1sub">${plural(folders.length, "série", "séries")}</small></h1>
+      ${a.pin_set ? `<button class="btn" type="button" data-action="adult-lock">Verrouiller</button>` : `<a class="btn" href="#/settings/adult">Définir un code</a>`}</div>
+      ${!a.pin_set ? `<p class="muted">Aucun code n'est défini : ces séries sont visibles par tout le monde. <a href="#/settings/adult">Définir un code</a> pour les cacher.</p>` : ""}
+      ${folders.length ? `<div class="grid" id="grid">${folders.map(f => card(f)).join("")}</div>` : `<div class="empty"><strong>Rien ici pour l'instant.</strong><p>Ouvrez une série et cliquez le bouton « 18+ » en haut de sa page pour la mettre dans cette rubrique.</p></div>`}`;
   }
   async function viewLists() {
     setCrumbs([{ id: 0, name: "Accueil" }], "Listes");
@@ -1257,7 +1380,21 @@
   window.addEventListener("scroll", closePop, { passive: true });
   window.addEventListener("hashchange", closePop);
 
+  async function retryCover(btn) {
+    const cardEl = btn.closest(".card");
+    btn.disabled = true; btn.classList.add("spin");
+    try {
+      const it = await api(`/api/covers/retry/${btn.dataset.retry}`, { method: "POST" });
+      it.bust = Date.now();
+      const i = view.children.findIndex(c => c.id === it.id);
+      if (i >= 0) view.children[i] = Object.assign(view.children[i], it);
+      if (cardEl) cardEl.outerHTML = card(it, it.folder ? { sub: it.folder } : {});
+      toast(it.error ? `${ICON.warn} Toujours en échec : ${esc(it.error)}` : "Album relu, couverture refaite");
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); btn.disabled = false; btn.classList.remove("spin"); }
+  }
   main.addEventListener("click", e => {
+    const retry = e.target.closest("[data-retry]");
+    if (retry) { e.preventDefault(); retryCover(retry); return; }
     const info = e.target.closest("[data-info]");
     if (info) { e.preventDefault(); openInfo(info.dataset.info); return; }
     const sum = e.target.closest("[data-sum]");
@@ -1309,8 +1446,10 @@
         const q = decodeURIComponent(m[1]);
         if (searchInput.value.trim() !== q) searchInput.value = q;
         await viewSearch(q);
-      } else if (h.startsWith("#/settings")) {
-        await viewSettings();
+      } else if ((m = /^#\/settings(?:\/(\w+))?/.exec(h))) {
+        await viewSettings(m[1]);
+      } else if (h.startsWith("#/adult")) {
+        await viewAdult();
       } else if ((m = /^#\/collection(?:\/(\w+))?/.exec(h))) {
         await viewCollection(m[1]);
       } else if ((m = /^#\/list\/(\w+)/.exec(h))) {
