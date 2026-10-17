@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -1249,7 +1249,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    port = env_int("PORT", 2203)
+    port = env_int("PORT", 2205)
     host = os.environ.get("HOST", "0.0.0.0")
     app = create_app()
     log.info("Bulle %s — bibliothèque : %s — http://%s:%d", VERSION, os.environ.get("LIBRARY_ROOT", "/library"),
