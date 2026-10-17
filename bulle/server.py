@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
-from flask import Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory
+from flask import Flask, Response, abort, g as flask_g, jsonify, make_response, request, send_file, send_from_directory
 from itsdangerous import BadSignature, URLSafeSerializer
 from PIL import Image
 
@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.9.1"
+VERSION = "0.10.0"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -67,6 +67,7 @@ def global_defaults() -> dict:
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
         "tools_url": "auto",          # BDConverter dans le menu caché (champignon) : adresse, "auto" = même machine, port 3111, "" = masqué
+        "adult_paths": [],            # dossiers de la rubrique Adulte (chemins relatifs), cachés tant que le code n'est pas entré
     }
 
 
@@ -76,7 +77,7 @@ GLOBAL_TYPES = {
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
-    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,),
+    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,),
 }
 
 
@@ -152,6 +153,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     val = str(val).strip()[:500]
                     if len(spec) > 1 and val not in spec[1]:
                         abort(400, description=f"Valeur invalide pour {key}")
+                elif typ is list:
+                    val = [str(v).strip("/") for v in (val or []) if str(v).strip("/")][:2000]
             except (TypeError, ValueError):
                 abort(400, description=f"Valeur invalide pour {key}")
             out[key] = val
@@ -186,6 +189,44 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     def access_pin_hash() -> Optional[str]:
         return lib.get_settings(None).get("access_pin_hash") or None
+
+    # ---- rubrique Adulte : dossiers cachés tant que le code n'est pas entré (cookie signé, valable 12 h)
+    ADULT_TTL = 12 * 3600
+
+    def adult_pin_hash() -> Optional[str]:
+        return lib.get_settings(None).get("adult_pin_hash") or None
+
+    def adult_paths() -> list[str]:
+        cached = getattr(flask_g, "_adult_paths", None)
+        if cached is None:
+            cached = [p.strip("/") for p in (settings().get("adult_paths") or []) if p.strip("/")]
+            flask_g._adult_paths = cached
+        return cached
+
+    def is_adult_path(path: str) -> bool:
+        path = (path or "").strip("/")
+        return any(path == p or path.startswith(p + "/") for p in adult_paths())
+
+    def adult_unlocked() -> bool:
+        stored = adult_pin_hash()
+        if not stored:
+            return True
+        tok = request.cookies.get("bulle_adult")
+        if not tok:
+            return False
+        try:
+            data = signer.loads(tok)
+            return data.get("adult") == stored[-16:] and time.time() - float(data.get("t", 0)) < ADULT_TTL
+        except (BadSignature, AttributeError, ValueError, TypeError):
+            return False
+
+    def hidden(node: dict) -> bool:
+        return bool(adult_paths()) and is_adult_path(node.get("path", "")) and not adult_unlocked()
+
+    def visible(nodes: list[dict]) -> list[dict]:
+        if not adult_paths() or adult_unlocked():
+            return nodes
+        return [n for n in nodes if not is_adult_path(n.get("path", ""))]
 
     def auth_ok() -> bool:
         stored = access_pin_hash()
@@ -276,10 +317,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             node["error"] = f"Erreur inattendue : {e}"
         return node
 
-    def get_node(node_id: int, kind: Optional[str] = None) -> dict:
+    def get_node(node_id: int, kind: Optional[str] = None, allow_hidden: bool = False) -> dict:
         node = lib.node(node_id)
         if not node or (kind and node["kind"] != kind):
             abort(404, description="Introuvable (relancez un scan ?)")
+        if not allow_hidden and hidden(node):
+            abort(403, description="adult_locked")
         return node
 
     def meta_json(m: Optional[dict]) -> Optional[dict]:
@@ -294,7 +337,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 "summary_at": a.get("summary_at")}
 
     def folder_payload(folder: dict, profile_id: int) -> dict:
-        children = lib.children(folder["id"])
+        children = visible(lib.children(folder["id"]))
+        adult_set = set(adult_paths())
         prog = lib.all_progress(profile_id)
         by_id = {p["node_id"]: p for p in prog}
         metas = lib.bdt_albums_for_folder(folder["id"])
@@ -306,6 +350,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             j = album_json(c, with_progress=False)
             if c["kind"] == "folder" and c.get("cover_id"):
                 j["color"] = folder_colors.get(c["cover_id"])
+            if c["kind"] == "folder" and c["path"].strip("/") in adult_set:
+                j["adult"] = True
             if c["id"] in favs:
                 j["fav"] = True
             if c["kind"] == "album":
@@ -324,6 +370,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         payload = {"folder": album_json(folder, with_progress=False), "breadcrumb": lib.breadcrumb(folder),
                    "children": out}
         payload["folder"]["fav"] = folder["id"] in favs
+        payload["folder"]["adult"] = folder["path"].strip("/") in adult_set
+        payload["adult_unlocked"] = adult_unlocked()
         link = lib.bdt_series_get(folder["id"])
         if link:
             payload["bdt"] = bdt_report(folder, link, children)
@@ -358,7 +406,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     def with_folder(items: list[dict]) -> list[dict]:
         out = []
-        for n in items:
+        for n in visible(items):
             j = album_json(n)
             crumbs = lib.breadcrumb(n)
             j["folder"] = " › ".join(c["name"] for c in crumbs[1:-1])
@@ -515,6 +563,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         g = settings()
         g.pop("access_pin_hash", None)
         g["access_pin_set"] = bool(access_pin_hash())
+        g.pop("adult_pin_hash", None)
+        g["adult_pin_set"] = bool(adult_pin_hash())
+        g["adult_unlocked"] = adult_unlocked()
+        g["adult_count"] = len(adult_paths())
+        if not adult_unlocked():
+            g.pop("adult_paths", None)
         g["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
         return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid,
                         "profile_selected": profile_selected(), "profiles": lib.profiles(), "version": VERSION,
@@ -530,11 +584,24 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if "access_pin" in g:
                 pin = str(g.pop("access_pin") or "").strip()
                 lib.set_settings({"access_pin_hash": hash_pin(pin) if pin else None}, None)
+            if "adult_pin" in g:
+                if adult_pin_hash() and not adult_unlocked():
+                    abort(403, description="adult_locked")
+                pin = str(g.pop("adult_pin") or "").strip()
+                lib.set_settings({"adult_pin_hash": hash_pin(pin) if pin else None}, None)
+            if "adult_paths" in g and adult_pin_hash() and not adult_unlocked():
+                abort(403, description="adult_locked")
             lib.set_settings(validate_global(g), None)
             apply_settings(settings())
         if isinstance(body.get("profile"), dict):
             lib.set_settings(validate_profile_settings(body["profile"]), pid)
         resp = make_response(api_settings_get())
+        if isinstance(body.get("global"), dict) and "adult_pin" in body["global"]:
+            stored = adult_pin_hash()
+            if stored:
+                resp.set_cookie("bulle_adult", signer.dumps({"adult": stored[-16:], "t": time.time()}), max_age=ADULT_TTL, samesite="Lax")
+            else:
+                resp.delete_cookie("bulle_adult")
         if isinstance(body.get("global"), dict) and "access_pin" in body["global"]:
             stored = access_pin_hash()
             if stored:
@@ -543,6 +610,79 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             else:
                 resp.delete_cookie("bulle_auth")
         return resp
+
+    # ------------------------------------------------------------------ API : rubrique Adulte
+    @app.route("/api/adult")
+    def api_adult():
+        unlocked = adult_unlocked()
+        out = {"pin_set": bool(adult_pin_hash()), "unlocked": unlocked, "count": len(adult_paths())}
+        if unlocked:
+            folders = []
+            for p in adult_paths():
+                node = lib.node_by_path(p)
+                if node:
+                    folders.append(album_json(node, with_progress=False))
+            out["folders"] = folders
+        return jsonify(out)
+
+    @app.route("/api/adult/unlock", methods=["POST"])
+    def api_adult_unlock():
+        body = request.get_json(force=True, silent=True) or {}
+        stored = adult_pin_hash()
+        if stored and not check_pin(stored, str(body.get("pin") or "")):
+            time.sleep(0.8)
+            abort(403, description="Code incorrect")
+        resp = make_response(jsonify({"unlocked": True}))
+        if stored:
+            resp.set_cookie("bulle_adult", signer.dumps({"adult": stored[-16:], "t": time.time()}), max_age=ADULT_TTL, samesite="Lax")
+        return resp
+
+    @app.route("/api/adult/lock", methods=["POST"])
+    def api_adult_lock():
+        resp = make_response(jsonify({"unlocked": False}))
+        resp.delete_cookie("bulle_adult")
+        return resp
+
+    @app.route("/api/adult/folder", methods=["PUT"])
+    def api_adult_folder():
+        """Marque (ou démarque) un dossier comme faisant partie de la rubrique Adulte."""
+        if adult_pin_hash() and not adult_unlocked():
+            abort(403, description="adult_locked")
+        body = request.get_json(force=True, silent=True) or {}
+        folder = get_node(int(body.get("folder_id", 0)), "folder", allow_hidden=True)
+        paths = [p for p in adult_paths() if p != folder["path"].strip("/")]
+        if body.get("adult"):
+            paths.append(folder["path"].strip("/"))
+        lib.set_settings({"adult_paths": paths}, None)
+        flask_g._adult_paths = None
+        return jsonify({"adult": bool(body.get("adult")), "count": len(paths)})
+
+    # ------------------------------------------------------------------ API : couvertures, par série ou par album
+    @app.route("/api/covers/rebuild/folder/<int:folder_id>", methods=["POST"])
+    def api_covers_rebuild_folder(folder_id: int):
+        """Régénère les couvertures (et la couleur) de tous les albums d'une série, en tâche de fond."""
+        folder = get_node(folder_id, "folder")
+        if lib.status["running"]:
+            return jsonify(lib.status), 409
+        todo = lib.albums_under(folder["path"])
+        for n in todo:
+            comics.clear_cover(n["id"])
+            lib.set_pages(n["id"], None, None)
+        threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, f"Couvertures de {folder['name']}")),
+                         name="bulle-covers", daemon=True).start()
+        time.sleep(0.2)
+        return jsonify({"count": len(todo), "scan": lib.status}), 202
+
+    @app.route("/api/covers/retry/<int:node_id>", methods=["POST"])
+    def api_covers_retry(node_id: int):
+        """Réessaie un album en échec (ou refait sa couverture) tout de suite."""
+        node = get_node(node_id, "album")
+        comics.clear_cover(node["id"])
+        comics.invalidate([node["id"]])
+        lib.set_pages(node["id"], None, None)
+        node["page_count"], node["error"] = None, None
+        node = ensure_pages(node)
+        return jsonify(album_json(node, with_progress=False))
 
     @app.route("/api/auth/status")
     def api_auth_status():
@@ -686,7 +826,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.errorhandler(502)
     def api_error(e):
         if request.path.startswith("/api/"):
-            return jsonify({"error": getattr(e, "description", str(e))}), e.code
+            desc = getattr(e, "description", str(e))
+            if desc == "adult_locked":
+                return jsonify({"error": "Rubrique Adulte verrouillée : entrez le code", "adult_locked": True}), 403
+            return jsonify({"error": desc}), e.code
         return e
 
     # ------------------------------------------------------------------ API : listes, favoris, historique, hasard
@@ -713,7 +856,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if not l:
             abort(404, description="Liste inconnue")
         items = []
-        for n in lib.list_items(list_id, pid):
+        for n in visible(lib.list_items(list_id, pid)):
             j = album_json(n)
             crumbs = lib.breadcrumb(n)
             j["folder"] = " › ".join(c["name"] for c in crumbs[1:-1])
@@ -779,13 +922,20 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_covers_sample():
         """Couvertures au hasard pour la mosaïque de fond (seulement celles déjà générées : pas de travail serveur)."""
         n = request.args.get("n", 60, type=int)
-        out = [{"id": r["id"], "mtime": int(r["mtime"] or 0)} for r in lib.random_covers(n * 2)
-               if os.path.exists(comics.cover_path(r["id"]))][:n]
+        rows = lib.random_covers(n * 2)
+        if adult_paths() and not adult_unlocked():
+            rows = [r for r in rows if not is_adult_path(r["path"])]
+        out = [{"id": r["id"], "mtime": int(r["mtime"] or 0)} for r in rows if os.path.exists(comics.cover_path(r["id"]))][:n]
         return jsonify(out)
 
     @app.route("/api/random")
     def api_random():
-        n = lib.random_album(unread_only=request.args.get("unread", "1") != "0", profile_id=current_profile())
+        n = None
+        for _ in range(12):   # au hasard, mais jamais un album de la rubrique Adulte verrouillée
+            n = lib.random_album(unread_only=request.args.get("unread", "1") != "0", profile_id=current_profile())
+            if not n or not hidden(n):
+                break
+            n = None
         if not n:
             abort(404, description="Aucun album")
         j = album_json(n)
@@ -836,7 +986,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def opds_folder(node_id: int):
         opds_check()
         folder = get_node(node_id, "folder")
-        children = lib.children(node_id)
+        children = visible(lib.children(node_id))
         pid = current_profile()
         prog = {p["node_id"]: {"page": p["page"], "completed": bool(p["completed"])} for p in lib.all_progress(pid)}
         metas = {k: meta_json(v) for k, v in lib.bdt_albums_for_folder(node_id).items()}
@@ -846,20 +996,20 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/opds/continue")
     def opds_continue():
         opds_check()
-        albums = opds_enrich(lib.continue_reading(limit=100, profile_id=current_profile()))
+        albums = opds_enrich(visible(lib.continue_reading(limit=100, profile_id=current_profile())))
         return opds_response(opds.list_feed(opds_base(), "Reprendre la lecture", "/opds/continue", albums))
 
     @app.route("/opds/recent")
     def opds_recent():
         opds_check()
-        albums = opds_enrich(lib.recent(limit=100, profile_id=current_profile()))
+        albums = opds_enrich(visible(lib.recent(limit=100, profile_id=current_profile())))
         return opds_response(opds.list_feed(opds_base(), "Ajouts récents", "/opds/recent", albums))
 
     @app.route("/opds/search")
     def opds_search():
         opds_check()
         q = (request.args.get("q") or "").strip()
-        albums = opds_enrich([n for n in lib.search(q, limit=200, profile_id=current_profile()) if n["kind"] == "album"]) if len(q) >= 2 else []
+        albums = opds_enrich([n for n in visible(lib.search(q, limit=200, profile_id=current_profile())) if n["kind"] == "album"]) if len(q) >= 2 else []
         page = max(1, request.args.get("page", 1, type=int))
         return opds_response(opds.list_feed(opds_base(), f"Recherche : {q}", opds.search_href(q), albums, page))
 
