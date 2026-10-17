@@ -48,7 +48,8 @@
   let item = null, pages = 0, current = -1, shown = [], folderHref = "/";
   const aspects = {};            // n -> largeur/hauteur de la page (connue après chargement)
   const images = new Map();      // n -> Image (préchargées / chargées)
-  let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1;
+  let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1, navBusy = false, navSince = 0;
+  const busy = () => navBusy && Date.now() - navSince < 4000;   // garde-fou : jamais bloqué plus de 4 s
   let panelIdx = -1;             // case par case : -1 = page entière, sinon index dans l'ordre de lecture
   const panelsCache = new Map(); // n -> {panels, rtl}
 
@@ -166,6 +167,8 @@
     hideEnd();
     if (mode === "scroll") { scrollToPage(n, save); return; }
     const token = ++loadToken;
+    navBusy = true; navSince = Date.now();
+    const done = () => { if (token === loadToken) navBusy = false; };
     if (mode === "panels") getPanels(n);
     const spin = setTimeout(() => { if (token === loadToken) loading.hidden = false; }, 180);
     let list;
@@ -214,6 +217,7 @@
       applyPanel(false);
     }
     updateCounter();
+    done();
     if (save) saveProgress(n);
     const u = new URL(location.href); u.searchParams.set("page", n); history.replaceState(null, "", u);
     preloadAround(list[list.length - 1]);
@@ -658,18 +662,29 @@
     else if (mode !== "scroll" && prefs.reader_tap_zones && x > w * 0.7) forward();
     else toggleBars();
   });
-  let wheelLock = 0;
+  /* Molette : un cran = un pas, même si le navigateur (défilement lisse) ou le pavé tactile (inertie) envoient
+     une rafale d'événements : tous les événements d'un même geste (espacés de moins de 200 ms) comptent pour un. */
+  const wheelStream = { last: 0, used: false };
   stage.addEventListener("wheel", e => {
     if (e.ctrlKey || e.metaKey || userZoom > 1) return;
     if (mode === "scroll" || !prefs.reader_wheel || (mode === "single" && fit !== "page")) return;
-    if (mode === "panels") { const now2 = Date.now(); if (now2 - wheelLock < 250) return; wheelLock = now2; e.deltaY > 0 ? panelStep(1) : panelStep(-1); return; }
-    const now = Date.now(); if (now - wheelLock < 250) return; wheelLock = now;
-    if (e.deltaY > 0) next(); else if (e.deltaY < 0) prev();
+    const now = Date.now();
+    const sameGesture = now - wheelStream.last < 200;
+    wheelStream.last = now;
+    if (sameGesture && wheelStream.used) return;
+    if (!sameGesture) wheelStream.used = false;
+    if (Math.abs(e.deltaY) < 3) return;
+    wheelStream.used = true;
+    if (busy()) return;   // une planche est en train de se charger : on n'empile pas les pas
+    if (mode === "panels") { panelStep(e.deltaY > 0 ? 1 : -1); return; }
+    if (e.deltaY > 0) next(); else prev();
   }, { passive: true });
 
   // ---------------------------------------------------------------- clavier
   document.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.repeat && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ")) { e.preventDefault(); return; }
+    if (busy() && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ") && mode === "panels") { e.preventDefault(); return; }
     if (!endEl.hidden && e.key === "Enter" && item && item.next) { location.href = `/read/${item.next.id}?page=0`; return; }
     if (!strip.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       e.preventDefault();
