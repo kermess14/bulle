@@ -12,22 +12,35 @@
   const FIT_LABEL = { page: "Page", width: "Largeur", original: "1:1" };
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  // ---------------------------------------------------------------- réglages mémorisés (par album + défaut)
+  // ---------------------------------------------------------------- réglages (profil, serveur) + mémoire par album (navigateur)
+  const DEFAULTS = {
+    reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
+    reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
+  };
+  const prefs = Object.assign({}, DEFAULTS);
+  try { Object.assign(prefs, pick(JSON.parse(localStorage.getItem("bulle:profile") || "{}"))); } catch (_) { /* ignore */ }
+  function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
   const store = {
     get(key) { try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { return null; } },
     set(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (_) { /* ignore */ } },
   };
-  const defaults = Object.assign({ fit: "page", manga: false }, store.get("bulle:reader:default") || {});
-  const perAlbum = store.get(`bulle:reader:${id}`) || {};
-  let fit = FITS.includes(perAlbum.fit) ? perAlbum.fit : defaults.fit;
-  let manga = typeof perAlbum.manga === "boolean" ? perAlbum.manga : defaults.manga;
-  function saveSettings() {
-    store.set(`bulle:reader:${id}`, { fit, manga });
-    store.set("bulle:reader:default", { fit, manga: defaults.manga });
+  let fit = prefs.reader_fit, manga = !!prefs.reader_manga;
+  function applyPrefs() {
+    body.classList.remove("bg-black", "bg-dark", "bg-gray", "bg-white");
+    body.classList.add("bg-" + (prefs.reader_bg || "black"));
+    body.style.setProperty("--night", String((+prefs.reader_night || 0) / 100));
   }
+  function loadAlbumMemory() {
+    if (!prefs.reader_remember_album) return;
+    const m = store.get(`bulle:reader:${id}`) || {};
+    if (FITS.includes(m.fit)) fit = m.fit;
+    if (typeof m.manga === "boolean") manga = m.manga;
+  }
+  function saveAlbumMemory() { if (prefs.reader_remember_album) store.set(`bulle:reader:${id}`, { fit, manga }); }
+  applyPrefs();
 
   // ---------------------------------------------------------------- état
-  let item = null, pages = 0, current = -1, folderHref = "/";
+  let item = null, pages = 0, current = -1, folderHref = "/", aspect = 0.7;
   const preloaded = new Map(); // n -> Image
   let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1;
 
@@ -41,11 +54,13 @@
 
   async function init() {
     if (!id) { showMessage("Album inconnu", "", `<a class="btn" href="/">Retour</a>`); return; }
-    let r;
+    let r, s = null;
     try {
-      r = await fetch(`/api/item/${id}`);
+      [r, s] = await Promise.all([fetch(`/api/item/${id}`), fetch("/api/settings").then(x => x.ok ? x.json() : null).catch(() => null)]);
       item = await r.json();
     } catch (e) { showMessage("Impossible de charger l'album", String(e)); return; }
+    if (s && s.profile) { Object.assign(prefs, pick(s.profile)); fit = prefs.reader_fit; manga = !!prefs.reader_manga; applyPrefs(); }
+    loadAlbumMemory();
     if (!r.ok) { showMessage("Introuvable", item.error || "", `<a class="btn" href="/">Retour</a>`); return; }
     nameEl.textContent = item.name;
     document.title = `${item.name} — Bulle`;
@@ -71,11 +86,12 @@
 
   // ---------------------------------------------------------------- largeur d'image demandée au serveur
   function wantedWidth() {
-    if (fit === "original") return 0;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (fit === "original" || prefs.reader_quality === "original") return 0;
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
     const vw = stage.clientWidth || window.innerWidth, vh = stage.clientHeight || window.innerHeight;
-    const css = fit === "width" ? vw : Math.min(vw, vh * 0.75);
-    return Math.ceil(css * dpr);
+    const css = fit === "width" ? vw : Math.min(vw, vh * aspect);
+    const factor = prefs.reader_quality === "high" ? 1.5 : 1;
+    return Math.ceil(css * dpr * factor);
   }
   const pageUrl = n => `/api/page/${id}/${n}?w=${wantedWidth()}&v=${item.mtime}`;
 
@@ -89,18 +105,19 @@
     const url = pageUrl(n);
     const spin = setTimeout(() => { if (token === loadToken) loading.hidden = false; }, 180);
     const pre = preloaded.get(n);
-    const show = () => {
+    const show = im => {
       if (token !== loadToken) return;
       clearTimeout(spin); loading.hidden = true;
+      if (im && im.naturalWidth && im.naturalHeight) aspect = im.naturalWidth / im.naturalHeight;
       img.src = url;
       stage.scrollTop = 0; stage.scrollLeft = 0;
       preloadAround(n);
     };
     if (pre && pre.complete && pre.naturalWidth && pre.src.endsWith(url)) {
-      show();
+      show(pre);
     } else {
       const im = new Image();
-      im.onload = show;
+      im.onload = () => show(im);
       im.onerror = () => {
         if (token !== loadToken) return;
         clearTimeout(spin); loading.hidden = true;
@@ -117,13 +134,17 @@
   }
 
   function preloadAround(n) {
-    for (const k of [n + 1, n + 2, n + 3, n - 1]) {
+    const count = Math.max(0, Math.min(10, +prefs.reader_preload || 0));
+    const wanted = [];
+    for (let k = 1; k <= count; k++) wanted.push(n + k);
+    wanted.push(n - 1);
+    for (const k of wanted) {
       if (k < 0 || k >= pages || preloaded.has(k)) continue;
       const im = new Image();
       im.src = pageUrl(k);
       preloaded.set(k, im);
     }
-    for (const k of [...preloaded.keys()]) if (Math.abs(k - n) > 6) preloaded.delete(k);
+    for (const k of [...preloaded.keys()]) if (Math.abs(k - n) > count + 3) preloaded.delete(k);
   }
   const next = () => go(current + 1);
   const prev = () => go(current - 1);
@@ -173,7 +194,7 @@
   }
   function cycleFit() {
     fit = FITS[(FITS.indexOf(fit) + 1) % FITS.length];
-    applyFit(); saveSettings();
+    applyFit(); saveAlbumMemory();
     preloaded.clear();
     flash({ page: "Page entière", width: "Pleine largeur", original: "Taille d'origine" }[fit]);
     if (current >= 0) go(current, { save: false });
@@ -183,7 +204,7 @@
     slider.style.direction = manga ? "rtl" : "ltr";
     if (announce) flash(manga ? "Sens manga : lecture de droite à gauche" : "Sens occidental : lecture de gauche à droite");
   }
-  function toggleManga() { manga = !manga; applyManga(); saveSettings(); }
+  function toggleManga() { manga = !manga; applyManga(); saveAlbumMemory(); }
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen().catch(() => {});
@@ -200,7 +221,8 @@
   // ---------------------------------------------------------------- barres : auto-masquage
   function scheduleHide() {
     clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => { if (!overBar && endEl.hidden) body.classList.add("hide-bars"); }, 2500);
+    const delay = Math.max(500, (+prefs.reader_bars_delay || 2.5) * 1000);
+    hideTimer = setTimeout(() => { if (!overBar && endEl.hidden) body.classList.add("hide-bars"); }, delay);
   }
   let overBar = false;
   for (const bar of document.querySelectorAll(".rbar")) {
@@ -219,7 +241,7 @@
   let touch = null;
   stage.addEventListener("touchstart", e => {
     if (e.touches.length !== 1) { touch = null; return; }
-    touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now(), sl: stage.scrollLeft };
+    touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
   }, { passive: true });
   stage.addEventListener("touchend", e => {
     if (!touch || e.changedTouches.length !== 1) return;
@@ -233,13 +255,13 @@
   stage.addEventListener("click", e => {
     if (e.target.closest(".rmsg")) return;
     const w = stage.clientWidth, x = e.clientX;
-    if (x < w * 0.3) backward();
-    else if (x > w * 0.7) forward();
+    if (prefs.reader_tap_zones && x < w * 0.3) backward();
+    else if (prefs.reader_tap_zones && x > w * 0.7) forward();
     else toggleBars();
   });
   let wheelLock = 0;
   stage.addEventListener("wheel", e => {
-    if (fit !== "page") return; // en largeur / 1:1, la molette fait défiler la page
+    if (fit !== "page" || !prefs.reader_wheel) return; // en largeur / 1:1, la molette fait défiler la page
     const now = Date.now(); if (now - wheelLock < 250) return; wheelLock = now;
     if (e.deltaY > 0) next(); else if (e.deltaY < 0) prev();
   }, { passive: true });
