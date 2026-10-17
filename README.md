@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.7.3)
+# Bulle — lecteur de BD maison (v0.8)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -30,6 +30,9 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
 - **Mosaïque de couvertures** en fond de toutes les pages (pas dans le lecteur) : vos propres albums,
   qui dérivent lentement et se remplacent en fondu (ou fixe, ou désactivée) ; opacité et luminosité
   réglables, et un effet « verre dépoli » qui rend la colonne, les panneaux et les fiches translucides.
+- **Le laboratoire** : un petit champignon discret à côté du logo ouvre **BDConverter** (votre
+  convertisseur PDF → CBZ) dans un panneau, sans quitter Bulle. Adresse réglable (« auto » = même
+  machine que Bulle, port 3111 ; vide = champignon masqué).
 - `Échap` ferme ce qui est ouvert, sinon revient en arrière (réglages, listes, recherche → page
   précédente ; dossier → dossier parent).
 - Sur chaque vignette reconnue par Bédéthèque, un bouton « … » à côté du « i » ouvre le résumé dans
