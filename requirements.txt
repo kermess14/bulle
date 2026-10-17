@@ -2,3 +2,4 @@ Flask>=3.0,<4
 Pillow>=10.3
 pypdfium2>=4.30
 waitress>=3.0
+beautifulsoup4>=4.12
