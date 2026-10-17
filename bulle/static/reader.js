@@ -681,7 +681,8 @@
     if (stripBuilt) return;
     stripBuilt = true;
     const thumbW = 300;
-    stripRow.innerHTML = Array.from({ length: pages }, (_, n) => `<button type="button" class="sthumb" data-n="${n}"><img alt="" data-src="/api/page/${id}/${n}?w=${thumbW}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}"><span>${n + 1}</span></button>`).join("");
+    stripRow.innerHTML = Array.from({ length: pages }, (_, n) => `<button type="button" class="sthumb" data-n="${n}"><img alt="" data-src="/api/page/${id}/${n}?w=${thumbW}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}"><span>${n + 1}</span><i class="setcov" data-setcover="${n}" title="Utiliser cette page comme couverture de l'album">★ Couverture</i></button>`).join("");
+    markCoverThumb();
     stripObserver = new IntersectionObserver(entries => {
       for (const en of entries) if (en.isIntersecting) { const im = en.target.querySelector("img"); if (im && !im.src) im.src = im.dataset.src; stripObserver.unobserve(en.target); }
     }, { root: stripRow, rootMargin: "0px 600px" });
@@ -695,11 +696,28 @@
     if (cur) stripRow.scrollLeft = cur.offsetLeft - stripRow.clientWidth / 2 + cur.offsetWidth / 2;
   }
   function closeStrip() { strip.hidden = true; body.classList.remove("strip-open"); scheduleHide(); }
+  /* Couverture choisie à la main : n'importe quelle page de l'album (gardée dans la base de Bulle, le fichier n'est pas touché). */
+  function coverPage() { return item && Number.isInteger(item.cover_page) ? item.cover_page : 0; }
+  function markCoverThumb() {
+    for (const t of stripRow.children) t.classList.toggle("iscover", +t.dataset.n === coverPage());
+  }
+  async function setCoverPage(n) {
+    try {
+      const r = await fetch(`/api/covers/page/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: n }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      item.cover_page = j.cover_page ?? 0;
+      markCoverThumb();
+      flash(n === 0 ? "Couverture : première page" : `Page ${n + 1} choisie comme couverture`);
+    } catch (e) { flash(`Couverture non changée : ${e.message}`); }
+  }
   const toggleStrip = () => strip.hidden ? openStrip() : closeStrip();
   stage.addEventListener("contextmenu", e => { if (e.target.closest(".rmsg")) return; e.preventDefault(); toggleStrip(); });
   strip.addEventListener("contextmenu", e => { e.preventDefault(); closeStrip(); });
   strip.addEventListener("wheel", e => { e.preventDefault(); stripRow.scrollLeft += (Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX) * (manga ? -1 : 1); }, { passive: false });
   strip.addEventListener("click", e => {
+    const sc = e.target.closest("[data-setcover]");
+    if (sc) { e.preventDefault(); e.stopPropagation(); setCoverPage(+sc.dataset.setcover); return; }
     const t = e.target.closest(".sthumb");
     if (t) { closeStrip(); go(+t.dataset.n); return; }
     if (e.target === strip) closeStrip();

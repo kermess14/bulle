@@ -88,7 +88,8 @@
     const a = $("#tab-adult");
     if (!a) return;
     const g = settings.global;
-    a.hidden = !!g.adult_hide_tab || !(g.adult_count > 0 || g.adult_unlocked && g.adult_pin_set);
+    // case « cacher » cochée : jamais ; sinon visible dès qu'un code existe (verrouillée ou non) ou qu'une série est 18+
+    a.hidden = !!g.adult_hide_tab || !(g.adult_pin_set || g.adult_count > 0);
     a.classList.toggle("unlocked", !!g.adult_unlocked);
     a.title = g.adult_unlocked ? "Rubrique Adulte (déverrouillée)" : "Rubrique Adulte (code demandé)";
   }
@@ -418,7 +419,7 @@
     const img = id && !item.error
       ? `<img loading="lazy" decoding="async" alt="" src="${coverUrl(item, cssWidth || (THUMB[settings.profile.thumb_size] || THUMB.m))}" onerror="this.parentNode.classList.add('fail');this.remove()">`
       : "";
-    const retry = item.kind === "album" ? `<button class="retry" type="button" data-retry="${item.id}" title="Relire le fichier et refaire la couverture (première page)" aria-label="Refaire la couverture">↻</button>` : "";
+    const retry = item.kind === "album" ? `<button class="retry" type="button" data-retry="${item.id}" title="Rescanner ce fichier : relu sur le disque, couverture refaite" aria-label="Rescanner ce fichier">↻</button>` : "";
     return `<div class="cover ${item.kind === "folder" ? "folder" : ""} ${item.error ? "err" : ""}">${ph}${img}${retry}${inner}</div>`;
   }
   const FORMAT_EXT = { zip: ["CBZ", "ZIP"], rar: ["CBR", "RAR"], pdf: ["PDF"], "7z": ["CB7", "7Z"], tar: ["CBT", "TAR", "TGZ"], ace: ["ACE"] };
@@ -591,7 +592,7 @@
         <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
         <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
         ${settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
-        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Refaire les couvertures (et les couleurs) de tous les albums de cette série">↻ Couvertures</button></span></h1>`;
+        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire tous les fichiers de cette série sur le disque (format, pages, couvertures)">↻ Rescanner</button></span></h1>`;
       html += bdtPanelHtml(data);
     }
     html += lettersHtml(list);
@@ -876,7 +877,7 @@
           <button class="btn" type="button" data-action="clear-cache">Vider le cache des pages</button>
           <button class="btn" type="button" data-action="rebuild-covers">Régénérer toutes les couvertures</button>
           ${stats.errors ? `<button class="btn" type="button" data-action="retry-errors">↻ Réessayer les ${plural(stats.errors, "album en échec", "albums en échec")}</button>` : ""}</div></div>
-        <p class="muted">Pour une seule série : bouton « ↻ Couvertures » en haut de sa page. Pour un seul album : le petit ↻ en bas à droite de sa pochette (au survol), ou « Refaire la couverture » dans sa fiche.</p>`,
+        <p class="muted">Pour une seule série : bouton « ↻ Rescanner » en haut de sa page. Pour un seul fichier : le petit ↻ en bas à droite de sa pochette (au survol), ou « Rescanner ce fichier » dans sa fiche — il est relu sur le disque (format, taille, pages, couverture).</p>`,
       bdt: () => `
         ${field("Autoriser les requêtes vers bedetheque.com", chk("g", "bdt_enabled", g.bdt_enabled), "Uniquement quand vous cliquez « Analyser » (ou l'analyse groupée de la page Collection).")}
         ${field("Requêtes par minute (maximum)", num("g", "bdt_per_minute", g.bdt_per_minute, 1, 60), "Intervalle irrégulier autour de 60 / ce nombre, jamais plus dans une minute glissante. 10 par défaut.")}
@@ -987,12 +988,12 @@
         if (on) pow(powFor("adult"), lastPointer.x, lastPointer.y);
         route();
       } else if (action === "rebuild-folder") {
-        if (!confirm(`Refaire les couvertures de tous les albums de « ${btn.dataset.name} » ?`)) return;
+        if (!confirm(`Relire tous les fichiers de « ${btn.dataset.name} » sur le disque et refaire leurs couvertures ?`)) return;
         const r = await fetch(`/api/covers/rebuild/folder/${btn.dataset.id}`, { method: "POST" });
         if (r.status === 409) { toast("Un scan est déjà en cours, réessayez après."); return; }
         if (!r.ok) throw new Error((await r.json()).error || r.statusText);
         const j = await r.json();
-        toast(`${plural(j.count, "couverture", "couvertures")} en cours de régénération…`);
+        toast(`${plural(j.count, "fichier", "fichiers")} en cours de relecture…`);
         pollScan(true);
       } else if (action === "retry-errors") {
         const r = await fetch("/api/covers/retry-errors", { method: "POST" });
@@ -1059,7 +1060,7 @@
             : `<button class="btn" type="button" data-read="${it.id}">${ICON.check} Marquer comme lu</button>`)}
           ${p && !p.completed ? `<button class="btn" type="button" data-unread="${it.id}">Effacer la progression</button>` : ""}
           <a class="btn" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
-          <button class="btn" type="button" data-recover="${it.id}" title="Relire le fichier : pages recomptées, couverture refaite à partir de la première page">↻ Refaire la couverture</button>
+          <button class="btn" type="button" data-recover="${it.id}" title="Relire ce fichier sur le disque : format, taille, pages, couverture (rattrape un raté du scan)">↻ Rescanner ce fichier</button>
           ${parent && parent.id ? `<a class="btn" href="#/f/${parent.id}" data-close>Ouvrir le dossier</a>` : ""}
         </div>
         <div class="lists-row" id="sheet-lists" data-id="${it.id}"></div>
@@ -1093,7 +1094,7 @@
   modal.addEventListener("click", async e => {
     const rc = e.target.closest("[data-recover]");
     if (rc) {
-      rc.disabled = true; rc.textContent = "↻ En cours…";
+      rc.disabled = true; rc.textContent = "↻ Lecture du fichier…";
       try {
         const it = await api(`/api/covers/retry/${rc.dataset.recover}`, { method: "POST" });
         it.bust = Date.now();
@@ -1101,9 +1102,10 @@
         if (i >= 0) view.children[i] = Object.assign(view.children[i], it);
         const cardEl = main.querySelector(`.card[data-id="${it.id}"]`); if (cardEl) cardEl.outerHTML = card(it, it.folder ? { sub: it.folder } : {});
         const cov = modal.querySelector(".sheet .cover img"); if (cov) cov.src = coverUrl(it, 300);
-        toast(it.error ? `${ICON.warn} ${esc(it.error)}` : "Album relu, couverture refaite à partir de la première page");
+        toast(it.error ? `${ICON.warn} ${esc(it.error)}` : `Fichier relu : ${plural(it.pages || 0, "page", "pages")}, couverture refaite`);
+        if (!it.error) { closeModal(); openInfo(it.id); return; }
       } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
-      rc.disabled = false; rc.textContent = "↻ Refaire la couverture";
+      rc.disabled = false; rc.textContent = "↻ Rescanner ce fichier";
       return;
     }
     const b = e.target.closest("[data-summary]");

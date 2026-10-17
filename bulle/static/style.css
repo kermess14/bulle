@@ -563,6 +563,12 @@ body.zoomed #stage img { transition: none; }
 .sthumb.cur { opacity: 1; transform: scale(1.12); }
 .sthumb.cur img { border-color: var(--accent); }
 .sthumb.cur span { background: var(--accent); color: var(--accent-ink); }
+.sthumb { position: relative; }
+.sthumb .setcov { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); font-style: normal; font-size: 12px; font-weight: 700; white-space: nowrap; padding: 3px 10px; border-radius: 999px; background: rgba(15, 17, 21, .85); color: #fff; border: 1px solid rgba(255, 255, 255, .3); opacity: 0; transition: opacity .15s; cursor: pointer; }
+.sthumb:hover .setcov, .sthumb.sel .setcov { opacity: 1; }
+.sthumb .setcov:hover { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.sthumb.iscover .setcov { opacity: 1; background: var(--accent); color: var(--accent-ink); border-color: transparent; pointer-events: none; }
+.sthumb.iscover img { border-color: var(--accent); }
 .strip-hint { text-align: center; color: rgba(255, 255, 255, .7); font-size: 13.5px; padding-bottom: 18px; }
 body.strip-open #stage { filter: blur(2px); }
 #stage .loading { position: fixed; top: calc(var(--bar-h) + 14px); right: 14px; z-index: 5; width: 22px; height: 22px; border: 3px solid rgba(255, 255, 255, .25); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
