@@ -19,7 +19,7 @@ TEMPLATE = """\
 #  Bulle — lecteur de BD maison — stack Docker Compose à coller telle quelle
 #  (Dockhand : Stacks → Create → coller ce fichier → Create). Rien d'autre à copier.
 #
-#  Variante AUTONOME (sans image) : le code de Bulle est embarqué ci-dessous (BULLE_SRC, archive compressée en base64) et
+#  Variante AUTONOME (sans image) : le code de Bulle est embarqué ci-dessous (BULLE_SRC, archive tar.xz en base64) et
 #  décompressé au démarrage dans un conteneur Python standard : pas d'image à construire.
 #  Au premier démarrage le conteneur installe « unar » (pour les CBR) et les dépendances
 #  Python : comptez 1 à 3 minutes, puis http://192.168.0.213:__PORT__
@@ -54,7 +54,7 @@ services:
       # ---- le code de Bulle (généré par make_stack.py, ne pas modifier à la main) ----
       BULLE_SRC: >-
 __BLOB__
-    command: ["sh", "-c", "mkdir -p /app && printenv BULLE_SRC | tr -dc 'A-Za-z0-9+/=' | base64 -d | tar xzf - -C /app && exec sh /app/start.sh"]
+    command: ["sh", "-c", "mkdir -p /app && python3 -c \\"import os,io,base64,tarfile; d=base64.b64decode(''.join(c for c in os.environ['BULLE_SRC'] if c.isalnum() or c in '+/=')); tarfile.open(fileobj=io.BytesIO(d), mode='r:xz').extractall('/app', filter='data')\\" && exec sh /app/start.sh"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:__PORT__/api/stats', timeout=4)"]
       interval: 60s
@@ -70,7 +70,7 @@ volumes:
 
 def build_blob() -> str:
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=9) as tar:
+    with tarfile.open(fileobj=buf, mode="w:xz", preset=9) as tar:
         def add(path, arcname):
             def filt(ti):
                 if "__pycache__" in ti.name or ti.name.endswith(".pyc"):
@@ -95,9 +95,9 @@ def main() -> None:
     dest = os.path.join(HERE, "stack-autonome.yml")
     with open(dest, "w", encoding="utf-8") as f:
         f.write(out)
-    size = len(blob.replace("\n", "").strip())
-    print(f"{dest} écrit : code embarqué {size // 1024} Ko en base64 (limite ~120 Ko), port {PORT}")
-    if size > 120_000:
+    size = sum(len(line.strip()) + 1 for line in blob.split("\n"))   # taille réelle de la variable (lignes repliées)
+    print(f"{dest} écrit : code embarqué {size // 1024} Ko en base64 (limite 128 Ko par variable), port {PORT}")
+    if size > 125_000:
         raise SystemExit("Trop gros pour une variable d'environnement : passer par une image Docker.")
 
 
