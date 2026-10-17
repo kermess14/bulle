@@ -19,7 +19,8 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-PANELS_VERSION = 4        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 5        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
 BG_TOLERANCE = 46         # écart de gris toléré autour de la couleur de fond
@@ -177,12 +178,37 @@ def _edge_segments(edge: bytes, w: int, h: int, min_len: int) -> list[tuple[int,
     return done
 
 
-def _coverage(segments: list[tuple[int, int, int]], pos: int, a: int, b: int) -> float:
+class _Segs:
+    """Bords (position, début, fin) indexés par position : la couverture à une position se calcule sans parcourir la liste."""
+    __slots__ = ("items", "by_pos", "calls")
+
+    def __init__(self, items: list[tuple[int, int, int]]):
+        self.items = items
+        self.by_pos: dict[int, list[tuple[int, int]]] = {}
+        for p, s0, s1 in items:
+            self.by_pos.setdefault(p, []).append((s0, s1))
+        self.calls = 0
+
+    def near(self, pos: int):
+        for p in range(pos - FRAME_TOL, pos + FRAME_TOL + 1):
+            lst = self.by_pos.get(p)
+            if lst:
+                yield from lst
+
+    def __iter__(self):
+        return iter(self.items)
+
+
+def _coverage(segments, pos: int, a: int, b: int) -> float:
     """Part de [a, b) couverte par les bords situés à `pos` (± FRAME_TOL) : plusieurs morceaux (bulle qui coupe le trait,
     bord extérieur et bord intérieur d'un même trait) se complètent (union des intervalles)."""
     if b <= a:
         return 0.0
-    parts = sorted((max(a, s0), min(b, s1)) for p, s0, s1 in segments if abs(p - pos) <= FRAME_TOL and s1 > a and s0 < b)
+    if isinstance(segments, _Segs):
+        segments.calls += 1
+        parts = sorted((max(a, s0), min(b, s1)) for s0, s1 in segments.near(pos) if s1 > a and s0 < b)
+    else:
+        parts = sorted((max(a, s0), min(b, s1)) for p, s0, s1 in segments if abs(p - pos) <= FRAME_TOL and s1 > a and s0 < b)
     covered, cur0, cur1 = 0, None, None
     for s0, s1 in parts:
         if cur1 is None or s0 > cur1:
@@ -214,13 +240,21 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
     min_w, min_h = FRAME_MIN_W * w, FRAME_MIN_H * h
     COV = 0.85
     found: list[tuple] = []
+    tops, bottoms, lefts, rights = (x if isinstance(x, _Segs) else _Segs(x) for x in (tops, bottoms, lefts, rights))
+    budget = [FRAME_BUDGET]
 
-    def ys_near(segs: list, a: int, b: int) -> set[int]:
+    def spent() -> bool:
+        used = tops.calls + bottoms.calls + lefts.calls + rights.calls
+        return used > budget[0]
+
+    def ys_near(segs, a: int, b: int) -> set[int]:
         """Positions (y ou x) des bords dont un morceau touche [a, b)."""
         return {p for p, s0, s1 in segs if s1 > a and s0 < b}
 
     # 1) paires gauche / droite
     for lx, ly0, ly1 in lefts:
+        if spent():
+            break
         for rx, ry0, ry1 in rights:
             if rx - lx < min_w:
                 continue
@@ -242,6 +276,8 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
                     found.append((lx, ty, rx + 1, by + 1))
     # 2) paires haut / bas
     for ty, tx0, tx1 in tops:
+        if spent():
+            break
         for by, bx0, bx1 in bottoms:
             if by - ty < min_h:
                 continue
@@ -376,11 +412,14 @@ def _reading_order(rects: list[tuple], rtl: bool) -> list[tuple]:
     return out
 
 
-def _refine_leaf(leaf: tuple, frames: list[tuple], w: int, h: int, rtl: bool) -> list[tuple]:
-    """Une zone issue des gouttières, redécoupée d'après les cadres qu'elle contient (cases incrustées)."""
+def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool) -> list[tuple]:
+    """Une zone issue des gouttières, redécoupée d'après les cadres qu'elle contient (cases incrustées).
+    `frames` : liste de cadres, ou fonction qui la calcule (appelée seulement pour une grande zone)."""
     la = _area(leaf)
     if la < 0.3 * w * h:
         return [leaf]   # une case ordinaire : un rectangle dessiné dedans (tableau, fenêtre) n'est pas une case
+    if callable(frames):
+        frames = frames()
     inside = [f for f in frames if _area(f) and _inter(f, leaf) >= 0.9 * _area(f) and _area(f) < 0.92 * la]
     if not inside:
         return [leaf]
@@ -417,10 +456,17 @@ def detect_panels(img: Image.Image) -> dict:
     min_side = max(6, round(min(w, h) * MIN_PANEL))
     full = (0, 0, w, h)
     page_area = w * h
-    try:
-        frames = detect_frames(gray, mask if (bg >= 200 or bg <= 55) else None)
-    except Exception:  # noqa: BLE001
-        frames = []
+    frames_cache: list = []
+
+    def frames() -> list[tuple]:
+        """Cadres dessinés : calcul coûteux, fait une seule fois et seulement si une grande zone (planche sans gouttières,
+        grande image avec des cases incrustées) en a besoin ; une planche classique n'en a pas besoin."""
+        if not frames_cache:
+            try:
+                frames_cache.append(detect_frames(gray, mask if (bg >= 200 or bg <= 55) else None))
+            except Exception:  # noqa: BLE001
+                frames_cache.append([])
+        return frames_cache[0]
 
     def leaves(rtl: bool) -> list[tuple]:
         # fond ni blanc ni noir (dessin jusqu'aux bords) : les gouttières n'ont pas de sens, seuls les cadres comptent

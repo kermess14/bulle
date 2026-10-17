@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.10.2"
+VERSION = "0.10.3"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -480,6 +480,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         resp = send_file(path, mimetype="image/jpeg", conditional=True)
         return cache_headers(resp, immutable="v" in request.args)
 
+    panels_sem = threading.BoundedSemaphore(2)
+
     @app.route("/api/panels/<int:node_id>/<int:index>")
     def api_panels(node_id: int, index: int):
         """Cases de la planche (détectées une fois, puis gardées en base) pour la lecture case par case."""
@@ -494,7 +496,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
             with Image.open(path or io.BytesIO(data)) as im:
                 im.load()
-                result = detect_panels(im)
+                with panels_sem:   # deux détections à la fois au plus : les autres requêtes (pages, interface) gardent des fils
+                    result = detect_panels(im)
         except AlbumError as e:
             abort(415, description=str(e))
         except Exception as e:  # noqa: BLE001
