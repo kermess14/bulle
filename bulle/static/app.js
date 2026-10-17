@@ -88,7 +88,7 @@
     const a = $("#tab-adult");
     if (!a) return;
     const g = settings.global;
-    a.hidden = !(g.adult_count > 0 || g.adult_unlocked && g.adult_pin_set);
+    a.hidden = !!g.adult_hide_tab || !(g.adult_count > 0 || g.adult_unlocked && g.adult_pin_set);
     a.classList.toggle("unlocked", !!g.adult_unlocked);
     a.title = g.adult_unlocked ? "Rubrique Adulte (déverrouillée)" : "Rubrique Adulte (code demandé)";
   }
@@ -590,7 +590,7 @@
       html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small>
         <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
         <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
-        <button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>
+        ${settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
         <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Refaire les couvertures (et les couleurs) de tous les albums de cette série">↻ Couvertures</button></span></h1>`;
       html += bdtPanelHtml(data);
     }
@@ -901,6 +901,7 @@
           ${g.adult_pin_set && g.adult_unlocked ? `<button class="btn" type="button" data-action="adult-lock">Verrouiller maintenant</button>` : ""}
           <button class="btn" type="button" data-action="adult-pin-set">${g.adult_pin_set ? "Changer le code" : "Définir un code"}</button>
           ${g.adult_pin_set ? `<button class="btn" type="button" data-action="adult-pin-clear">Supprimer le code</button>` : ""}</div></div>
+        ${g.adult_pin_set && !g.adult_unlocked ? "" : field("Cacher l'entrée « Adulte » du menu", chk("g", "adult_hide_tab", g.adult_hide_tab), "Plus rien dans la colonne de gauche, et le bouton « 18+ » des séries n'apparaît que rubrique déverrouillée. Accès : Réglages › Adulte, ou l'adresse #/adult.")}
         <div class="field"><div class="flabel"><span>Séries dans la rubrique</span><small>${plural(g.adult_count || 0, "série", "séries")}${g.adult_count && !adult.folders ? " · entrez le code pour voir la liste" : ""}</small></div>
           <div class="plist">${(adult.folders || []).map(f => `<span class="prow"><a href="#/f/${f.id}">${esc(f.name)}</a> <button class="btn mini" type="button" data-action="adult-toggle" data-id="${f.id}" data-adult="1" data-stay="1">Retirer</button></span>`).join("")}
             ${adult.folders && !adult.folders.length ? `<span class="muted">Aucune pour l'instant : ouvrez une série et cliquez « 18+ ».</span>` : ""}</div></div>
