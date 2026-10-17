@@ -1,4 +1,4 @@
-"""Ouverture des albums (CBZ / CBR / PDF / 7z / tar), redimensionnement JPEG et cache disque."""
+"""Ouverture des albums (CBZ / CBR rar4 et rar5 / CB7 / CBT / PDF), redimensionnement JPEG et cache disque."""
 from __future__ import annotations
 
 import glob
@@ -140,8 +140,42 @@ class ZipAlbum(Album):
         name = self.pages[index]
         try:
             return self.zf.read(name), os.path.splitext(name)[1].lower()
-        except (zipfile.BadZipFile, RuntimeError, OSError) as e:
+        except zipfile.BadZipFile as e:
+            if "File name in directory" in str(e):
+                # le nom dans l'en-tête local diffère de celui du répertoire central (encodage douteux de l'outil
+                # qui a créé le CBZ) : zipfile refuse par prudence, on lit quand même avec le nom de l'en-tête
+                data = self._read_mismatched(name)
+                if data is not None:
+                    return data, os.path.splitext(name)[1].lower()
             raise AlbumError(f"Page {index + 1} illisible : {e}") from e
+        except (RuntimeError, OSError) as e:
+            raise AlbumError(f"Page {index + 1} illisible : {e}") from e
+
+    def _read_mismatched(self, name: str) -> Optional[bytes]:
+        import struct
+        zinfo = self.zf.getinfo(name)
+        fp = self.zf.fp
+        if fp is None:
+            return None
+        try:
+            fp.seek(zinfo.header_offset)
+            fheader = fp.read(zipfile.sizeFileHeader)
+            if len(fheader) != zipfile.sizeFileHeader:
+                return None
+            fheader = struct.unpack(zipfile.structFileHeader, fheader)
+            if fheader[zipfile._FH_SIGNATURE] != zipfile.stringFileHeader:
+                return None
+            raw = fp.read(fheader[zipfile._FH_FILENAME_LENGTH])
+            flags = fheader[zipfile._FH_GENERAL_PURPOSE_FLAG_BITS]
+            header_name = raw.decode("utf-8") if flags & zipfile._MASK_UTF_FILENAME else raw.decode("cp437")
+            saved = zinfo.orig_filename
+            zinfo.orig_filename = header_name          # ce que zipfile compare à l'en-tête
+            try:
+                return self.zf.read(zinfo)
+            finally:
+                zinfo.orig_filename = saved
+        except (zipfile.BadZipFile, OSError, struct.error, UnicodeDecodeError, AttributeError):
+            return None
 
     def close(self) -> None:
         self.zf.close()
@@ -458,9 +492,18 @@ class Comics:
             return PdfAlbum(abs_path)
         if fmt == "tar":
             return TarAlbum(abs_path)
-        if fmt in ("rar", "7z"):
+        if fmt in ("rar", "7z", "ace"):
             dest = os.path.join(self.extract_dir, str(node["id"]))
-            album = ExtractedAlbum(abs_path, dest)
+            try:
+                album = ExtractedAlbum(abs_path, dest)
+            except AlbumError as e:
+                if fmt == "ace":
+                    raise AlbumError("Archive ACE (vieux format propriétaire, ici déguisée en CBR) : "
+                                     "à reconvertir en CBZ, par exemple avec BDConverter. " + str(e)) from e
+                raise
+            if fmt == "ace" and not album.pages:
+                raise AlbumError("Archive ACE (vieux format propriétaire, ici déguisée en CBR) : l'outil de "
+                                 "décompression n'en a rien tiré ; à reconvertir en CBZ, par exemple avec BDConverter.")
             self._evict_extracted(keep=str(node["id"]))
             return album
         raise AlbumError(f"Format non géré : {fmt or 'inconnu'}")

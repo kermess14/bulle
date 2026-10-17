@@ -180,17 +180,21 @@ def detect_format(path: str, filename: str) -> Optional[str]:
     """Vrai format d'après les premiers octets (un .cbr qui est un zip fonctionne)."""
     try:
         with open(path, "rb") as f:
-            head = f.read(8)
+            head = f.read(512)
     except OSError:
         head = b""
     if head.startswith(b"PK\x03\x04") or head.startswith(b"PK\x05\x06"):
         return "zip"
     if head.startswith(b"Rar!\x1a\x07"):
-        return "rar"
+        return "rar"          # RAR 4 (Rar!\x1a\x07\x00) et RAR 5 (Rar!\x1a\x07\x01\x00)
     if head.startswith(b"%PDF"):
         return "pdf"
     if head.startswith(b"7z\xbc\xaf\x27\x1c"):
         return "7z"
+    if head[7:14] == b"**ACE**":
+        return "ace"          # archive ACE (vieux format propriétaire), parfois déguisée en .cbr
+    if head[257:262] == b"ustar" or head.startswith((b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00")):
+        return "tar"          # tar brut, ou compressé gzip / bzip2 / xz (tarfile reconnaît tout seul)
     ext = os.path.splitext(filename)[1].lower()
     return {".cbz": "zip", ".zip": "zip", ".cbr": "rar", ".rar": "rar", ".pdf": "pdf",
             ".cb7": "7z", ".7z": "7z", ".cbt": "tar", ".tar": "tar"}.get(ext)
