@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.2)
+# Bulle — lecteur de BD maison (v0.3)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -24,7 +24,15 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   albums lus, thème sombre / clair, réglages du lecteur (ajustement, sens, fond, qualité, préchargement,
   mode nuit…), qualité des images côté serveur, seuil « album lu », fréquence du scan, taille du cache.
   Les réglages d'affichage sont enregistrés sur le serveur (ils vous suivent d'un appareil à l'autre).
-- Ne modifie **jamais** vos fichiers : le dossier des BD est monté en lecture seule.
+- **Bédéthèque** (à la demande) : dans un dossier d'albums, « Analyser » cherche la série sur
+  bedetheque.com, compare les tomes officiels avec vos fichiers (présents, manquants affichés en
+  cartes grisées à leur place, fichiers non reconnus, doublons), retient les titres officiels, l'année
+  et, avec « Auteurs et détails », scénario / dessin / couleurs, éditeur, ISBN. La page **Collection**
+  (icône livres) récapitule toutes les séries analysées (complètes, incomplètes, en cours de parution)
+  et peut analyser d'un coup les dossiers restants, une requête toutes les 2,5 s, arrêtable à tout moment.
+  Si la correspondance automatique hésite, Bulle propose des candidats ou accepte l'adresse de la série.
+- Ne modifie **jamais** vos fichiers : le dossier des BD est monté en lecture seule ; les informations
+  Bédéthèque restent dans la base de Bulle (les fichiers ne sont ni renommés ni modifiés).
 
 Dépôt : https://github.com/kermess14/bulle
 
@@ -111,6 +119,7 @@ puis ouvrir `http://localhost:2203` (ou le port donné par `PORT`). Pour les CBR
 bulle/
   bulle/library.py   scanner des dossiers + base SQLite (albums, dossiers, progression, recherche)
   bulle/comics.py    ouverture CBZ/CBR/PDF, redimensionnement JPEG, cache disque
+  bulle/bedetheque.py recherche et lecture des fiches Bédéthèque (poliment, avec cache), comparaison avec un dossier
   bulle/server.py    serveur web Flask (servi par waitress) + API JSON + scan périodique
   bulle/static/      interface : index.html + app.js (navigation), reader.html + reader.js (lecteur), style.css
   stack.yml          la stack à coller dans Dockhand (image ghcr.io/kermess14/bulle)
@@ -136,6 +145,9 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET` `PUT /api/settings` | réglages globaux (serveur) et du profil courant ; `PUT {"global": {...}, "profile": {...}}` |
 | `GET /api/cache` · `POST /api/cache/clear` · `POST /api/covers/rebuild` | taille du cache, vider les pages, régénérer les couvertures |
 | `GET /api/profiles` · `POST /api/profiles/select` | profils de lecture (progression séparée) — interface à venir |
+| `POST /api/bdt/analyze/<dossier>` | analyse Bédéthèque d'un dossier (`{"url": …}` pour imposer la série, `{"details": true}` pour les auteurs, `{"force": true}` pour relire) |
+| `GET` `DELETE /api/bdt/series/<dossier>` · `GET /api/bdt/search?q=` | lien existant / oublier · chercher une série |
+| `GET /api/bdt/collection` · `POST` `GET` `DELETE /api/bdt/batch` · `GET /api/bdt/status` | collection · analyse groupée (lancer, suivre, arrêter) · état |
 | `GET /api/download/<id>` | télécharger le fichier d'origine |
 | `GET /read/<id>` | la page du lecteur (`?page=0` pour recommencer au début) |
 
@@ -151,8 +163,10 @@ une fois dans `data/cache/extract` (les 8 derniers albums ouverts sont gardés).
   à réserver au réseau local (ou derrière un reverse proxy avec authentification).
 - Pas encore de double page ni de lecture en « défilement continu ».
 - Pas de flux OPDS (pour les applis de lecture mobiles) : simple à ajouter ensuite.
-- Les métadonnées `ComicInfo.xml` (celles que BDConverter ajoutera) ne sont pas encore lues ;
-  ce sera la base pour les collections automatiques et les fiches plus riches.
+- Les métadonnées `ComicInfo.xml` (celles que BDConverter ajoutera) ne sont pas encore lues.
+- Bédéthèque n'a pas d'API : Bulle lit les pages de recherche et de série comme un visiteur, lentement,
+  en respectant le robots.txt du site (pas de couvertures ni de pages « ajax »). Si le site refuse les
+  requêtes, Bulle le dit clairement et le lien peut toujours être donné à la main (adresse de la série).
 - Les CBR dépendent de l'outil `unar` installé dans l'image Docker ; ce chemin n'a pas pu être
   testé hors Docker (les CBZ, les PDF et les `.cbr` qui sont en réalité des zip l'ont été).
   Si un album s'affiche « illisible », la fiche (bouton « i ») donne la raison.

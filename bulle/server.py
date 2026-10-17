@@ -10,10 +10,11 @@ from typing import Any, Optional
 
 from flask import Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory
 
+from .bedetheque import BdtError, BedethequeClient, compare, query_from_folder
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -45,6 +46,8 @@ def global_defaults() -> dict:
         "sharpen": True,
         "cover_width": COVER_WIDTH,
         "read_threshold": 1.0,        # 1.0 = lu à la dernière page ; 0.9 = lu à partir de 90 %
+        "bdt_enabled": True,          # analyse Bédéthèque à la demande
+        "bdt_interval": 2.5,          # secondes entre deux requêtes vers bedetheque.com
     }
 
 
@@ -52,6 +55,7 @@ GLOBAL_TYPES = {
     "scan_interval_hours": (int, 0, 720), "preload_covers": (bool,), "preload_threads": (int, 1, 8),
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
+    "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0),
 }
 
 
@@ -75,9 +79,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         s.update(lib.get_settings(None))
         return s
 
+    bdt = BedethequeClient(lib.bdt_cache_get, lib.bdt_cache_put)
+    bdt_job = {"running": False, "done": 0, "total": 0, "current": None, "errors": [], "stop": False, "linked": 0,
+               "ambiguous": 0, "not_found": 0}
+
     def apply_settings(s: dict) -> None:
         comics.configure(quality=s["quality"], sharpen=s["sharpen"], cover_width=s["cover_width"],
                          page_cache=s["page_cache"])
+        bdt.min_interval = float(s["bdt_interval"])
 
     def validate_global(values: dict) -> dict:
         out = {}
@@ -174,22 +183,67 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             abort(404, description="Introuvable (relancez un scan ?)")
         return node
 
+    def meta_json(m: Optional[dict]) -> Optional[dict]:
+        if not m:
+            return None
+        a = m["data"]
+        return {"number": m.get("number"), "kind": m.get("kind"), "title": m.get("title"), "year": m.get("year"),
+                "url": m.get("url"), "how": m.get("how"), "writers": a.get("writers") or [],
+                "pencillers": a.get("pencillers") or [], "colorists": a.get("colorists") or [],
+                "publisher": a.get("publisher"), "collection": a.get("collection"), "isbn": a.get("isbn"),
+                "pages": a.get("pages"), "date": a.get("date")}
+
     def folder_payload(folder: dict, profile_id: int) -> dict:
         children = lib.children(folder["id"])
         prog = lib.all_progress(profile_id)
         by_id = {p["node_id"]: p for p in prog}
+        metas = lib.bdt_albums_for_folder(folder["id"])
+        links = lib.bdt_series_for([c["id"] for c in children if c["kind"] == "folder"])
         out = []
         for c in children:
             j = album_json(c, with_progress=False)
             if c["kind"] == "album":
                 j["progress"] = progress_json(by_id.get(c["id"]))
+                if c["id"] in metas:
+                    j["meta"] = meta_json(metas[c["id"]])
             else:
                 prefix = c["path"] + "/"
                 j["read_count"] = sum(1 for p in prog if p["completed"] and p["path"].startswith(prefix))
                 j["reading_count"] = sum(1 for p in prog if not p["completed"] and p["path"].startswith(prefix))
+                if c["id"] in links:
+                    lk = links[c["id"]]
+                    j["bdt"] = {"title": lk["title"], "present": lk["present"], "total": lk["total"],
+                                "status": lk["status"]}
             out.append(j)
-        return {"folder": album_json(folder, with_progress=False), "breadcrumb": lib.breadcrumb(folder),
-                "children": out}
+        payload = {"folder": album_json(folder, with_progress=False), "breadcrumb": lib.breadcrumb(folder),
+                   "children": out}
+        link = lib.bdt_series_get(folder["id"])
+        if link:
+            payload["bdt"] = bdt_report(folder, link, children)
+        payload["bdt_enabled"] = bool(settings()["bdt_enabled"])
+        return payload
+
+    def bdt_report(folder: dict, link: dict, children: Optional[list[dict]] = None) -> dict:
+        """Lien + comparaison dossier ↔ série (sans requête réseau)."""
+        children = children if children is not None else lib.children(folder["id"])
+        files = [{"id": c["id"], "name": c["name"]} for c in children if c["kind"] == "album"]
+        series = link["data"]
+        cmp_ = compare(series, files)
+        return {
+            "series": {"id": series.get("id"), "url": series["url"], "title": series.get("title"),
+                       "genre": series.get("genre"), "status": series.get("status"), "years": series.get("years"),
+                       "tomes_count": series.get("tomes_count"), "detailed": bool(link.get("detailed")),
+                       "score": link.get("score"), "manual": bool(link.get("manual")),
+                       "fetched_at": link.get("fetched_at")},
+            "present": cmp_["present"], "total": cmp_["total"],
+            "missing": [{"number": a["number"], "title": a["title"], "year": a["year"], "url": a["url"]}
+                        for a in cmp_["missing"]],
+            "unmatched": [{"id": u["id"], "name": u["name"]} for u in cmp_["unmatched"]],
+            "duplicates": [{"ids": d["ids"]} for d in cmp_["duplicates"]],
+            "specials": [{"num_raw": a["num_raw"], "title": a["title"], "year": a["year"]} for a in cmp_["specials"]][:30],
+            "matches": {m["id"]: {"number": m["album"]["number"], "title": m["album"]["title"], "how": m["how"]}
+                        for m in cmp_["matches"]},
+        }
 
     def cache_headers(resp: Response, immutable: bool) -> Response:
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable" if immutable else "public, max-age=600"
@@ -238,6 +292,11 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         j["progress"] = progress_json(lib.progress(node_id, current_profile()))
         j["breadcrumb"] = lib.breadcrumb(node)[:-1]
         j["prev"], j["next"] = prev_, next_
+        j["meta"] = meta_json(lib.bdt_album(node_id))
+        if node.get("parent_id"):
+            link = lib.bdt_series_get(node["parent_id"])
+            if link:
+                j["series"] = {"title": link["title"], "url": link["url"], "status": link["status"]}
         return jsonify(j)
 
     @app.route("/api/cover/<int:node_id>")
@@ -403,10 +462,173 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.errorhandler(404)
     @app.errorhandler(409)
     @app.errorhandler(415)
+    @app.errorhandler(502)
     def api_error(e):
         if request.path.startswith("/api/"):
             return jsonify({"error": getattr(e, "description", str(e))}), e.code
         return e
+
+    # ------------------------------------------------------------------ API : Bédéthèque
+    def bdt_check_enabled() -> None:
+        if not settings()["bdt_enabled"]:
+            abort(409, description="Les requêtes vers Bédéthèque sont désactivées dans les réglages")
+
+    def analyze_folder(folder: dict, url: Optional[str] = None, details: bool = False, force: bool = False) -> dict:
+        """Analyse d'un dossier : recherche (ou lien existant / adresse donnée), lecture de la série, comparaison."""
+        children = lib.children(folder["id"])
+        files = [{"id": c["id"], "name": c["name"]} for c in children if c["kind"] == "album"]
+        if not files:
+            return {"status": "no_albums", "message": "Ce dossier ne contient pas d'albums directement "
+                                                      "(analysez ses sous-dossiers)."}
+        existing = lib.bdt_series_get(folder["id"])
+        candidates: list[dict] = []
+        score: Optional[float] = None
+        manual = False
+        if url:
+            series = bdt.series(url, details=details, force=force)
+            manual = True
+        elif existing and not force:
+            series = existing["data"]
+            score, manual = existing.get("score"), bool(existing.get("manual"))
+            if details and not existing.get("detailed"):
+                series = bdt.series(series["url"], details=True)
+        else:
+            query = query_from_folder(folder["name"])
+            if existing and existing.get("manual"):
+                series = bdt.series(existing["url"], details=details or bool(existing.get("detailed")), force=True)
+                manual = True
+            else:
+                candidates = bdt.search_series(query)
+                if not candidates and len(query.split()) > 2:
+                    candidates = bdt.search_series(" ".join(query.split()[:2]))
+                if not candidates:
+                    return {"status": "not_found", "query": query,
+                            "message": f"Aucune série trouvée sur Bédéthèque pour « {query} »."}
+                best = candidates[0]
+                if best["score"] < 0.75:
+                    return {"status": "ambiguous", "query": query, "candidates": candidates[:8],
+                            "message": "Plusieurs séries possibles : choisissez la bonne."}
+                score = best["score"]
+                series = bdt.series(best["url"], details=details)
+        cmp_ = compare(series, files)
+        lib.bdt_series_set(folder["id"], series, score, manual, present=cmp_["present"], total=cmp_["total"])
+        lib.bdt_albums_set(folder["id"], cmp_["matches"])
+        link = lib.bdt_series_get(folder["id"])
+        report = bdt_report(folder, link, children)
+        report["status"] = "ok"
+        report["candidates"] = [c for c in candidates[:6] if c["url"] != series["url"]]
+        report["query"] = query_from_folder(folder["name"])
+        return report
+
+    @app.route("/api/bdt/status")
+    def api_bdt_status():
+        s = settings()
+        return jsonify({"enabled": bool(s["bdt_enabled"]), "interval": float(s["bdt_interval"]),
+                        "requests_made": bdt.requests_made, "last_error": bdt.last_error, "job": bdt_job,
+                        "linked": len(lib.bdt_series_all()), "candidates": len(lib.folders_with_albums())})
+
+    @app.route("/api/bdt/search")
+    def api_bdt_search():
+        bdt_check_enabled()
+        q = (request.args.get("q") or "").strip()
+        if len(q) < 2:
+            return jsonify([])
+        try:
+            return jsonify(bdt.search_series(q)[:12])
+        except BdtError as e:
+            abort(502, description=str(e))
+
+    @app.route("/api/bdt/analyze/<int:folder_id>", methods=["POST"])
+    def api_bdt_analyze(folder_id: int):
+        bdt_check_enabled()
+        folder = get_node(folder_id, "folder")
+        body = request.get_json(force=True, silent=True) or {}
+        try:
+            return jsonify(analyze_folder(folder, url=(body.get("url") or "").strip() or None,
+                                          details=bool(body.get("details")), force=bool(body.get("force"))))
+        except BdtError as e:
+            abort(502, description=str(e))
+
+    @app.route("/api/bdt/series/<int:folder_id>", methods=["GET"])
+    def api_bdt_series(folder_id: int):
+        folder = get_node(folder_id, "folder")
+        link = lib.bdt_series_get(folder_id)
+        if not link:
+            return jsonify(None)
+        r = bdt_report(folder, link)
+        r["status"] = "ok"
+        return jsonify(r)
+
+    @app.route("/api/bdt/series/<int:folder_id>", methods=["DELETE"])
+    def api_bdt_series_delete(folder_id: int):
+        get_node(folder_id, "folder")
+        lib.bdt_series_delete(folder_id)
+        return jsonify(None)
+
+    @app.route("/api/bdt/collection")
+    def api_bdt_collection():
+        rows = lib.bdt_series_all()
+        linked_ids = {r["folder_id"] for r in rows}
+        unlinked = [f for f in lib.folders_with_albums() if f["id"] not in linked_ids]
+        return jsonify({"series": rows, "unlinked": [{"id": f["id"], "name": f["name"], "albums": f["direct"]}
+                                                     for f in unlinked]})
+
+    @app.route("/api/bdt/batch", methods=["GET"])
+    def api_bdt_batch_status():
+        return jsonify(bdt_job)
+
+    @app.route("/api/bdt/batch", methods=["DELETE"])
+    def api_bdt_batch_stop():
+        bdt_job["stop"] = True
+        return jsonify(bdt_job)
+
+    @app.route("/api/bdt/batch", methods=["POST"])
+    def api_bdt_batch_start():
+        bdt_check_enabled()
+        if bdt_job["running"]:
+            return jsonify(bdt_job), 409
+        body = request.get_json(force=True, silent=True) or {}
+        ids = body.get("folder_ids")
+        if not ids:
+            linked = {r["folder_id"] for r in lib.bdt_series_all()}
+            ids = [f["id"] for f in lib.folders_with_albums() if f["id"] not in linked]
+        ids = [int(i) for i in ids][:2000]
+        bdt_job.update(running=True, done=0, total=len(ids), current=None, errors=[], stop=False, linked=0,
+                       ambiguous=0, not_found=0)
+
+        def job():
+            try:
+                for fid in ids:
+                    if bdt_job["stop"]:
+                        break
+                    folder = lib.node(fid)
+                    if not folder or folder["kind"] != "folder":
+                        bdt_job["done"] += 1
+                        continue
+                    bdt_job["current"] = folder["name"]
+                    try:
+                        r = analyze_folder(folder, details=bool(body.get("details")))
+                        if r.get("status") == "ok":
+                            bdt_job["linked"] += 1
+                        elif r.get("status") == "ambiguous":
+                            bdt_job["ambiguous"] += 1
+                        elif r.get("status") == "not_found":
+                            bdt_job["not_found"] += 1
+                    except BdtError as e:
+                        bdt_job["errors"].append({"folder": folder["name"], "error": str(e)})
+                        if "refuse" in str(e) or "vérification" in str(e):
+                            break  # inutile d'insister si le site bloque
+                    except Exception as e:  # noqa: BLE001
+                        log.exception("Analyse Bédéthèque de %s", folder["name"])
+                        bdt_job["errors"].append({"folder": folder["name"], "error": f"Erreur inattendue : {e}"})
+                    bdt_job["done"] += 1
+            finally:
+                bdt_job["running"] = False
+                bdt_job["current"] = None
+
+        threading.Thread(target=job, name="bulle-bdt", daemon=True).start()
+        time.sleep(0.2)
+        return jsonify(bdt_job), 202
 
     # ------------------------------------------------------------------ tâches de fond
     def preload_albums(todo: list[dict], label: str) -> None:
