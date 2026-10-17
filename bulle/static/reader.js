@@ -683,6 +683,16 @@
     const thumbW = 300;
     stripRow.innerHTML = Array.from({ length: pages }, (_, n) => `<button type="button" class="sthumb" data-n="${n}"><img alt="" data-src="/api/page/${id}/${n}?w=${thumbW}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}"><span>${n + 1}</span><i class="setcov" data-setcover="${n}" title="Utiliser cette page comme couverture de l'album">★ Couverture</i></button>`).join("");
     markCoverThumb();
+    // miniature qui ne s'affiche pas : on montre la raison donnée par le serveur (quel fichier, quel format…)
+    for (const im of stripRow.querySelectorAll("img")) im.addEventListener("error", async () => {
+      const t = im.closest(".sthumb");
+      if (!t || t.classList.contains("bad")) return;
+      t.classList.add("bad");
+      let msg = "Image illisible";
+      try { const j = await (await fetch(im.src)).json(); msg = j.error || msg; } catch (_) { /* ignore */ }
+      const em = document.createElement("em"); em.className = "sbad"; em.textContent = msg; em.title = msg;
+      t.insertBefore(em, im); im.hidden = true;
+    });
     stripObserver = new IntersectionObserver(entries => {
       for (const en of entries) if (en.isIntersecting) { const im = en.target.querySelector("img"); if (im && !im.src) im.src = im.dataset.src; stripObserver.unobserve(en.target); }
     }, { root: stripRow, rootMargin: "0px 600px" });
