@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.8)
+# Bulle — lecteur de BD maison (v0.8.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -13,6 +13,10 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   gouttières, le lecteur glisse et zoome de l'une à l'autre ; une planche sans cases reconnues reste
   entière), page entière / pleine largeur / taille d'origine, clavier, tactile (balayage, zones de tape),
   sens manga (l'ordre des cases suit), plein écran, préchargement, enchaînement sur l'album suivant.
+  **Zoom libre** : Ctrl + molette (centré sur la souris), pincement, `+` / `-` / `0`, double-clic ;
+  une fois zoomé, la souris ou le doigt déplacent la page et Bulle va chercher une version plus nette.
+  **Clic droit** (ou `T`) : bande des miniatures de toutes les pages, molette pour la faire défiler,
+  clic pour y aller, clic droit ou Échap pour revenir. Pas de barre de défilement visible.
 - **Progression** : reprise là où vous vous êtes arrêté, « Reprendre la lecture » sur l'accueil,
   badges lu / en cours (aussi sur les dossiers : « 3/16 lus »), marquer lu / non lu.
 - **Colonne de gauche** : Bibliothèque, À lire, ★ Favoris, Listes (personnalisées, chacune affichée
