@@ -1,8 +1,10 @@
 """Ouverture des albums (CBZ / CBR / PDF / 7z / tar), redimensionnement JPEG et cache disque."""
 from __future__ import annotations
 
+import glob
 import io
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -14,7 +16,7 @@ import zipfile
 from collections import defaultdict
 from typing import Optional
 
-from PIL import Image, ImageFile, ImageOps
+from PIL import Image, ImageFile, ImageFilter, ImageOps
 
 from .library import natural_sort_key
 
@@ -28,11 +30,13 @@ MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jpe": "image/jpeg", ".png
         ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".avif": "image/avif",
         ".jxl": "image/jxl", ".tif": "image/tiff", ".tiff": "image/tiff", ".heic": "image/heic"}
 
-# Largeurs servies (les autres demandes sont arrondies à la valeur supérieure) : cache borné.
-WIDTHS = (400, 600, 800, 1000, 1200, 1600, 2000, 2400)
-COVER_WIDTH = 400
-PDF_ORIGINAL_WIDTH = 2000
-JPEG_QUALITY = 85
+# Largeurs servies : arrondies au multiple de 100 supérieur, entre MIN_WIDTH et MAX_WIDTH (cache borné).
+MIN_WIDTH, MAX_WIDTH, WIDTH_STEP = 300, 3000, 100
+COVER_WIDTH = 600
+PDF_ORIGINAL_WIDTH = 2400
+JPEG_QUALITY = 90
+# Profils de qualité réglables : (qualité JPEG, sous-échantillonnage de la couleur : 0 = aucun, 2 = 4:2:0)
+QUALITY_PROFILES = {"eco": (80, 2), "normal": (90, 0), "max": (95, 0)}
 MAX_EXTRACTED = 8  # nombre d'archives CBR/7z gardées décompressées sur le disque
 
 # Outils externes pour les RAR / 7z, par ordre de préférence.
@@ -75,13 +79,11 @@ def sort_pages(names: list[str]) -> list[str]:
 
 
 def pick_width(w: Optional[int]) -> int:
-    """0 = original ; sinon arrondi à la largeur servie juste au-dessus."""
+    """0 = original ; sinon arrondi au multiple de 100 supérieur (jamais plus petit que demandé)."""
     if not w or w <= 0:
         return 0
-    for cand in WIDTHS:
-        if w <= cand:
-            return cand
-    return WIDTHS[-1]
+    w = max(MIN_WIDTH, min(MAX_WIDTH, int(w)))
+    return int(math.ceil(w / WIDTH_STEP) * WIDTH_STEP)
 
 
 # ----------------------------------------------------------------------------
@@ -336,45 +338,55 @@ def flatten(img: Image.Image) -> Image.Image:
     return img
 
 
-def encode_jpeg(img: Image.Image, quality: int = JPEG_QUALITY) -> bytes:
+def encode_jpeg(img: Image.Image, quality: int = JPEG_QUALITY, subsampling: int = 0) -> bytes:
     out = io.BytesIO()
-    flatten(img).save(out, "JPEG", quality=quality, progressive=True, optimize=False)
+    flatten(img).save(out, "JPEG", quality=quality, subsampling=subsampling, progressive=True, optimize=False)
     return out.getvalue()
 
 
-def resize_to_jpeg(data: bytes, width: int) -> bytes:
+def _shrink(img: Image.Image, width: int, sharpen: bool) -> Image.Image:
+    """Réduit à `width` px de large (jamais agrandi) avec un léger renforcement de netteté."""
+    if width and img.width > width:
+        scale = width / img.width
+        target = (width, max(1, round(img.height * scale)))
+        if getattr(img, "format", None) == "JPEG" and scale <= 0.5:
+            img.draft("RGB", (target[0] * 2, target[1] * 2))  # décodage réduit, mais gardé 2x plus grand que la cible
+        img = flatten(img).resize(target, Image.Resampling.LANCZOS, reducing_gap=3.0)
+        if sharpen and scale < 0.9:
+            img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3))
+    else:
+        img.load()
+    return img
+
+
+def resize_to_jpeg(data: bytes, width: int, quality: int = JPEG_QUALITY, subsampling: int = 0,
+                   sharpen: bool = True) -> bytes:
     """Décode, réduit à `width` pixels de large (jamais agrandi) et encode en JPEG."""
     try:
         img = Image.open(io.BytesIO(data))
-        if width and img.width > width:
-            target = (width, max(1, round(img.height * width / img.width)))
-            if img.format == "JPEG":
-                img.draft("RGB", target)  # décodage réduit : beaucoup plus rapide sur les grosses pages
-            img = flatten(img)
-            img = img.resize(target, Image.Resampling.LANCZOS, reducing_gap=2.0)
-        else:
-            img.load()
-        return encode_jpeg(img)
+        return encode_jpeg(_shrink(img, width, sharpen), quality, subsampling)
     except AlbumError:
         raise
     except Exception as e:  # noqa: BLE001
         raise AlbumError(f"Image illisible : {e}") from e
 
 
-def image_to_jpeg(img: Image.Image, width: int) -> bytes:
-    if width and img.width > width:
-        target = (width, max(1, round(img.height * width / img.width)))
-        img = flatten(img).resize(target, Image.Resampling.LANCZOS, reducing_gap=2.0)
-    return encode_jpeg(img)
+def image_to_jpeg(img: Image.Image, width: int, quality: int = JPEG_QUALITY, subsampling: int = 0,
+                  sharpen: bool = True) -> bytes:
+    return encode_jpeg(_shrink(img, width, sharpen), quality, subsampling)
 
 
 # ----------------------------------------------------------------------------
 # Le gestionnaire : ouverture + cache
 # ----------------------------------------------------------------------------
 class Comics:
-    def __init__(self, cache_dir: str, page_cache: bool = True):
+    def __init__(self, cache_dir: str, page_cache: bool = True, quality: str = "normal", sharpen: bool = True,
+                 cover_width: int = COVER_WIDTH):
         self.cache_dir = cache_dir
         self.page_cache = page_cache
+        self.quality_name = quality if quality in QUALITY_PROFILES else "normal"
+        self.sharpen = sharpen
+        self.cover_width = int(cover_width) if cover_width else COVER_WIDTH
         self.pages_dir = os.path.join(cache_dir, "pages")
         self.covers_dir = os.path.join(cache_dir, "covers")
         self.extract_dir = os.path.join(cache_dir, "extract")
@@ -386,6 +398,27 @@ class Comics:
     def lock(self, node_id: int) -> threading.Lock:
         with self._locks_guard:
             return self._locks[node_id]
+
+    # -- réglages de qualité -----------------------------------------------------
+    def configure(self, quality: Optional[str] = None, sharpen: Optional[bool] = None,
+                  cover_width: Optional[int] = None, page_cache: Optional[bool] = None) -> None:
+        if quality in QUALITY_PROFILES:
+            self.quality_name = quality
+        if sharpen is not None:
+            self.sharpen = bool(sharpen)
+        if cover_width:
+            self.cover_width = max(200, min(1200, int(cover_width)))
+        if page_cache is not None:
+            self.page_cache = bool(page_cache)
+
+    @property
+    def jpeg(self) -> tuple[int, int]:
+        return QUALITY_PROFILES[self.quality_name]
+
+    @property
+    def profile_tag(self) -> str:
+        q, sub = self.jpeg
+        return f"q{q}{'s' if self.sharpen else ''}{'c' if sub == 0 else ''}"
 
     # -- ouverture --------------------------------------------------------------
     def open(self, node: dict, abs_path: str) -> Album:
@@ -425,10 +458,54 @@ class Comics:
 
     # -- cache ------------------------------------------------------------------
     def cover_path(self, node_id: int) -> str:
-        return os.path.join(self.covers_dir, f"{node_id}.jpg")
+        return os.path.join(self.covers_dir, f"{node_id}-{self.cover_width}-{self.profile_tag}.jpg")
 
     def page_path(self, node_id: int, index: int, width: int) -> str:
-        return os.path.join(self.pages_dir, str(node_id), f"{index}-{width}.jpg")
+        return os.path.join(self.pages_dir, str(node_id), f"{index}-{width}-{self.profile_tag}.jpg")
+
+    def cache_size(self) -> dict:
+        """Taille du cache (octets) par partie."""
+        out = {}
+        for name, d in (("pages", self.pages_dir), ("covers", self.covers_dir), ("extract", self.extract_dir)):
+            total = 0
+            for dirpath, _, files in os.walk(d):
+                for f in files:
+                    try:
+                        total += os.path.getsize(os.path.join(dirpath, f))
+                    except OSError:
+                        pass
+            out[name] = total
+        out["total"] = sum(out.values())
+        return out
+
+    def trim_pages(self, max_bytes: int) -> int:
+        """Supprime les pages en cache les moins récemment utilisées jusqu'à repasser sous max_bytes."""
+        if max_bytes <= 0:
+            return 0
+        entries = []
+        total = 0
+        for dirpath, _, files in os.walk(self.pages_dir):
+            for f in files:
+                p = os.path.join(dirpath, f)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                entries.append((max(st.st_atime, st.st_mtime), st.st_size, p))
+                total += st.st_size
+        removed = 0
+        if total <= max_bytes:
+            return 0
+        for _, size, p in sorted(entries):
+            try:
+                os.unlink(p)
+                total -= size
+                removed += 1
+            except OSError:
+                pass
+            if total <= max_bytes:
+                break
+        return removed
 
     @staticmethod
     def _write_atomic(path: str, data: bytes) -> None:
@@ -447,7 +524,8 @@ class Comics:
 
     def invalidate(self, node_ids) -> None:
         for nid in node_ids:
-            for p in (self.cover_path(nid),):
+            for p in glob.glob(os.path.join(self.covers_dir, f"{nid}-*.jpg")) + \
+                    [os.path.join(self.covers_dir, f"{nid}.jpg")]:
                 try:
                     os.unlink(p)
                 except OSError:
@@ -460,6 +538,18 @@ class Comics:
         for name in os.listdir(self.pages_dir):
             shutil.rmtree(os.path.join(self.pages_dir, name), ignore_errors=True)
             n += 1
+        for name in os.listdir(self.extract_dir):
+            shutil.rmtree(os.path.join(self.extract_dir, name), ignore_errors=True)
+        return n
+
+    def clear_covers(self) -> int:
+        n = 0
+        for name in os.listdir(self.covers_dir):
+            try:
+                os.unlink(os.path.join(self.covers_dir, name))
+                n += 1
+            except OSError:
+                pass
         return n
 
     # -- opérations de haut niveau ------------------------------------------------
@@ -471,7 +561,7 @@ class Comics:
                 if n == 0:
                     raise AlbumError("Aucune image trouvée dans ce fichier")
                 if make_cover and not os.path.exists(self.cover_path(node["id"])):
-                    self._write_atomic(self.cover_path(node["id"]), self._render(album, 0, COVER_WIDTH))
+                    self._write_atomic(self.cover_path(node["id"]), self._render(album, 0, self.cover_width))
                 return n
 
     def cover(self, node: dict, abs_path: str) -> str:
@@ -507,9 +597,9 @@ class Comics:
                         log.warning("Cache pages indisponible : %s", e)
                 return None, data, "image/jpeg"
 
-    @staticmethod
-    def _render(album: Album, index: int, width: int) -> bytes:
+    def _render(self, album: Album, index: int, width: int) -> bytes:
+        quality, subsampling = self.jpeg
         if isinstance(album, PdfAlbum):
-            return image_to_jpeg(album.render(index, width), width)
+            return image_to_jpeg(album.render(index, width), width, quality, subsampling, self.sharpen)
         data, _ = album.read(index)
-        return resize_to_jpeg(data, width)
+        return resize_to_jpeg(data, width, quality, subsampling, self.sharpen)
