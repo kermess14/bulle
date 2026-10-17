@@ -1,20 +1,27 @@
 """Serveur web Bulle : pages statiques + API JSON."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 import os
+import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 from flask import Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory
+from itsdangerous import BadSignature, URLSafeSerializer
+
+from . import opds
 
 from .bedetheque import BdtError, BedethequeClient, compare, query_from_folder
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -48,6 +55,8 @@ def global_defaults() -> dict:
         "read_threshold": 1.0,        # 1.0 = lu à la dernière page ; 0.9 = lu à partir de 90 %
         "bdt_enabled": True,          # analyse Bédéthèque à la demande
         "bdt_interval": 2.5,          # secondes entre deux requêtes vers bedetheque.com
+        "require_profile": False,     # demander « qui lit ? » à l'ouverture
+        "opds_enabled": True,         # flux OPDS pour les applis mobiles
     }
 
 
@@ -56,7 +65,25 @@ GLOBAL_TYPES = {
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0),
+    "require_profile": (bool,), "opds_enabled": (bool,),
 }
+
+
+def hash_pin(pin: str) -> str:
+    salt = secrets.token_hex(8)
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode("utf-8"), 100_000).hex()
+    return f"pbkdf2${salt}${digest}"
+
+
+def check_pin(stored: Optional[str], pin: str) -> bool:
+    if not stored:
+        return True
+    try:
+        _, salt, digest = stored.split("$")
+    except ValueError:
+        return False
+    candidate = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode("utf-8"), 100_000).hex()
+    return hmac.compare_digest(candidate, digest)
 
 
 def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = None) -> Flask:
@@ -130,12 +157,67 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     apply_settings(settings())
 
-    # ------------------------------------------------------------------ profils
+    # ------------------------------------------------------------------ profils, cookies signés, code d'accès
+    secret_row = lib.conn.execute("SELECT value FROM meta WHERE key='secret'").fetchone()
+    if secret_row:
+        secret = secret_row["value"]
+    else:
+        secret = secrets.token_hex(32)
+        with lib._write_lock:
+            lib.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('secret', ?)", (secret,))
+            lib.conn.commit()
+    signer = URLSafeSerializer(secret, salt="bulle")
+
+    def access_pin_hash() -> Optional[str]:
+        return lib.get_settings(None).get("access_pin_hash") or None
+
+    def auth_ok() -> bool:
+        stored = access_pin_hash()
+        if not stored:
+            return True
+        tok = request.cookies.get("bulle_auth")
+        if tok:
+            try:
+                return signer.loads(tok) == {"auth": stored[-16:]}
+            except BadSignature:
+                return False
+        auth = request.authorization  # OPDS : Basic, mot de passe = code d'accès
+        if auth and auth.password is not None and check_pin(stored, auth.password):
+            return True
+        return False
+
+    @app.before_request
+    def gate():
+        path = request.path
+        if path.startswith("/static/") or path in ("/api/auth/login", "/api/auth/status") or path == "/favicon.ico":
+            return None
+        if auth_ok():
+            return None
+        if path.startswith("/opds"):
+            return Response("Code d'accès requis", 401, {"WWW-Authenticate": 'Basic realm="Bulle"'})
+        if path.startswith("/api/"):
+            return jsonify({"error": "Code d'accès requis", "auth_required": True}), 401
+        return None  # pages HTML : l'interface affichera l'écran du code
+
     def current_profile() -> int:
-        raw = request.cookies.get("bulle_profile")
-        if raw and raw.isdigit() and lib.profile(int(raw)):
-            return int(raw)
+        tok = request.cookies.get("bulle_profile")
+        if tok:
+            try:
+                pid = int(signer.loads(tok).get("p", DEFAULT_PROFILE))
+                if lib.profile(pid):
+                    return pid
+            except (BadSignature, AttributeError, ValueError, TypeError):
+                pass
         return DEFAULT_PROFILE
+
+    def profile_selected() -> bool:
+        tok = request.cookies.get("bulle_profile")
+        if not tok:
+            return False
+        try:
+            return bool(lib.profile(int(signer.loads(tok).get("p", 0))))
+        except (BadSignature, AttributeError, ValueError, TypeError):
+            return False
 
     # ------------------------------------------------------------------ helpers
     def progress_json(p: Optional[dict]) -> Optional[dict]:
@@ -382,8 +464,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/settings", methods=["GET"])
     def api_settings_get():
         pid = current_profile()
-        return jsonify({"global": settings(), "profile": lib.get_settings(pid), "profile_id": pid,
-                        "profiles": lib.profiles(), "version": VERSION, "library_root": library_root,
+        g = settings()
+        g.pop("access_pin_hash", None)
+        g["access_pin_set"] = bool(access_pin_hash())
+        return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid,
+                        "profile_selected": profile_selected(), "profiles": lib.profiles(), "version": VERSION,
+                        "library_root": library_root,
                         "quality_profiles": {k: {"quality": v[0], "chroma": v[1]} for k, v in QUALITY_PROFILES.items()}})
 
     @app.route("/api/settings", methods=["PUT", "POST"])
@@ -391,24 +477,108 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         body = request.get_json(force=True, silent=True) or {}
         pid = current_profile()
         if isinstance(body.get("global"), dict):
-            lib.set_settings(validate_global(body["global"]), None)
+            g = dict(body["global"])
+            if "access_pin" in g:
+                pin = str(g.pop("access_pin") or "").strip()
+                lib.set_settings({"access_pin_hash": hash_pin(pin) if pin else None}, None)
+            lib.set_settings(validate_global(g), None)
             apply_settings(settings())
         if isinstance(body.get("profile"), dict):
             lib.set_settings(validate_profile_settings(body["profile"]), pid)
-        return api_settings_get()
+        resp = make_response(api_settings_get())
+        if isinstance(body.get("global"), dict) and "access_pin" in body["global"]:
+            stored = access_pin_hash()
+            if stored:
+                resp.set_cookie("bulle_auth", signer.dumps({"auth": stored[-16:]}), max_age=10 * 365 * 24 * 3600,
+                                samesite="Lax")
+            else:
+                resp.delete_cookie("bulle_auth")
+        return resp
+
+    @app.route("/api/auth/status")
+    def api_auth_status():
+        return jsonify({"required": bool(access_pin_hash()), "ok": auth_ok()})
+
+    @app.route("/api/auth/login", methods=["POST"])
+    def api_auth_login():
+        body = request.get_json(force=True, silent=True) or {}
+        stored = access_pin_hash()
+        if stored and not check_pin(stored, str(body.get("pin") or "")):
+            time.sleep(0.8)  # freine les essais en rafale
+            abort(403, description="Code d'accès incorrect")
+        resp = make_response(jsonify({"ok": True}))
+        if stored:
+            resp.set_cookie("bulle_auth", signer.dumps({"auth": stored[-16:]}), max_age=10 * 365 * 24 * 3600,
+                            samesite="Lax")
+        return resp
+
+    @app.route("/api/auth/logout", methods=["POST"])
+    def api_auth_logout():
+        resp = make_response(jsonify({"ok": True}))
+        resp.delete_cookie("bulle_auth")
+        resp.delete_cookie("bulle_profile")
+        return resp
 
     @app.route("/api/profiles", methods=["GET"])
     def api_profiles():
-        return jsonify({"profiles": lib.profiles(), "current": current_profile()})
+        return jsonify({"profiles": lib.profiles(), "current": current_profile(), "selected": profile_selected(),
+                        "require_profile": bool(settings()["require_profile"])})
+
+    @app.route("/api/profiles", methods=["POST"])
+    def api_profile_create():
+        body = request.get_json(force=True, silent=True) or {}
+        name = str(body.get("name") or "").strip()[:40]
+        if not name:
+            abort(400, description="Il faut un nom")
+        if len(lib.profiles()) >= 20:
+            abort(400, description="Trop de profils")
+        pin = str(body.get("pin") or "").strip()
+        p = lib.add_profile(name, hash_pin(pin) if pin else None, str(body.get("avatar") or "")[:8] or None)
+        return jsonify({"id": p["id"], "name": p["name"], "avatar": p.get("avatar"), "has_pin": bool(p.get("pin_hash"))})
+
+    @app.route("/api/profiles/<int:pid>", methods=["PUT"])
+    def api_profile_update(pid: int):
+        p = lib.profile(pid)
+        if not p:
+            abort(404, description="Profil inconnu")
+        body = request.get_json(force=True, silent=True) or {}
+        fields = {}
+        if "name" in body:
+            fields["name"] = str(body["name"] or "").strip()[:40] or p["name"]
+        if "avatar" in body:
+            fields["avatar"] = str(body["avatar"] or "")[:8] or None
+        if "pin" in body:
+            pin = str(body["pin"] or "").strip()
+            fields["pin_hash"] = hash_pin(pin) if pin else None
+        p = lib.update_profile(pid, **fields)
+        return jsonify({"id": p["id"], "name": p["name"], "avatar": p.get("avatar"), "has_pin": bool(p.get("pin_hash"))})
+
+    @app.route("/api/profiles/<int:pid>", methods=["DELETE"])
+    def api_profile_delete(pid: int):
+        if pid == DEFAULT_PROFILE:
+            abort(400, description="Le premier profil ne peut pas être supprimé")
+        if not lib.delete_profile(pid):
+            abort(404, description="Profil inconnu")
+        resp = make_response(jsonify(None))
+        if current_profile() == pid:
+            resp.delete_cookie("bulle_profile")
+        return resp
 
     @app.route("/api/profiles/select", methods=["POST"])
     def api_profile_select():
         body = request.get_json(force=True, silent=True) or {}
-        pid = int(body.get("id", DEFAULT_PROFILE))
-        if not lib.profile(pid):
+        try:
+            pid = int(body.get("id", DEFAULT_PROFILE))
+        except (TypeError, ValueError):
+            abort(400, description="Profil invalide")
+        p = lib.profile(pid)
+        if not p:
             abort(404, description="Profil inconnu")
-        resp = make_response(jsonify({"current": pid}))
-        resp.set_cookie("bulle_profile", str(pid), max_age=10 * 365 * 24 * 3600, samesite="Lax")
+        if p.get("pin_hash") and not check_pin(p["pin_hash"], str(body.get("pin") or "")):
+            time.sleep(0.8)
+            abort(403, description="Code PIN incorrect")
+        resp = make_response(jsonify({"current": pid, "name": p["name"]}))
+        resp.set_cookie("bulle_profile", signer.dumps({"p": pid}), max_age=10 * 365 * 24 * 3600, samesite="Lax")
         return resp
 
     @app.route("/api/cache", methods=["GET"])
@@ -459,6 +629,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         return send_file(path, as_attachment=True, download_name=os.path.basename(path), conditional=True)
 
     @app.errorhandler(400)
+    @app.errorhandler(403)
     @app.errorhandler(404)
     @app.errorhandler(409)
     @app.errorhandler(415)
@@ -467,6 +638,76 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if request.path.startswith("/api/"):
             return jsonify({"error": getattr(e, "description", str(e))}), e.code
         return e
+
+    # ------------------------------------------------------------------ OPDS
+    def opds_base() -> str:
+        return request.host_url.rstrip("/")
+
+    def opds_response(xml: bytes, kind: str = opds.ACQ) -> Response:
+        resp = Response(xml)
+        resp.headers["Content-Type"] = kind + "; charset=utf-8"
+        return resp
+
+    def opds_check() -> None:
+        if not settings()["opds_enabled"]:
+            abort(404, description="Flux OPDS désactivé dans les réglages")
+
+    def opds_enrich(albums: list[dict]) -> list[dict]:
+        pid = current_profile()
+        out = []
+        for n in albums:
+            d = dict(n)
+            crumbs = lib.breadcrumb(n)
+            d["folder"] = " › ".join(c["name"] for c in crumbs[1:-1])
+            if "p_page" in n and n.get("p_page") is not None:
+                d["progress"] = {"page": n["p_page"], "completed": bool(n.get("p_completed"))}
+            m = lib.bdt_album(n["id"])
+            d["meta"] = meta_json(m) if m else None
+            out.append(d)
+        return out
+
+    @app.route("/opds")
+    @app.route("/opds/")
+    def opds_root():
+        opds_check()
+        root = lib.root_node()
+        return opds_response(opds.root_feed(opds_base(), root["id"] if root else None, lib.stats()), opds.NAV)
+
+    @app.route("/opds/opensearch.xml")
+    def opds_opensearch():
+        opds_check()
+        return Response(opds.opensearch(opds_base()), mimetype="application/opensearchdescription+xml")
+
+    @app.route("/opds/folder/<int:node_id>")
+    def opds_folder(node_id: int):
+        opds_check()
+        folder = get_node(node_id, "folder")
+        children = lib.children(node_id)
+        pid = current_profile()
+        prog = {p["node_id"]: {"page": p["page"], "completed": bool(p["completed"])} for p in lib.all_progress(pid)}
+        metas = {k: meta_json(v) for k, v in lib.bdt_albums_for_folder(node_id).items()}
+        page = max(1, request.args.get("page", 1, type=int))
+        return opds_response(opds.folder_feed(opds_base(), folder, children, metas, prog, page))
+
+    @app.route("/opds/continue")
+    def opds_continue():
+        opds_check()
+        albums = opds_enrich(lib.continue_reading(limit=100, profile_id=current_profile()))
+        return opds_response(opds.list_feed(opds_base(), "Reprendre la lecture", "/opds/continue", albums))
+
+    @app.route("/opds/recent")
+    def opds_recent():
+        opds_check()
+        albums = opds_enrich(lib.recent(limit=100, profile_id=current_profile()))
+        return opds_response(opds.list_feed(opds_base(), "Ajouts récents", "/opds/recent", albums))
+
+    @app.route("/opds/search")
+    def opds_search():
+        opds_check()
+        q = (request.args.get("q") or "").strip()
+        albums = opds_enrich([n for n in lib.search(q, limit=200, profile_id=current_profile()) if n["kind"] == "album"]) if len(q) >= 2 else []
+        page = max(1, request.args.get("page", 1, type=int))
+        return opds_response(opds.list_feed(opds_base(), f"Recherche : {q}", opds.search_href(q), albums, page))
 
     # ------------------------------------------------------------------ API : Bédéthèque
     def bdt_check_enabled() -> None:
