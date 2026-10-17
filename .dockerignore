@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.pyc
+.git/
+.github/
+*.md
+*.yml
+make_stack.py
+start.sh

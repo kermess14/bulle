@@ -1,0 +1,22 @@
+# Variante « construite » : à utiliser en SSH (docker compose up -d --build) avec le dossier bulle copié sur le serveur.
+# Pour Dockhand, préférez bulle-stack.yml (stack à coller, rien à copier).
+services:
+  bulle:
+    build: .
+    container_name: bulle
+    restart: unless-stopped
+    ports:
+      - "2205:2205"
+    environment:
+      TZ: Europe/Paris
+      PORT: "2205"
+      SCAN_INTERVAL_HOURS: "12"   # rescan automatique ; 0 = jamais (bouton ↻ seulement)
+      SCAN_ON_START: "1"
+      PRELOAD_COVERS: "1"
+      PRELOAD_THREADS: "3"
+      PAGE_CACHE: "1"
+    volumes:
+      # Le dossier des BD (le même que Kavita / Ubooquity), en lecture seule : Bulle ne modifie jamais vos fichiers.
+      - "/uncomp3/V3X.BD/00 - BD Français:/library:ro"
+      # Base de données + cache d'images (peut être vidé sans risque : data/cache)
+      - ./data:/data

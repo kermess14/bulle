@@ -1,0 +1,31 @@
+# =====================================================================================
+#  Bulle — lecteur de BD maison — stack Docker Compose à coller telle quelle
+#  (Dockhand : Stacks → Create → coller ce fichier → Create).
+#
+#  L'image est construite automatiquement par GitHub à partir de https://github.com/kermess14/bulle
+#  À vérifier : le chemin du dossier des BD (monté en lecture seule) et le port (2205).
+#  Mise à jour : « pull » / redéployer la stack, l'image « latest » suit le dépôt.
+# =====================================================================================
+services:
+  bulle:
+    image: ghcr.io/kermess14/bulle:latest
+    container_name: bulle
+    restart: unless-stopped
+    ports:
+      - "2205:2205"
+    environment:
+      TZ: Europe/Paris
+      PORT: "2205"
+      SCAN_INTERVAL_HOURS: "12"   # rescan automatique ; 0 = seulement avec le bouton ↻
+      SCAN_ON_START: "1"
+      PRELOAD_COVERS: "1"         # couvertures générées en arrière-plan après chaque scan
+      PRELOAD_THREADS: "3"        # baisser à 1 si le serveur est petit
+      PAGE_CACHE: "1"
+    volumes:
+      # Le dossier des BD (le même que Kavita / Ubooquity), en lecture seule : Bulle ne modifie jamais vos fichiers.
+      - "/uncomp3/V3X.BD/00 - BD Français:/library:ro"
+      # Progression de lecture + cache d'images (remplacer par un dossier du serveur si vous préférez, ex. /srv/.../bulle/data:/data)
+      - bulle-data:/data
+
+volumes:
+  bulle-data:
