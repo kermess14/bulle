@@ -208,8 +208,9 @@
   }
 
   // ================================================================ couvertures au hasard en bas de la colonne de gauche
-  /* Une couverture à la fois, qui change toutes les 8 à 14 s avec une transition tirée au sort (fondu, glissé, bascule,
-     zoom, chute, flou…). Cliquer dessus ouvre la fiche de l'album. */
+  /* Jusqu'à deux couvertures posées au hasard dans l'espace libre ; une nouvelle arrive toutes les 6 à 8 s avec une
+     transition tirée au sort (fondu, glissé, bascule, zoom, chute, flou, toupie) et remplace la plus ancienne.
+     Cliquer dessus ouvre la fiche de l'album. */
   const SIDE_FX = ["fade", "slide-left", "slide-up", "flip", "zoom", "drop", "blur", "spin"];
   let sidePool = [], sideTimer = null, sideBusy = false, sideLastFx = "";
   function sideWanted() {
@@ -234,7 +235,7 @@
     clearTimeout(sideTimer);
     const el = $("#side-covers");
     if (!el || !sideWanted() || !sidePool.length) { sideTimer = null; return; }
-    sideTimer = setTimeout(nextSideCover, 8000 + Math.random() * 6000);
+    sideTimer = setTimeout(nextSideCover, 6000 + Math.random() * 2000);
     if (document.hidden || sideBusy) return;
     const c = sidePool[Math.floor(Math.random() * sidePool.length)];
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -250,9 +251,17 @@
     img.onload = () => {
       sideBusy = false;
       if (!sideWanted()) return;
-      const old = el.querySelector("img.sc.in");
+      const zw = el.clientWidth, zh = el.clientHeight;
+      // taille au hasard (deux couvertures doivent tenir), position au hasard dans la zone libre
+      const w = Math.round(Math.min(zw * 0.62, Math.max(90, Math.min(150, zh * 0.5 / 1.5)) * (0.85 + Math.random() * 0.3)));
+      const h = Math.round(w * 1.5);
+      img.style.width = w + "px";
+      img.style.left = Math.round(Math.random() * Math.max(0, zw - w)) + "px";
+      img.style.top = Math.round(Math.random() * Math.max(0, zh - h)) + "px";
       img.dataset.fx = fx;
-      img.style.setProperty("--tilt", (Math.random() * 10 - 5).toFixed(1) + "deg");
+      img.style.setProperty("--tilt", (Math.random() * 12 - 6).toFixed(1) + "deg");
+      const shown = [...el.querySelectorAll("img.sc.in")];
+      const old = shown.length >= 2 ? shown[0] : null;   // la plus ancienne s'en va quand il y en a déjà deux
       el.appendChild(img);
       requestAnimationFrame(() => requestAnimationFrame(() => {
         img.classList.add("in");
@@ -821,7 +830,7 @@
         ${field("Accès par lettre", sel("p", "letters", [["auto", "Automatique (dossiers de 40 entrées et plus)"], ["always", "Toujours"], ["never", "Jamais"]], p.letters))}
         ${field("Position des lettres", sel("p", "letters_side", [["right", "Sur le côté droit"], ["left", "Sur le côté gauche"], ["top", "En haut de la liste"]], p.letters_side))}
         ${field("Taille des lettres", sel("p", "letters_size", [["large", "Grandes"], ["normal", "Normales"]], p.letters_size))}
-        ${field("Couvertures au hasard en bas de la colonne", chk("p", "side_covers", p.side_covers !== false), "Une couverture à la fois, qui change toutes les 8 à 14 secondes avec une transition différente. Un clic ouvre sa fiche.")}
+        ${field("Couvertures au hasard en bas de la colonne", chk("p", "side_covers", p.side_covers !== false), "Jusqu'à deux couvertures posées au hasard dans l'espace libre, une nouvelle toutes les 6 à 8 secondes avec une transition différente. Un clic ouvre sa fiche.")}
         ${field("Mosaïque de couvertures en fond", sel("p", "mosaic", [["drift", "Oui, qui dérive lentement"], ["fixed", "Oui, fixe"], ["off", "Non"]], p.mosaic), "Pas dans le lecteur. Les couvertures changent doucement en fondu.")}
         ${field("Mosaïque : opacité", range("p", "mosaic_opacity", p.mosaic_opacity, 5, 100), "Plus c'est bas, plus la mosaïque s'efface derrière le contenu.")}
         ${field("Mosaïque : luminosité", range("p", "mosaic_brightness", p.mosaic_brightness, 10, 150))}
