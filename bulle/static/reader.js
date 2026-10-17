@@ -18,7 +18,7 @@
   const DEFAULTS = {
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
-    reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: true,
+    reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
   };
   const prefs = Object.assign({}, DEFAULTS);
   function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
@@ -104,7 +104,7 @@
     if (mode === "scroll") css = vw * (Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100)) / 100);
     else if (mode === "double") css = Math.min(vw / 2, vh * asp);
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
-    const factor = mode === "panels" ? 2.2 : prefs.reader_quality === "high" ? 1.5 : 1;
+    const factor = mode === "panels" ? 1.6 : prefs.reader_quality === "high" ? 1.5 : 1;
     return Math.ceil(css * dpr * factor);
   }
   let imgTag = "";
@@ -264,8 +264,11 @@
     s = Math.max(1, Math.min(5, s));
     const tx = vw / 2 - ix - s * (px + pw / 2), ty = vh / 2 - iy - s * (py + ph / 2);
     img.style.transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px) scale(${s.toFixed(4)})`;
+    panelScale = s;
     if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
+    scheduleRefine();   // une fois cadrée, la case est rechargée plus nette si besoin
   }
+  let panelScale = 1;
   async function panelStep(dir) {
     const d = panelsCache.get(current);
     const count = d && d.panels instanceof Array ? d.panels.length : 0;
@@ -273,7 +276,8 @@
       if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); return; }
       go(current + 1);
     } else {
-      if (panelIdx >= 0) { panelIdx -= 1; applyPanel(true); updateCounter(); return; }
+      // en arrière : case précédente ; la page entière n'est une étape que si l'option « page entière d'abord » est active
+      if (panelIdx > 0 || (panelIdx === 0 && prefs.reader_panels_full_first)) { panelIdx -= 1; applyPanel(true); updateCounter(); return; }
       if (current <= 0) { flash("Début de l'album"); return; }
       go(current - 1, { panel: "last" });
     }
@@ -530,7 +534,8 @@
   let refineTimer = null;
   function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, 280); }
   async function refineZoom() {
-    if (userZoom <= 1.15 || mode === "scroll" || prefs.reader_quality === "original") return;
+    const effective = userZoom * (mode === "panels" && panelIdx >= 0 ? panelScale : 1);
+    if (effective <= 1.15 || mode === "scroll" || prefs.reader_quality === "original") return;
     const token = loadToken;
     const targets = mode === "double" ? shown.map((n, i) => [n, i === 0 ? imgA : imgB]) : [[current, img]];
     for (const [n, el] of targets) {
@@ -540,7 +545,7 @@
       if (el.naturalWidth >= want * 0.9) continue;
       const w = Math.min(3000, Math.ceil(want / 100) * 100);
       const better = await loadImageAt(n, w);
-      if (token !== loadToken || !better || userZoom <= 1.15) return;
+      if (token !== loadToken || !better) return;
       if (better.naturalWidth > el.naturalWidth) el.src = better.src;
     }
   }
