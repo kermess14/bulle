@@ -91,7 +91,10 @@
     if (params.has("page")) start = +params.get("page") || 0;
     else if (item.progress && !item.progress.completed) start = item.progress.page || 0;
     applyFit(); applyMode(); applyManga(false);
-    if (!document.fullscreenEnabled) fsBtn.hidden = true;
+    // iPad / iPhone : le plein écran de Safari ajoute une croix de fermeture impossible à masquer ; la vraie solution
+    // est d'installer Bulle sur l'écran d'accueil (manifeste), donc pas de bouton plein écran sur iOS
+    const isIOS = /iP(ad|hone|od)/.test(navigator.platform) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (!document.fullscreenEnabled || isIOS) fsBtn.hidden = true;
     go(Math.min(Math.max(0, start), pages - 1), { save: false });
     scheduleHide();
   }
