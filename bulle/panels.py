@@ -19,7 +19,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-PANELS_VERSION = 3        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 4        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
 BG_TOLERANCE = 46         # écart de gris toléré autour de la couleur de fond
@@ -281,8 +281,9 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
 
 
 def _ink_lines(ink: bytes, w: int, h: int, min_len: int) -> list[tuple[int, int, int]]:
-    """Traits d'encre rectilignes : (y, x0, x1), une entrée par ligne de pixels (un trait épais en donne plusieurs,
-    voisines). Un trait doit avoir du clair d'au moins un côté (sinon c'est l'intérieur d'un aplat sombre)."""
+    """Traits rectilignes : (y, x0, x1), une entrée par ligne de pixels (un trait épais en donne plusieurs, voisines).
+    `ink` : masque 255 = pixel du trait (encre, ou au contraire fond clair). Un trait doit avoir « autre chose »
+    d'au moins un côté (sinon c'est l'intérieur d'un aplat)."""
     out = []
     for y in range(h):
         row = ink[y * w:(y + 1) * w]
@@ -291,23 +292,54 @@ def _ink_lines(ink: bytes, w: int, h: int, min_len: int) -> list[tuple[int, int,
             if b - a < min_len:
                 continue
             span = b - a
-            light = False
+            other = False
             for dy in (-3, -5, 3, 5):
                 yy = y + dy
                 if 0 <= yy < h and ink[yy * w + a:yy * w + b].count(b"\xff") <= 0.4 * span:
-                    light = True
+                    other = True
                     break
-            if light:
+            if other:
                 out.append((y, a, b))
     return out
 
 
-def detect_frames(gray: Image.Image) -> list[tuple]:
-    """Rectangles dessinés par des traits d'encre (cadres de cases), en pixels de l'image donnée."""
+def _group_lines(lines: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
+    """Un trait de plusieurs pixels d'épaisseur donne une entrée par ligne : on les fusionne (position = milieu).
+    Trop épais (> FRAME_MAX_THICK), ce n'est pas un trait mais une surface : on l'écarte."""
+    lines.sort()
+    out: list[tuple[int, int, int]] = []
+    groups: list[list] = []   # [y0, y1, a, b]
+    for y, a, b in lines:
+        g = next((g for g in groups if g[1] == y and abs(g[2] - a) <= FRAME_TOL and abs(g[3] - b) <= FRAME_TOL), None)
+        if g is not None:
+            g[1] = y + 1; g[2] = min(g[2], a); g[3] = max(g[3], b)
+        else:
+            groups.append([y, y + 1, a, b])
+        # les groupes terminés (dernière ligne < y) sortent de la liste active
+        if len(groups) > 64:
+            done, groups = [g for g in groups if g[1] < y], [g for g in groups if g[1] >= y]
+            out.extend((g[0] + (g[1] - g[0]) // 2, g[2], g[3]) for g in done if g[1] - g[0] <= FRAME_MAX_THICK)
+    out.extend((g[0] + (g[1] - g[0]) // 2, g[2], g[3]) for g in groups if g[1] - g[0] <= FRAME_MAX_THICK)
+    return out
+
+
+def _lines_of(mask_img: Image.Image) -> tuple[list, list]:
+    w, h = mask_img.size
+    hl = _group_lines(_ink_lines(mask_img.tobytes(), w, h, max(8, int(FRAME_MIN_LEN * w))))
+    vl = _group_lines(_ink_lines(mask_img.transpose(Image.Transpose.TRANSPOSE).tobytes(), h, w, max(8, int(FRAME_MIN_LEN * h * 0.7))))  # (x, y0, y1)
+    return hl, vl
+
+
+def detect_frames(gray: Image.Image, bg_mask: Optional[Image.Image] = None) -> list[tuple]:
+    """Rectangles dessinés par des traits : d'encre (cadres noirs), ou de fond clair (liserés et gouttières blancs
+    autour de cases posées sur une grande image). Les deux familles de traits se combinent : un rectangle peut avoir
+    un cadre noir sur trois côtés et une gouttière blanche sur le quatrième. En pixels de l'image donnée."""
     w, h = gray.size
     ink_img = gray.point([255 if i < INK else 0 for i in range(256)], "L")
-    hl = _ink_lines(ink_img.tobytes(), w, h, max(8, int(FRAME_MIN_LEN * w)))
-    vl = _ink_lines(ink_img.transpose(Image.Transpose.TRANSPOSE).tobytes(), h, w, max(8, int(FRAME_MIN_LEN * h * 0.7)))  # (x, y0, y1)
+    hl, vl = _lines_of(ink_img)
+    if bg_mask is not None:
+        hb, vb = _lines_of(bg_mask)
+        hl, vl = hl + hb, vl + vb
     return _rects_from_edges(hl, hl, vl, vl, w, h)
 
 
@@ -386,7 +418,7 @@ def detect_panels(img: Image.Image) -> dict:
     full = (0, 0, w, h)
     page_area = w * h
     try:
-        frames = detect_frames(gray)
+        frames = detect_frames(gray, mask if (bg >= 200 or bg <= 55) else None)
     except Exception:  # noqa: BLE001
         frames = []
 
@@ -404,6 +436,8 @@ def detect_panels(img: Image.Image) -> dict:
         return empty
     if max(_area(b) for b in ltr) > 0.85 * page_area:
         return empty
+    if sum(_area(b) for b in ltr) < 0.35 * page_area:
+        return empty   # couverture, page de titre, crédits : quelques blocs isolés sur du vide, pas des cases
     rtl = leaves(True)
     pad_x, pad_y = PAD * w, PAD * h
 

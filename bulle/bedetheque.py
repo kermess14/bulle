@@ -26,7 +26,7 @@ from bs4 import BeautifulSoup
 log = logging.getLogger("bulle.bedetheque")
 
 BASE = "https://www.bedetheque.com"
-USER_AGENT = "Bulle/0.6 (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
+USER_AGENT = "Bulle (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
 PAGE_TTL = 30 * 24 * 3600          # fiches de séries : 30 jours
 SEARCH_TTL = 7 * 24 * 3600         # résultats de recherche : 7 jours
 INDEX_TTL = 30 * 24 * 3600         # index alphabétique des séries (une page par lettre) : 30 jours
@@ -118,15 +118,51 @@ def parse_album_name(name: str) -> dict:
 # Client HTTP poli + cache
 # ----------------------------------------------------------------------------
 class BedethequeClient:
+    """Client poli : au plus `per_minute` requêtes par minute glissante, espacées d'un délai irrégulier
+    (jitter) autour de 60 / per_minute, et une pause de `pause_minutes` (± 20 %) toutes les `pause_every`
+    requêtes de tâche de fond. Les requêtes à la demande (un clic) ne subissent pas la pause, seulement
+    l'espacement et le plafond par minute."""
+
     def __init__(self, cache_get: Callable[[str], Optional[tuple[float, bytes]]],
-                 cache_put: Callable[[str, bytes], None], min_interval: float = 2.5):
+                 cache_put: Callable[[str, bytes], None], min_interval: float = 2.5,
+                 per_minute: float = 10.0, pause_every: int = 50, pause_minutes: float = 2.5):
         self._cache_get = cache_get
         self._cache_put = cache_put
         self.min_interval = min_interval
+        self.per_minute = per_minute
+        self.pause_every = pause_every
+        self.pause_minutes = pause_minutes
         self._lock = threading.Lock()
         self._last = 0.0
+        self._times: list[float] = []       # instants des dernières requêtes (fenêtre glissante d'une minute)
+        self._since_pause = 0
         self.last_error: Optional[str] = None
         self.requests_made = 0
+        self.pausing_until = 0.0
+        self._tl = threading.local()
+
+    def mark_background(self, flag: bool = True) -> None:
+        """À appeler au début d'un thread de tâche de fond : ses requêtes subissent les pauses périodiques."""
+        self._tl.background = flag
+
+    def _throttle(self, background: bool) -> None:
+        """Attend ce qu'il faut avant la prochaine requête (appelé sous le verrou)."""
+        import random
+        now = time.time()
+        if background and self.pause_every and self._since_pause >= self.pause_every:
+            pause = max(10.0, self.pause_minutes * 60 * random.uniform(0.8, 1.2))
+            self.pausing_until = now + pause
+            time.sleep(pause)
+            self._since_pause = 0
+            self.pausing_until = 0.0
+            now = time.time()
+        base = max(self.min_interval, 60.0 / max(1.0, self.per_minute))
+        wait = base * random.uniform(0.7, 1.5) - (now - self._last)
+        self._times = [t for t in self._times if now - t < 60]
+        if len(self._times) >= max(1, int(self.per_minute)):
+            wait = max(wait, 60.0 - (now - self._times[0]) + random.uniform(0.5, 3.0))
+        if wait > 0:
+            time.sleep(wait)
 
     def fetch(self, url: str, ttl: float = PAGE_TTL, force: bool = False) -> str:
         if not url.startswith(BASE + "/"):
@@ -144,9 +180,7 @@ class BedethequeClient:
             self._cache_put(url, zlib.compress(mock.encode("utf-8"), 6))
             return mock
         with self._lock:
-            wait = self.min_interval - (time.time() - self._last)
-            if wait > 0:
-                time.sleep(wait)
+            self._throttle(bool(getattr(self._tl, "background", False)))
             req = urllib.request.Request(url, headers={
                 "User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml",
                 "Accept-Language": "fr-FR,fr;q=0.9", "Accept-Encoding": "gzip",
@@ -171,6 +205,8 @@ class BedethequeClient:
                 raise BdtError(f"Bédéthèque injoignable : {getattr(e, 'reason', e)}") from e
             finally:
                 self._last = time.time()
+                self._times.append(self._last)
+                self._since_pause += 1
                 self.requests_made += 1
         if re.search(r"<title>\s*Just a moment|cf-browser-verification|Attention Required", html, re.I):
             self.last_error = "Page de vérification (anti-robot) renvoyée"

@@ -765,7 +765,10 @@
       <section>
         <h2>Bédéthèque</h2>
         ${field("Autoriser les requêtes vers bedetheque.com", chk("g", "bdt_enabled", g.bdt_enabled), "Uniquement quand vous cliquez « Analyser » (ou l'analyse groupée de la page Collection).")}
-        ${field("Délai entre deux requêtes (s)", num("g", "bdt_interval", g.bdt_interval, 1, 30, 0.5), "Par politesse envers le site ; 2,5 s par défaut.")}
+        ${field("Requêtes par minute (maximum)", num("g", "bdt_per_minute", g.bdt_per_minute, 1, 60), "Intervalle irrégulier autour de 60 / ce nombre, jamais plus dans une minute glissante. 10 par défaut.")}
+        ${field("Pause toutes les N requêtes (tâches de fond)", num("g", "bdt_pause_every", g.bdt_pause_every, 0, 1000, 10), "Analyse groupée et résumés en série ; 0 = pas de pause. Vos clics ne sont jamais mis en pause.")}
+        ${field("Durée de la pause (min)", num("g", "bdt_pause_minutes", g.bdt_pause_minutes, 0.5, 30, 0.5), "± 20 % au hasard.")}
+        ${field("Délai minimum entre deux requêtes (s)", num("g", "bdt_interval", g.bdt_interval, 1, 30, 0.5))}
         ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel).")}
         ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
         ${field("Résumé lu à l'ouverture d'une fiche", chk("g", "bdt_auto_summary", g.bdt_auto_summary), "Une requête vers la fiche de l'album, une seule fois ; le bouton « Résumés » d'une série les lit tous en tâche de fond.")}
