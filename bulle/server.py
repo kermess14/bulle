@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -59,7 +59,10 @@ def global_defaults() -> dict:
         "cover_width": COVER_WIDTH,
         "read_threshold": 1.0,        # 1.0 = lu à la dernière page ; 0.9 = lu à partir de 90 %
         "bdt_enabled": True,          # analyse Bédéthèque à la demande
-        "bdt_interval": 2.5,          # secondes entre deux requêtes vers bedetheque.com
+        "bdt_interval": 2.5,          # secondes minimum entre deux requêtes vers bedetheque.com
+        "bdt_per_minute": 10,         # plafond par minute glissante (intervalle moyen 60/n, irrégulier)
+        "bdt_pause_every": 50,        # tâches de fond : pause après n requêtes…
+        "bdt_pause_minutes": 2.5,     # … de cette durée (± 20 %)
         "bdt_auto_summary": True,     # résumé lu sur la fiche Bédéthèque quand on ouvre la fiche d'un album
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
@@ -72,6 +75,7 @@ GLOBAL_TYPES = {
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
+    "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
     "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,),
 }
 
@@ -114,6 +118,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         return s
 
     bdt = BedethequeClient(lib.bdt_cache_get, lib.bdt_cache_put)
+    import bulle.bedetheque as _bdt_mod
+    _bdt_mod.USER_AGENT = f"Bulle/{VERSION} (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
     bdt_job = {"running": False, "done": 0, "total": 0, "current": None, "errors": [], "stop": False, "linked": 0,
                "ambiguous": 0, "not_found": 0}
 
@@ -121,6 +127,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         comics.configure(quality=s["quality"], sharpen=s["sharpen"], cover_width=s["cover_width"],
                          page_cache=s["page_cache"])
         bdt.min_interval = float(s["bdt_interval"])
+        bdt.per_minute = float(s["bdt_per_minute"])
+        bdt.pause_every = int(s["bdt_pause_every"])
+        bdt.pause_minutes = float(s["bdt_pause_minutes"])
 
     def validate_global(values: dict) -> dict:
         out = {}
@@ -935,7 +944,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/bdt/status")
     def api_bdt_status():
         s = settings()
-        return jsonify({"enabled": bool(s["bdt_enabled"]), "interval": float(s["bdt_interval"]),
+        return jsonify({"enabled": bool(s["bdt_enabled"]), "interval": max(float(s["bdt_interval"]), 60.0 / float(s["bdt_per_minute"])),
+                        "pausing_until": bdt.pausing_until,
                         "requests_made": bdt.requests_made, "last_error": bdt.last_error, "job": bdt_job,
                         "linked": len(lib.bdt_series_all()), "candidates": len(lib.folders_with_albums()),
                         "index": lib.bdt_index_stats()})
@@ -956,7 +966,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         """Diagnostic : ce que Bédéthèque renvoie au serveur (index et recherche du site)."""
         bdt_check_enabled()
         q = (request.args.get("q") or "Blueberry").strip()
-        out = {"query": q, "letter": index_letter_for(q), "index": lib.bdt_index_stats(), "user_agent": USER_AGENT}
+        out = {"query": q, "letter": index_letter_for(q), "index": lib.bdt_index_stats(), "user_agent": _bdt_mod.USER_AGENT}
         try:
             rows = bdt_index_for(q)
             out["index_rows"] = len(rows)
@@ -1045,6 +1055,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                            errors=[], stop=False)
 
         def job():
+            bdt.mark_background(True)
             try:
                 for nid in ids:
                     if summary_job["stop"]:
@@ -1107,6 +1118,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                        ambiguous=0, not_found=0)
 
         def job():
+            bdt.mark_background(True)
             try:
                 for fid in ids:
                     if bdt_job["stop"]:
