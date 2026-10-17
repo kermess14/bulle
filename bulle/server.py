@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.10.8"
+VERSION = "0.10.9"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -297,6 +297,13 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             "mtime": int(n.get("mtime") or 0), "added": int(n.get("added_at") or 0),
             "pages": n.get("page_count"), "error": n.get("error"), "color": n.get("color"),
         }
+        if n["kind"] == "album" and n.get("page_count"):
+            # version de la couverture (date du fichier de cache) : refaite = nouvelle adresse, le navigateur ne peut pas
+            # ressortir l'ancienne image de son cache
+            try:
+                d["cover_ver"] = int(os.path.getmtime(comics.cover_path(n)))
+            except OSError:
+                pass
         if n["kind"] == "folder":
             d["album_count"] = n.get("album_count", 0)
             d["cover_id"] = n.get("cover_id")
@@ -351,12 +358,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         metas = lib.bdt_albums_for_folder(folder["id"])
         links = lib.bdt_series_for([c["id"] for c in children if c["kind"] == "folder"])
         favs = lib.favorites_ids(profile_id)
-        folder_colors = lib.colors_for([c["cover_id"] for c in children if c["kind"] == "folder" and c.get("cover_id")])
+        cover_meta = lib.cover_meta_for([c["cover_id"] for c in children if c["kind"] == "folder" and c.get("cover_id")])
         out = []
         for c in children:
             j = album_json(c, with_progress=False)
             if c["kind"] == "folder" and c.get("cover_id"):
-                j["color"] = folder_colors.get(c["cover_id"])
+                meta = cover_meta.get(c["cover_id"])
+                if meta:
+                    j["color"] = meta["color"]
+                    try:
+                        j["cover_ver"] = int(os.path.getmtime(comics.cover_path(meta)))
+                    except OSError:
+                        pass
             if c["kind"] == "folder" and c["path"].strip("/") in adult_set:
                 j["adult"] = True
             if c["id"] in favs:
