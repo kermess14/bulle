@@ -159,7 +159,7 @@
   // ================================================================ réglages
   const PROFILE_DEFAULTS = {
     thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", letters_size: "large",
-    tabs_side: "left", cover_style: "book", skin: "bd", settings_layout: "tabs", mosaic: "drift", mosaic_opacity: 45, mosaic_brightness: 70, mosaic_glass: true, sort: "natural", hide_read: false,
+    tabs_side: "left", cover_style: "book", skin: "bd", settings_layout: "tabs", mosaic: "drift", side_covers: true, mosaic_opacity: 45, mosaic_brightness: 70, mosaic_glass: true, sort: "natural", hide_read: false,
     show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
@@ -204,7 +204,66 @@
     root.style.setProperty("--mosaic-brightness", String(Math.max(10, Math.min(150, +p.mosaic_brightness || 70)) / 100));
     $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
     setupMosaic();
+    setupSideCovers();
   }
+
+  // ================================================================ couvertures au hasard en bas de la colonne de gauche
+  /* Une couverture à la fois, qui change toutes les 8 à 14 s avec une transition tirée au sort (fondu, glissé, bascule,
+     zoom, chute, flou…). Cliquer dessus ouvre la fiche de l'album. */
+  const SIDE_FX = ["fade", "slide-left", "slide-up", "flip", "zoom", "drop", "blur", "spin"];
+  let sidePool = [], sideTimer = null, sideBusy = false, sideLastFx = "";
+  function sideWanted() {
+    const el = $("#side-covers");
+    if (!el) return false;
+    const p = settings.profile;
+    return p.side_covers !== false && document.documentElement.dataset.tabs === "left" && window.innerWidth > 1000 && el.clientHeight >= 110;
+  }
+  async function setupSideCovers() {
+    const el = $("#side-covers");
+    if (!el) return;
+    if (!sideWanted()) { clearTimeout(sideTimer); sideTimer = null; el.innerHTML = ""; el.classList.remove("on"); return; }
+    if (sideTimer) return;
+    el.classList.add("on");
+    if (!sidePool.length) {
+      try { sidePool = await api("/api/covers/sample?n=120"); } catch (_) { sidePool = []; }
+      if (!sidePool.length || !sideWanted()) return;
+    }
+    nextSideCover();
+  }
+  function nextSideCover() {
+    clearTimeout(sideTimer);
+    const el = $("#side-covers");
+    if (!el || !sideWanted() || !sidePool.length) { sideTimer = null; return; }
+    sideTimer = setTimeout(nextSideCover, 8000 + Math.random() * 6000);
+    if (document.hidden || sideBusy) return;
+    const c = sidePool[Math.floor(Math.random() * sidePool.length)];
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let fx = reduce ? "fade" : SIDE_FX[Math.floor(Math.random() * SIDE_FX.length)];
+    if (fx === sideLastFx && !reduce) fx = SIDE_FX[(SIDE_FX.indexOf(fx) + 1) % SIDE_FX.length];
+    sideLastFx = fx;
+    const img = new Image();
+    img.className = "sc"; img.alt = ""; img.decoding = "async"; img.draggable = false;
+    img.dataset.id = String(c.id);
+    img.src = `/api/cover/${c.id}?w=300&v=${c.mtime}&t=${encodeURIComponent(settings.global.img_tag || "")}`;
+    sideBusy = true;
+    img.onerror = () => { sidePool = sidePool.filter(x => x.id !== c.id); sideBusy = false; };
+    img.onload = () => {
+      sideBusy = false;
+      if (!sideWanted()) return;
+      const old = el.querySelector("img.sc.in");
+      img.dataset.fx = fx;
+      img.style.setProperty("--tilt", (Math.random() * 10 - 5).toFixed(1) + "deg");
+      el.appendChild(img);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        img.classList.add("in");
+        if (old) { old.classList.remove("in"); old.classList.add("out"); setTimeout(() => old.remove(), 1700); }
+      }));
+    };
+  }
+  document.addEventListener("click", e => {
+    const sc = e.target.closest("#side-covers img.sc.in");
+    if (sc) openInfo(sc.dataset.id);
+  });
 
   // ================================================================ mosaïque de couvertures en fond
   const TILE_W = 120, TILE_H = 180;
@@ -762,6 +821,7 @@
         ${field("Accès par lettre", sel("p", "letters", [["auto", "Automatique (dossiers de 40 entrées et plus)"], ["always", "Toujours"], ["never", "Jamais"]], p.letters))}
         ${field("Position des lettres", sel("p", "letters_side", [["right", "Sur le côté droit"], ["left", "Sur le côté gauche"], ["top", "En haut de la liste"]], p.letters_side))}
         ${field("Taille des lettres", sel("p", "letters_size", [["large", "Grandes"], ["normal", "Normales"]], p.letters_size))}
+        ${field("Couvertures au hasard en bas de la colonne", chk("p", "side_covers", p.side_covers !== false), "Une couverture à la fois, qui change toutes les 8 à 14 secondes avec une transition différente. Un clic ouvre sa fiche.")}
         ${field("Mosaïque de couvertures en fond", sel("p", "mosaic", [["drift", "Oui, qui dérive lentement"], ["fixed", "Oui, fixe"], ["off", "Non"]], p.mosaic), "Pas dans le lecteur. Les couvertures changent doucement en fondu.")}
         ${field("Mosaïque : opacité", range("p", "mosaic_opacity", p.mosaic_opacity, 5, 100), "Plus c'est bas, plus la mosaïque s'efface derrière le contenu.")}
         ${field("Mosaïque : luminosité", range("p", "mosaic_brightness", p.mosaic_brightness, 10, 150))}
