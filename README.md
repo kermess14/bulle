@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.5)
+# Bulle — lecteur de BD maison (v0.6)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -14,9 +14,14 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   sur l'album suivant à la fin.
 - **Progression** : reprise là où vous vous êtes arrêté, « Reprendre la lecture » sur l'accueil,
   badges lu / en cours (aussi sur les dossiers : « 3/16 lus »), marquer lu / non lu.
-- **Onglets** : Bibliothèque, À lire, ★ Favoris, Listes (personnalisées), Historique (albums terminés),
-  Collection, et « Au hasard » qui ouvre un album pas encore lu. Un album ou une série se met en favori
-  ou dans une liste depuis sa fiche (« i ») ou le haut de la page de la série.
+- **Colonne de gauche** : Bibliothèque, À lire, ★ Favoris, Listes (personnalisées, chacune affichée
+  dans la colonne avec son nombre d'éléments), Historique (albums terminés), Collection, « Au hasard »
+  (ouvre un album pas encore lu) et Réglages. Un album ou une série se met en favori ou dans une liste
+  en la **glissant-déposant** sur la colonne (sur « Listes » : crée une nouvelle liste), depuis sa fiche
+  (« i ») ou le haut de la page de la série. Les favoris portent un coin plié ★ sur la couverture.
+- **Pochettes** : style « livre » (dos, tranche, fine bordure et ombre de la couleur dominante de la
+  couverture, inclinaison 3D au survol, pile d'albums derrière les séries), « halo coloré » ou « simple ».
+  La couleur est calculée une fois par couverture, côté serveur.
 - **Profils** (« Qui lit ? ») : chacun sa progression et ses réglages d'affichage, code PIN facultatif par
   profil, et un **code d'accès** général facultatif pour toute la bibliothèque.
 - **Flux OPDS** (`http://<serveur>:2205/opds`) pour lire depuis une appli mobile (Panels, Chunky, Moon+,
@@ -36,7 +41,9 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
 - **Bédéthèque** (à la demande) : dans un dossier d'albums, « Analyser » cherche la série dans l'index
   alphabétique de bedetheque.com (une page par lettre, gardée un mois), compare les tomes officiels avec vos fichiers (présents, manquants affichés en
   cartes grisées à leur place, fichiers non reconnus, doublons), retient les titres officiels, l'année
-  et, avec « Auteurs et détails », scénario / dessin / couleurs, éditeur, ISBN. La page **Collection**
+  et, avec « Auteurs et détails », scénario / dessin / couleurs, éditeur, ISBN. Le **résumé** de chaque
+  album (le début, tel que le site le montre, avec un lien « lire la suite ») est lu à l'ouverture de sa
+  fiche — une fois pour toutes — ou pour toute la série avec le bouton « Résumés ». La page **Collection**
   (icône livres) récapitule toutes les séries analysées (complètes, incomplètes, en cours de parution)
   et peut analyser d'un coup les dossiers restants, une requête toutes les 2,5 s, arrêtable à tout moment.
   Si la correspondance automatique hésite, Bulle propose des candidats ou accepte l'adresse de la série.
@@ -110,8 +117,12 @@ puis ouvrir `http://localhost:2203` (ou le port donné par `PORT`). Pour les CBR
 - Cliquer sur une couverture : ouvre le dossier, ou lance la lecture de l'album (reprise automatique).
 - Le petit « i » sur un album : fiche (taille, pages, progression, marquer lu / non lu,
   recommencer, télécharger, ouvrir le dossier). Un album illisible y explique pourquoi.
-- Dans les gros dossiers (40 entrées et plus, ou toujours selon le réglage), une barre de lettres permet de
-  sauter directement à une lettre, même si la liste est découpée en pages.
+- Dans les gros dossiers (40 entrées et plus, ou toujours selon le réglage), une barre de lettres (grandes,
+  à droite ; taille et côté réglables) permet de sauter directement à une lettre, même si la liste est
+  découpée en pages.
+- Glissez une vignette (album ou série) sur « À lire », « Favoris » ou une liste de la colonne de gauche
+  pour l'y ajouter ; sur « Listes » pour créer une liste. Au survol d'un album dont le résumé est connu,
+  une info-bulle le montre.
 - Dans le lecteur : `←` `→` ou `Espace` pour tourner les pages (en mode largeur, `Espace` fait d'abord
   défiler la page), clic sur les bords de l'image, balayage ou tape sur les bords sur mobile ;
   tape / clic au centre pour afficher ou cacher les barres. Molette = page suivante / précédente
@@ -158,6 +169,7 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET /api/auth/status` · `POST /api/auth/login` · `POST /api/auth/logout` | code d'accès général (`PUT /api/settings {"global": {"access_pin": "…"}}` pour le définir, `""` pour l'enlever) |
 | `GET /opds` · `/opds/folder/<id>` · `/opds/continue` · `/opds/recent` · `/opds/search?q=` | flux OPDS (authentification Basic avec le code d'accès s'il y en a un) |
 | `GET` `POST /api/lists` · `GET` `PUT` `DELETE /api/lists/<id>` · `POST /api/lists/<id>/items` · `DELETE /api/lists/<id>/items/<album>` | listes du profil (Favoris et À lire créées d'office) |
+| `GET` `POST /api/bdt/album/<id>/summary` · `POST /api/bdt/summaries/<dossier>` · `GET` `DELETE /api/bdt/summaries` | résumé d'un album lié à Bédéthèque (lu une fois, puis gardé) ; résumés de tout un dossier en tâche de fond |
 | `POST /api/favorites/toggle` · `GET /api/history` · `GET /api/random` | favori on/off · albums terminés · un album au hasard |
 | `GET /api/bdt/debug?q=` | diagnostic : ce que Bédéthèque renvoie au serveur |
 | `POST /api/bdt/analyze/<dossier>` | analyse Bédéthèque d'un dossier (`{"url": …}` pour imposer la série, `{"details": true}` pour les auteurs, `{"force": true}` pour relire) |
@@ -180,6 +192,10 @@ une fois dans `data/cache/extract` (les 8 derniers albums ouverts sont gardés).
 - Bédéthèque n'a pas d'API : Bulle lit les pages de recherche et de série comme un visiteur, lentement,
   en respectant le robots.txt du site (pas de couvertures ni de pages « ajax »). Si le site refuse les
   requêtes, Bulle le dit clairement et le lien peut toujours être donné à la main (adresse de la série).
+  Les résumés sont ceux affichés à un visiteur sans JavaScript : le début du texte seulement, d'où le lien
+  « lire la suite sur Bédéthèque ».
+- Le glisser-déposer des vignettes fonctionne à la souris (et sur iPad) ; sur un téléphone, passez par la
+  fiche de l'album.
 - Les CBR dépendent de l'outil `unar` installé dans l'image Docker ; ce chemin n'a pas pu être
   testé hors Docker (les CBZ, les PDF et les `.cbr` qui sont en réalité des zip l'ont été).
   Si un album s'affiche « illisible », la fiche (bouton « i ») donne la raison.

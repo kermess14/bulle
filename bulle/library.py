@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS nodes(
   error       TEXT,
   album_count INTEGER NOT NULL DEFAULT 0,
   cover_id    INTEGER,
+  color       TEXT,
   added_at    REAL NOT NULL,
   seen        INTEGER NOT NULL DEFAULT 0
 );
@@ -129,7 +130,7 @@ CREATE TABLE IF NOT EXISTS list_items(
   PRIMARY KEY(list_id, node_id)
 );
 """
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEFAULT_PROFILE = 1
 
 
@@ -217,8 +218,12 @@ class Library:
             self.conn.commit()
 
     def _migrate(self) -> None:
-        """Base v1 (progression sans profil) → v2 : on recrée la table progress avec le profil 1."""
+        """Base v1 (progression sans profil) → v2 : on recrée la table progress avec le profil 1 ; colonnes ajoutées ensuite."""
         conn = self.conn
+        node_cols = [r["name"] for r in conn.execute("PRAGMA table_info(nodes)")]
+        if node_cols and "color" not in node_cols:
+            conn.execute("ALTER TABLE nodes ADD COLUMN color TEXT")
+            conn.commit()
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(progress)")]
         if cols and "profile_id" not in cols:
             log.info("Migration de la base : progression rattachée au profil par défaut")
@@ -601,6 +606,19 @@ class Library:
             self.conn.execute("DELETE FROM progress WHERE profile_id=? AND node_id=?", (profile_id, node_id))
             self.conn.commit()
 
+    def set_color(self, node_id: int, color: Optional[str]) -> None:
+        with self._write_lock:
+            self.conn.execute("UPDATE nodes SET color=? WHERE id=?", (color, node_id))
+            self.conn.commit()
+
+    def colors_for(self, node_ids: list[int]) -> dict[int, Optional[str]]:
+        out = {}
+        for i in range(0, len(node_ids), 500):
+            chunk = node_ids[i:i + 500]
+            for r in self.conn.execute(f"SELECT id, color FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                out[r["id"]] = r["color"]
+        return out
+
     def set_pages(self, node_id: int, page_count: Optional[int], error: Optional[str]) -> None:
         with self._write_lock:
             self.conn.execute("UPDATE nodes SET page_count=?, error=? WHERE id=?",
@@ -752,6 +770,18 @@ class Library:
             d["data"] = json.loads(d["data"])
             out[d["node_id"]] = d
         return out
+
+    def bdt_album_update(self, node_id: int, **fields) -> None:
+        """Complète les données Bédéthèque d'un album (ex. résumé)."""
+        row = self.bdt_album(node_id)
+        if not row:
+            return
+        data = row["data"]
+        data.update(fields)
+        with self._write_lock:
+            self.conn.execute("UPDATE bdt_albums SET data=?, updated_at=? WHERE node_id=?",
+                              (json.dumps(data, ensure_ascii=False), time.time(), node_id))
+            self.conn.commit()
 
     def bdt_album(self, node_id: int) -> Optional[dict]:
         r = self.conn.execute("SELECT * FROM bdt_albums WHERE node_id=?", (node_id,)).fetchone()

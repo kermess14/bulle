@@ -98,7 +98,8 @@
     try {
       const r = await api("/api/profiles/select", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, pin }) });
       closeModal(); toast(`Bonjour ${esc(r.name)} !`);
-      await loadSettings(); updateProfileButton(); route();
+      listsCache = null;
+      await loadSettings(); updateProfileButton(); route(); renderSidebar();
     } catch (e) {
       if (form) { const err = form.querySelector(".error"); err.textContent = e.message; err.hidden = false; form.elements.pin.select(); }
       else toast(`${ICON.warn} ${esc(e.message)}`);
@@ -118,7 +119,8 @@
 
   // ================================================================ réglages
   const PROFILE_DEFAULTS = {
-    thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", sort: "natural", hide_read: false,
+    thumb_size: "m", hover_zoom: "light", per_page: 48, letters: "auto", letters_side: "right", letters_size: "large",
+    tabs_side: "left", cover_style: "book", sort: "natural", hide_read: false,
     show_pages: false, show_continue: true, show_recent: true, recent_count: 18, theme: "dark",
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
@@ -137,9 +139,13 @@
     root.style.setProperty("--hover-scale", String(HOVER[p.hover_zoom] ?? 1.05));
     const theme = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : p.theme;
     root.dataset.theme = theme === "light" ? "light" : "dark";
+    root.dataset.tabs = p.tabs_side === "top" || window.innerWidth <= 700 ? "top" : "left";
+    root.dataset.covers = ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
     $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
   }
   matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyAppearance);
+  let resizeTimer = null;
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(applyAppearance, 120); });
   applyAppearance();
 
   async function loadSettings() {
@@ -222,6 +228,8 @@
     return /[a-z]/.test(c) ? c.toUpperCase() : "#";
   }
 
+  const colorStyle = item => /^#[0-9a-f]{6}$/i.test(item.color || "") ? ` style="--c:${item.color}"` : "";
+  const FAV = `<span class="fav" title="Favori"><b>★</b></span>`;
   function card(item, { sub } = {}) {
     if (item.kind === "ghost") return ghostCard(item);
     const letter = esc(letterOf(item.name));
@@ -235,21 +243,21 @@
         const full = item.bdt.present >= item.bdt.total;
         bdt = `<div class="sub bdt ${full ? "full" : ""}" title="Bédéthèque : ${esc(item.bdt.title || "")}${item.bdt.status ? " · " + esc(item.bdt.status) : ""}">${full ? "Série complète" : `${item.bdt.present}/${item.bdt.total} tomes`}<i style="width:${pct}%"></i></div>`;
       }
-      return `<a class="card" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}">
-        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${item.fav ? `<span class="fav" title="Favori">★</span>` : ""}`)}
+      return `<a class="card folder" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}" draggable="true"${colorStyle(item)}>
+        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${item.fav ? FAV : ""}`)}
         <div class="title">${esc(item.name)}</div>${read || (bdt ? "" : `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`)}${bdt}
       </a>`;
     }
-    const badge = (item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress)) + (item.fav ? `<span class="fav" title="Favori">★</span>` : "");
+    const badge = (item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress)) + (item.fav ? FAV : "");
     const href = item.error ? "#" : `/read/${item.id}`;
     let title = item.name, line2 = sub ? esc(sub) : (settings.profile.show_pages && item.pages ? plural(item.pages, "page", "pages") : "");
     if (settings.profile.bdt_titles && item.meta && item.meta.title) {
       title = (item.meta.number != null ? (item.meta.kind === "hs" ? "HS" : item.meta.kind === "int" ? "INT" : "T") + item.meta.number + " · " : "") + item.meta.title;
       if (!sub) line2 = esc(item.name);
     }
-    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}">
-      ${coverHtml(item, badge)}
-      <button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>
+    const tip = item.meta && item.meta.summary ? ` title="${esc(item.meta.summary.length > 320 ? item.meta.summary.slice(0, 320) + "…" : item.meta.summary)}"` : "";
+    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
+      ${coverHtml(item, badge + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>`)}
       <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;
   }
@@ -310,7 +318,8 @@
     const present = new Set(list.map(c => letterOf(c.name)));
     const all = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"];
     const side = settings.profile.letters_side || "right";
-    return `<div class="letters ${side === "top" ? "" : "rail " + side}" id="letters">${all.map(l => `<button type="button" data-letter="${l}" class="${present.has(l) ? "on" : ""}" ${present.has(l) ? "" : "disabled"}>${l}</button>`).join("")}</div>`;
+    const size = settings.profile.letters_size === "normal" ? " size-normal" : "";
+    return `<div class="letters ${side === "top" ? "" : "rail " + side + size}" id="letters">${all.map(l => `<button type="button" data-letter="${l}" class="${present.has(l) ? "on" : ""}" ${present.has(l) ? "" : "disabled"}>${l}</button>`).join("")}</div>`;
   }
 
   // ================================================================ vues
@@ -399,6 +408,7 @@
         <div class="bdt-actions">
           <button class="btn" type="button" data-bdt="refresh" data-folder="${data.folder.id}" title="Relire la fiche sur Bédéthèque">↻ Mettre à jour</button>
           ${sr.detailed ? "" : `<button class="btn" type="button" data-bdt="details" data-folder="${data.folder.id}" title="Lire les auteurs, éditeur, ISBN de chaque tome (une page Bédéthèque par 10 tomes)">Auteurs et détails</button>`}
+          <button class="btn" type="button" data-bdt="summaries" data-folder="${data.folder.id}" title="Lire le début du résumé de chaque album (une page Bédéthèque par album, en tâche de fond)">Résumés</button>
           <button class="btn" type="button" data-bdt="change" data-folder="${data.folder.id}">Changer de série</button>
           <button class="btn" type="button" data-bdt="forget" data-folder="${data.folder.id}">Oublier</button>
         </div>
@@ -433,6 +443,13 @@
         if (r.status === "no_albums") { toast(esc(r.message)); route(); return; }
         const data = { folder: { id: folderId }, children: [{ kind: "album" }], bdt: null, bdt_enabled: true };
         if (panel) { panel.outerHTML = bdtPanelHtml(data, bdtChooserHtml(folderId, r)); }
+        return;
+      }
+      if (action === "summaries") {
+        const r = await fetch(`/api/bdt/summaries/${folderId}`, { method: "POST" });
+        if (r.status === 409) { toast("Des résumés sont déjà en cours de lecture, patientez."); return; }
+        if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.statusText); }
+        pollSummaries();
         return;
       }
       if (action === "change") {
@@ -471,6 +488,24 @@
           <b>${esc(c.name)}</b><small>${[c.genre, c.tomes ? plural(c.tomes, "tome", "tomes") : "", c.exact ? "correspondance exacte" : ""].filter(Boolean).join(" · ")}</small></button>`).join("")}</div>`
         : `<p class="muted">Aucune série trouvée pour « ${esc(q)} ».</p>`;
     } catch (err) { res.innerHTML = `<p class="error">${esc(err.message)}</p>`; }
+  });
+
+  let summariesTimer = null;
+  async function pollSummaries() {
+    clearTimeout(summariesTimer);
+    try {
+      const j = await api("/api/bdt/summaries");
+      if (j.running) {
+        toast(`<div class="spinner"></div> Résumés de « ${esc(j.folder || "")} » : ${j.done} / ${j.total} <button class="btn mini" type="button" data-summaries="stop">Arrêter</button>`, { sticky: true });
+        summariesTimer = setTimeout(pollSummaries, 1500);
+      } else {
+        toast(j.total ? `Résumés lus : ${j.done} / ${j.total}${j.errors.length ? ` · ${plural(j.errors.length, "erreur", "erreurs")} (${esc(j.errors[0])})` : ""}` : "Tous les résumés de ce dossier sont déjà connus.");
+        if (location.hash.startsWith("#/f/")) route();
+      }
+    } catch (_) { /* ignore */ }
+  }
+  toastEl.addEventListener("click", e => {
+    if (e.target.closest("[data-summaries]")) api("/api/bdt/summaries", { method: "DELETE" }).then(() => toast("Arrêt demandé")).catch(() => {});
   });
 
   // ================================================================ page Collection
@@ -565,6 +600,9 @@
         ${field("Vignettes par page", sel("p", "per_page", [[24, "24"], [48, "48"], [96, "96"], [192, "192"], [0, "Toutes (pas de pages)"]], p.per_page), "Au-delà, la liste est découpée en pages.")}
         ${field("Accès par lettre", sel("p", "letters", [["auto", "Automatique (dossiers de 40 entrées et plus)"], ["always", "Toujours"], ["never", "Jamais"]], p.letters))}
         ${field("Position des lettres", sel("p", "letters_side", [["right", "Sur le côté droit"], ["left", "Sur le côté gauche"], ["top", "En haut de la liste"]], p.letters_side))}
+        ${field("Taille des lettres", sel("p", "letters_size", [["large", "Grandes"], ["normal", "Normales"]], p.letters_size))}
+        ${field("Onglets (À lire, Favoris, Listes…)", sel("p", "tabs_side", [["left", "Colonne à gauche"], ["top", "Rangée en haut"]], p.tabs_side), "Sur mobile, toujours en haut.")}
+        ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
         ${field("Tri", sel("p", "sort", [["natural", "Alphabétique naturel (T2 avant T10)"], ["recent", "Ajouts récents d'abord"], ["unread", "Non lus d'abord"]], p.sort))}
         ${field("Masquer les albums lus", chk("p", "hide_read", p.hide_read))}
         ${field("Nombre de pages sur les cartes", chk("p", "show_pages", p.show_pages))}
@@ -625,6 +663,7 @@
         ${field("Délai entre deux requêtes (s)", num("g", "bdt_interval", g.bdt_interval, 1, 30, 0.5), "Par politesse envers le site ; 2,5 s par défaut.")}
         ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel).")}
         ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
+        ${field("Résumé lu à l'ouverture d'une fiche", chk("g", "bdt_auto_summary", g.bdt_auto_summary), "Une requête vers la fiche de l'album, une seule fois ; le bouton « Résumés » d'une série les lit tous en tâche de fond.")}
         <p class="muted">Rien n'est jamais écrit dans vos fichiers : les informations Bédéthèque restent dans la base de Bulle. <a href="#/collection">Voir la collection</a>.</p>
       </section>
       <section>
@@ -681,13 +720,13 @@
       } else if (action === "list-new") {
         const name = prompt("Nom de la nouvelle liste :"); if (!name) return;
         await api("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-        listsCache = null; route();
+        listsCache = null; renderSidebar(); route();
       } else if (action === "list-rename") {
         const name = prompt("Nouveau nom :", btn.dataset.name); if (!name) return;
-        await putJson(`/api/lists/${btn.dataset.id}`, { name }); listsCache = null; route();
+        await putJson(`/api/lists/${btn.dataset.id}`, { name }); listsCache = null; renderSidebar(); route();
       } else if (action === "list-delete") {
         if (!confirm(`Supprimer la liste « ${btn.dataset.name} » ? (les albums ne sont pas touchés)`)) return;
-        await api(`/api/lists/${btn.dataset.id}`, { method: "DELETE" }); listsCache = null; location.hash = "#/lists";
+        await api(`/api/lists/${btn.dataset.id}`, { method: "DELETE" }); listsCache = null; renderSidebar(); location.hash = "#/lists";
       } else if (action === "reset-profile") {
         const patch = {}; for (const k of Object.keys(PROFILE_DEFAULTS)) patch[k] = null;
         await putJson("/api/settings", { profile: patch });
@@ -730,6 +769,7 @@
           ${it.meta && it.meta.publisher ? `<dt>Éditeur</dt><dd>${esc(it.meta.publisher)}${it.meta.collection ? ` · ${esc(it.meta.collection)}` : ""}${it.meta.date ? ` · ${esc(it.meta.date)}` : ""}</dd>` : ""}
           ${it.meta && it.meta.isbn ? `<dt>ISBN</dt><dd>${esc(it.meta.isbn)}${it.meta.pages ? ` · ${it.meta.pages} planches` : ""}</dd>` : ""}
         </dl>
+        <div class="summary-slot" id="sheet-summary" data-id="${it.id}"></div>
         <div class="actions">
           ${it.error ? "" : `<a class="btn primary" href="/read/${it.id}${p && !p.completed ? "" : "?page=0"}">${ICON.play} ${p && !p.completed ? `Reprendre p. ${p.page + 1}` : (p ? "Relire" : "Lire")}</a>`}
           ${p && !p.completed && !it.error ? `<a class="btn" href="/read/${it.id}?page=0">Recommencer</a>` : ""}
@@ -743,7 +783,38 @@
         <div class="lists-row" id="sheet-lists" data-id="${it.id}"></div>
       </div></div></div>`;
     renderSheetLists($("#sheet-lists"), it.id, it.lists || []);
+    renderSummary($("#sheet-summary"), it);
   }
+  function summaryHtml(text, url) {
+    if (!text) return `<p class="summary muted">Pas de résumé sur Bédéthèque pour cet album.</p>`;
+    const cut = /[.…]$/.test(text) ? text : text + "…";
+    return `<p class="summary">${esc(cut)} ${url ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener">lire la suite sur Bédéthèque ↗</a>` : ""}</p>`;
+  }
+  async function renderSummary(slot, it) {
+    if (!slot || !it.meta || !it.meta.url) return;
+    if (it.meta.summary_at) { slot.innerHTML = summaryHtml(it.meta.summary, it.meta.url); return; }
+    if (!settings.global.bdt_enabled || settings.global.bdt_auto_summary === false) {
+      slot.innerHTML = `<p class="summary muted"><button class="btn mini" type="button" data-summary="${it.id}">Lire le résumé sur Bédéthèque</button></p>`;
+      return;
+    }
+    fetchSummary(slot, it);
+  }
+  async function fetchSummary(slot, it) {
+    slot.innerHTML = `<p class="summary muted"><span class="spinner" style="display:inline-block;width:14px;height:14px;border-width:2px;margin:0 6px -2px 0"></span>Résumé en cours de lecture sur Bédéthèque…</p>`;
+    try {
+      const r = await api(`/api/bdt/album/${it.id}/summary`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (+slot.dataset.id === +it.id) slot.innerHTML = summaryHtml(r.summary, it.meta.url);
+    } catch (e) {
+      if (+slot.dataset.id === +it.id) slot.innerHTML = `<p class="summary muted">Résumé indisponible : ${esc(e.message)}</p>`;
+    }
+  }
+  modal.addEventListener("click", e => {
+    const b = e.target.closest("[data-summary]");
+    if (!b) return;
+    e.preventDefault();
+    const slot = $("#sheet-summary");
+    if (slot) fetchSummary(slot, { id: +b.dataset.summary, meta: { url: "" } });
+  });
   const closeModal = () => { modal.hidden = true; modal.innerHTML = ""; };
 
   // ================================================================ listes, favoris
@@ -768,6 +839,7 @@
       if (btn) { btn.classList.toggle("fav-on", r.fav); btn.textContent = r.fav ? "★ Favori" : "☆ Favori"; }
       toast(r.fav ? "Ajouté aux favoris ★" : "Retiré des favoris");
       listsCache = null;
+      renderSidebar();
       if (!location.hash.startsWith("#/f/") || btn && btn.closest(".sheet")) { /* la grille se rafraîchit à la prochaine navigation */ }
       if (modal.hidden) route();
     } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
@@ -786,6 +858,7 @@
       if (membership.includes(+listId)) { r = await api(`/api/lists/${listId}/items/${nodeId}`, { method: "DELETE" }); toast("Retiré de la liste"); }
       else { r = await api(`/api/lists/${listId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) }); toast(`Ajouté à « ${esc((lists.find(l => l.id === +listId) || {}).name || "la liste")} »`); }
       listsCache = null;
+      renderSidebar();
       const box = $("#sheet-lists"); if (box && +box.dataset.id === +nodeId) renderSheetLists(box, nodeId, r.lists);
     } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
   }
@@ -807,6 +880,81 @@
     const sel = e.target.closest("[data-listsel]");
     if (sel && sel.value) { addToList(+sel.dataset.listsel, sel.value, sel); sel.value = ""; }
   });
+
+  // ------------------------------------------------ barre latérale : listes et compteurs
+  async function renderSidebar() {
+    let lists = [];
+    try { lists = await getLists(); } catch (_) { return; }
+    for (const el of document.querySelectorAll("#maintabs [data-count]")) {
+      const l = lists.find(x => x.kind === el.dataset.count);
+      el.textContent = l && l.count ? String(l.count) : "";
+    }
+    const box = $("#side-lists");
+    if (box) {
+      box.innerHTML = lists.filter(l => l.kind === "custom").map(l => `<a class="sub" href="#/list/${l.id}" data-tab="list-${l.id}" data-drop="${l.id}" title="${esc(l.name)} — déposez ici un album ou une série">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16v13H4z"/><path d="M8 3v3M16 3v3M4 11h16"/></svg>
+        <span class="lbl">${esc(l.name)}</span><span class="cnt">${l.count || ""}</span></a>`).join("");
+    }
+    markTab();
+  }
+  function markTab() {
+    const h = location.hash || "#/";
+    let m;
+    const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
+    for (const a of document.querySelectorAll("#maintabs a")) a.classList.toggle("on", a.dataset.tab === tab);
+  }
+
+  // ------------------------------------------------ glisser-déposer un album ou une série sur une liste
+  let dragId = null;
+  main.addEventListener("dragstart", e => {
+    const c = e.target.closest(".card[data-id]");
+    if (!c || c.classList.contains("ghost")) return;
+    dragId = +c.dataset.id;
+    try { e.dataTransfer.setData("text/plain", String(dragId)); e.dataTransfer.effectAllowed = "copyLink"; } catch (_) { /* ignore */ }
+    c.classList.add("dragging");
+    document.body.classList.add("dragging");
+  });
+  document.addEventListener("dragend", () => {
+    dragId = null;
+    document.body.classList.remove("dragging");
+    for (const el of document.querySelectorAll(".over, .card.dragging")) el.classList.remove("over", "dragging");
+  });
+  document.addEventListener("dragover", e => {
+    const t = e.target.closest("[data-drop]");
+    if (!t || dragId == null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    if (!t.classList.contains("over")) { for (const el of document.querySelectorAll(".over")) el.classList.remove("over"); t.classList.add("over"); }
+  });
+  document.addEventListener("dragleave", e => {
+    const t = e.target.closest("[data-drop]");
+    if (t && !t.contains(e.relatedTarget)) t.classList.remove("over");
+  });
+  document.addEventListener("drop", async e => {
+    const t = e.target.closest("[data-drop]");
+    if (!t) return;
+    e.preventDefault();
+    const id = dragId != null ? dragId : parseInt(e.dataTransfer.getData("text/plain"), 10);
+    t.classList.remove("over");
+    document.body.classList.remove("dragging");
+    if (!id) return;
+    dropOn(t.dataset.drop, id);
+  });
+  async function dropOn(target, nodeId) {
+    try {
+      const lists = await getLists();
+      let list = null;
+      if (target === "favorites" || target === "readlater") list = lists.find(l => l.kind === target);
+      else if (target === "new") { addToList(nodeId, "new"); return; }
+      else list = lists.find(l => l.id === +target);
+      if (!list) throw new Error("Liste introuvable");
+      await api(`/api/lists/${list.id}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: nodeId }) });
+      toast(list.kind === "favorites" ? "Ajouté aux favoris ★" : `Ajouté à « ${esc(list.name)} »`);
+      listsCache = null;
+      renderSidebar();
+      if (list.kind === "favorites" || location.hash.startsWith("#/list")) route();
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
+  }
 
   async function viewList(key) {
     const lists = await getLists(true);
@@ -830,8 +978,8 @@
     const lists = await getLists(true);
     const icon = l => l.kind === "favorites" ? "★" : l.kind === "readlater" ? "🔖" : "📚";
     main.innerHTML = `<div class="listhead"><h1>Listes</h1><button class="btn" type="button" data-action="list-new">+ Nouvelle liste</button></div>
-      <div class="listgrid">${lists.map(l => `<a class="listcard" href="#/list/${l.kind === "custom" ? l.id : l.kind}"><span class="lic">${icon(l)}</span><span><b>${esc(l.name)}</b><small>${plural(l.count, "élément", "éléments")}</small></span></a>`).join("")}</div>
-      <p class="muted" style="margin-top:16px">Les listes et les favoris sont propres à chaque profil. Ajoutez un album depuis sa fiche (« i »), une série depuis le haut de sa page.</p>`;
+      <div class="listgrid">${lists.map(l => `<a class="listcard" href="#/list/${l.kind === "custom" ? l.id : l.kind}" data-drop="${l.kind === "custom" ? l.id : l.kind}"><span class="lic">${icon(l)}</span><span><b>${esc(l.name)}</b><small>${plural(l.count, "élément", "éléments")}</small></span></a>`).join("")}</div>
+      <p class="muted" style="margin-top:16px">Les listes et les favoris sont propres à chaque profil. Ajoutez un album depuis sa fiche (« i »), une série depuis le haut de sa page, ou glissez-déposez une vignette sur une liste de la colonne de gauche.</p>`;
   }
   async function viewHistory() {
     setCrumbs([{ id: 0, name: "Accueil" }], "Historique");
@@ -938,7 +1086,7 @@
     const unl = e.target.closest("[data-unlist]");
     if (unl) {
       e.preventDefault();
-      api(`/api/lists/${unl.dataset.unlist}/items/${unl.dataset.node}`, { method: "DELETE" }).then(() => { listsCache = null; route(); }).catch(err => toast(esc(err.message)));
+      api(`/api/lists/${unl.dataset.unlist}/items/${unl.dataset.node}`, { method: "DELETE" }).then(() => { listsCache = null; renderSidebar(); route(); }).catch(err => toast(esc(err.message)));
       return;
     }
     const bdtEl = e.target.closest("[data-bdt]:not(form)");
@@ -970,8 +1118,7 @@
     if (currentKey !== null) scrollMemory.set(currentKey, window.scrollY);
     const h = location.hash || "#/";
     currentKey = h;
-    const tab = h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/settings") ? "" : "home";
-    for (const a of document.querySelectorAll("#maintabs a")) a.classList.toggle("on", a.dataset.tab === tab);
+    markTab();
     try { if (!h.startsWith("#/s/")) localStorage.setItem("bulle:lastHash", h); } catch (_) { /* ignore */ }
     try {
       let m;
@@ -1025,5 +1172,6 @@
     } catch (_) { /* ignore */ }
     route();
     loadStats();
+    renderSidebar();
   })();
 })();

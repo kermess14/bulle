@@ -376,6 +376,33 @@ def image_to_jpeg(img: Image.Image, width: int, quality: int = JPEG_QUALITY, sub
     return encode_jpeg(_shrink(img, width, sharpen), quality, subsampling)
 
 
+def dominant_color(img: Image.Image) -> Optional[str]:
+    """Couleur « signature » d'une couverture : la teinte la plus présente, ni trop sombre ni trop claire."""
+    try:
+        import colorsys
+        small = flatten(img).resize((40, 60), Image.Resampling.BOX)
+        q = small.quantize(colors=8, method=Image.Quantize.MEDIANCUT)
+        palette = q.getpalette()
+        counts = q.getcolors() or []
+        best, best_score = None, -1.0
+        for count, idx in counts:
+            r, g, b = palette[idx * 3: idx * 3 + 3]
+            h, l, sat = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+            score = count * (0.15 + sat) * (1.0 - abs(l - 0.45) * 1.4)
+            if score > best_score:
+                best, best_score = (r, g, b), score
+        if best is None:
+            return None
+        r, g, b = best
+        h, l, sat = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+        l = min(0.62, max(0.32, l))           # ni noir ni blanc : lisible en bordure et en ombre
+        sat = 0.0 if sat < 0.12 else min(0.9, max(0.35, sat))   # une couverture grise reste grise
+        r, g, b = colorsys.hls_to_rgb(h, l, sat)
+        return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ----------------------------------------------------------------------------
 # Le gestionnaire : ouverture + cache
 # ----------------------------------------------------------------------------
@@ -563,6 +590,15 @@ class Comics:
                 if make_cover and not os.path.exists(self.cover_path(node["id"])):
                     self._write_atomic(self.cover_path(node["id"]), self._render(album, 0, self.cover_width))
                 return n
+
+    def cover_color(self, node: dict, abs_path: str) -> Optional[str]:
+        """Couleur dominante de la couverture (génère la couverture si besoin)."""
+        try:
+            path = self.cover(node, abs_path)
+            with Image.open(path) as img:
+                return dominant_color(img)
+        except (AlbumError, OSError):
+            return None
 
     def cover(self, node: dict, abs_path: str) -> str:
         """Chemin du fichier de couverture (généré au besoin)."""

@@ -83,7 +83,10 @@ def _album_entry(feed: ET.Element, a: dict, base: str, folder: str = "", meta: d
             bits.append(meta["publisher"] + (f" ({meta['year']})" if meta.get("year") else ""))
     if progress and progress.get("page") is not None:
         bits.append("lu ✓" if progress.get("completed") else f"en cours, page {progress['page'] + 1}")
-    ET.SubElement(e, f"{{{ATOM}}}content", type="text").text = " · ".join(bits)
+    text = " · ".join(bits)
+    if meta and meta.get("summary"):
+        text = (text + "\n\n" if text else "") + meta["summary"]
+    ET.SubElement(e, f"{{{ATOM}}}content", type="text").text = text
     if meta:
         for w in (meta.get("writers") or []) + (meta.get("pencillers") or []):
             au = ET.SubElement(e, f"{{{ATOM}}}author")
