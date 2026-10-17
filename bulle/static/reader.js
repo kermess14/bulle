@@ -106,7 +106,7 @@
     if (mode === "scroll") css = vw * (Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100)) / 100);
     else if (mode === "double") css = Math.min(vw / 2, vh * asp);
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
-    const factor = mode === "panels" ? 1.6 : prefs.reader_quality === "high" ? 1.5 : 1;
+    const factor = mode === "panels" ? 2 : prefs.reader_quality === "high" ? 1.5 : 1;   // cases : nettes dès la première image, sans recharger
     return Math.ceil(css * dpr * factor);
   }
   let imgTag = "";
@@ -171,7 +171,7 @@
     zoomBounds = null;
     navBusy = true; navSince = Date.now();
     const done = () => { if (token === loadToken) navBusy = false; };
-    if (mode === "panels") getPanels(n);
+    if (mode === "panels" && panelsCache.has(n)) getPanels(n);   // sinon : demandées après l'image de base (le serveur la réutilise)
     const spin = setTimeout(() => { if (token === loadToken) loading.hidden = false; }, 180);
     let list;
     if (mode === "double") {
@@ -194,6 +194,7 @@
         // case par case : l'image nette est lourde → on montre d'abord la version « page entière » (souvent déjà en cache)
         const low = await loadImageAt(n, baseWidth(n));
         if (token !== loadToken) return;
+        getPanels(n);
         single.hidden = false; spread.hidden = true;
         if (low) img.src = low.src;
         clearTimeout(spin); loading.hidden = true;
@@ -204,6 +205,7 @@
         if (token !== loadToken) return;
         single.hidden = false; spread.hidden = true;
         if (a) img.src = a.src;
+        if (mode === "panels") getPanels(n);
       }
       if (!a) { img.removeAttribute("src"); reportError(n); }
     }
@@ -221,6 +223,7 @@
     }
     updateCounter();
     done();
+    if (pendingStep && mode === "panels") { const d = pendingStep; pendingStep = 0; setTimeout(() => panelStep(d), 60); }
     if (save) saveProgress(n);
     const u = new URL(location.href); u.searchParams.set("page", n); history.replaceState(null, "", u);
     preloadAround(list[list.length - 1]);
@@ -278,7 +281,7 @@
     if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
     scheduleRefine();   // une fois cadrée, la case est rechargée plus nette si besoin
   }
-  let panelScale = 1, panelBox = null;
+  let panelScale = 1, panelBox = null, pendingStep = 0;
   async function panelStep(dir) {
     const d = panelsCache.get(current);
     const count = d && d.panels instanceof Array ? d.panels.length : 0;
@@ -298,7 +301,7 @@
     if (n - 1 >= 0) loadImage(n - 1);
     for (const k of [...images.keys()]) if (Math.abs(k - n) > count + 4) images.delete(k);
     for (const k of [...lowImages.keys()]) if (Math.abs(k - n) > count + 4) lowImages.delete(k);
-    if (mode === "panels") for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) loadImageAt(n + k, baseWidth(n + k));
+    if (mode === "panels") for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) { const m = n + k; loadImageAt(m, baseWidth(m)).then(() => getPanels(m)); }
   }
   async function next() {
     if (mode === "scroll") { scrollStep(1); return; }
@@ -443,7 +446,7 @@
     MODES.forEach(m => body.classList.toggle("mode-" + m, m === mode));
     modeBtn.textContent = MODE_LABEL[mode];
     single.hidden = mode !== "single" && mode !== "panels"; spread.hidden = mode !== "double"; scrollEl.hidden = mode !== "scroll";
-    if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; }
+    if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; pendingStep = 0; }
     if (mode === "scroll") buildScroll();
     applyFit();
   }
@@ -585,7 +588,7 @@
      rend le zoom poussif ; une seule demande à la fois, jamais une version moins nette que celle affichée. */
   const REFINE_LADDER = [1400, 2000, 2600];
   let refineTimer = null, refining = false, refineAgain = false;
-  function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, 320); }
+  function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, mode === "panels" && userZoom === 1 ? 700 : 320); }
   async function refineZoom() {
     if (refining) { refineAgain = true; return; }
     const effective = userZoom * (mode === "panels" && panelIdx >= 0 ? panelScale : 1);
@@ -599,7 +602,8 @@
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const want = Math.ceil(el.getBoundingClientRect().width * dpr);   // largeur affichée réelle en pixels physiques
         if (el.naturalWidth >= want * 0.8) continue;
-        const w = REFINE_LADDER.find(x => x >= want) || REFINE_LADDER[REFINE_LADDER.length - 1];
+        const ladder = mode === "panels" && userZoom === 1 ? REFINE_LADDER.slice(0, 2) : REFINE_LADDER;   // cases : 2000 px maxi, le serveur souffle
+        const w = ladder.find(x => x >= want) || ladder[ladder.length - 1];
         if (el.naturalWidth >= w) continue;
         const better = await loadImageAt(n, w);
         if (token !== loadToken || !better) return;
@@ -732,7 +736,7 @@
     if (!sameGesture) wheelStream.used = false;
     if (Math.abs(e.deltaY) < 3) return;
     wheelStream.used = true;
-    if (busy()) return;   // une planche est en train de se charger : on n'empile pas les pas
+    if (busy()) { if (mode === "panels") pendingStep = e.deltaY > 0 ? 1 : -1; return; }   // planche en cours de chargement : le pas est gardé, pas empilé
     if (mode === "panels") { panelStep(e.deltaY > 0 ? 1 : -1); return; }
     if (e.deltaY > 0) next(); else prev();
   }, { passive: true });
@@ -741,7 +745,7 @@
   document.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.repeat && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ")) { e.preventDefault(); return; }
-    if (busy() && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ") && mode === "panels") { e.preventDefault(); return; }
+    if (busy() && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ") && mode === "panels") { pendingStep = (e.key === "ArrowLeft") !== manga ? -1 : 1; e.preventDefault(); return; }
     if (!endEl.hidden && e.key === "Enter" && item && item.next) { location.href = `/read/${item.next.id}?page=0`; return; }
     if (!strip.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       e.preventDefault();

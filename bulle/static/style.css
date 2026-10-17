@@ -400,10 +400,11 @@ body:has(.letters.rail.left.size-normal) main { padding-left: 48px; }
 .sidebar a.adult.unlocked .adultcnt { background: var(--ok); color: #06250f; }
 .badge.adult { background: #c8102e; color: #fff; font-weight: 800; letter-spacing: .02em; }
 .btn.adult-on { background: #c8102e; color: #fff; border-color: transparent; }
-.card .cover .retry { position: absolute; top: 6px; right: 6px; z-index: 3; width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .25); background: rgba(15, 17, 21, .85); color: #fff; font-size: 17px; line-height: 1; display: none; align-items: center; justify-content: center; }
-.card .cover.err .retry, .card .cover.fail .retry { display: inline-flex; }
+.card .cover .retry { position: absolute; right: 8px; bottom: 10px; z-index: 3; width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .25); background: rgba(15, 17, 21, .85); color: #fff; font-size: 17px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .15s; }
+.card:hover .cover .retry, .card:focus-within .cover .retry, .card .cover.err .retry, .card .cover.fail .retry { opacity: 1; }
 .card .cover .retry:hover { background: var(--accent); color: var(--accent-ink); }
 .card .cover .retry.spin { animation: spin 1s linear infinite; }
+.card .cover.err .retry, .card .cover.fail .retry { top: 6px; bottom: auto; }
 .card .cover.err .badge.warn { top: 6px; left: 6px; right: auto; }
 .card .cover.fail .badge { right: 40px; }
 .cover.folder .badge.ok { top: auto; bottom: 10px; }                 /* dossier tout lu : coche en bas à droite */

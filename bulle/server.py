@@ -25,7 +25,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.10.1"
+VERSION = "0.10.2"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -51,6 +51,7 @@ def global_defaults() -> dict:
     return {
         "scan_interval_hours": env_int("SCAN_INTERVAL_HOURS", 12),
         "preload_covers": env_bool("PRELOAD_COVERS", True),
+        "scan_mode": "normal",        # rapide : liste seulement ; normal : + couvertures manquantes ; minutieux : + chaque album rouvert, couverture refaite
         "preload_threads": max(1, min(8, env_int("PRELOAD_THREADS", 3))),
         "page_cache": env_bool("PAGE_CACHE", True),
         "cache_max_gb": 5,
@@ -72,7 +73,7 @@ def global_defaults() -> dict:
 
 
 GLOBAL_TYPES = {
-    "scan_interval_hours": (int, 0, 720), "preload_covers": (bool,), "preload_threads": (int, 1, 8),
+    "scan_interval_hours": (int, 0, 720), "preload_covers": (bool,), "scan_mode": (str,), "preload_threads": (int, 1, 8),
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
@@ -106,6 +107,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     comics = Comics(os.path.join(data_dir, "cache"), page_cache=env_bool("PAGE_CACHE", True))
     lib = Library(library_root, os.path.join(data_dir, "bulle.sqlite"), on_invalidate=comics.invalidate)
+    try:
+        migrated = comics.migrate_cover_names(lib.albums_without("1=1"))
+        if migrated:
+            log.info("Couvertures renommées avec la date de leur fichier : %d", migrated)
+    except Exception:  # noqa: BLE001
+        log.exception("Renommage des couvertures")
 
     app = Flask(__name__, static_folder=None)
     app.json.sort_keys = False  # type: ignore[attr-defined]
@@ -481,7 +488,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if cached is not None and cached.get("v") == PANELS_VERSION:
             return jsonify(cached)
         try:
-            path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
+            # une version de la page déjà en cache (celle que le lecteur vient d'afficher) évite une conversion de plus
+            path, data = comics.cached_page_at_least(node, index, PANELS_WIDTH), None
+            if path is None:
+                path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
             with Image.open(path or io.BytesIO(data)) as im:
                 im.load()
                 result = detect_panels(im)
@@ -666,9 +676,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             return jsonify(lib.status), 409
         todo = lib.albums_under(folder["path"])
         for n in todo:
-            comics.clear_cover(n["id"])
             lib.set_pages(n["id"], None, None)
-        threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, f"Couvertures de {folder['name']}")),
+        threading.Thread(target=lambda: run_background(lambda: preload_albums(todo, f"Couvertures de {folder['name']}", force=True)),
                          name="bulle-covers", daemon=True).start()
         time.sleep(0.2)
         return jsonify({"count": len(todo), "scan": lib.status}), 202
@@ -677,7 +686,6 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_covers_retry(node_id: int):
         """Réessaie un album en échec (ou refait sa couverture) tout de suite."""
         node = get_node(node_id, "album")
-        comics.clear_cover(node["id"])
         comics.invalidate([node["id"]])
         lib.set_pages(node["id"], None, None)
         node["page_count"], node["error"] = None, None
@@ -925,7 +933,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         rows = lib.random_covers(n * 2)
         if adult_paths() and not adult_unlocked():
             rows = [r for r in rows if not is_adult_path(r["path"])]
-        out = [{"id": r["id"], "mtime": int(r["mtime"] or 0)} for r in rows if os.path.exists(comics.cover_path(r["id"]))][:n]
+        out = [{"id": r["id"], "mtime": int(r["mtime"] or 0)} for r in rows if os.path.exists(comics.cover_path(r))][:n]
         return jsonify(out)
 
     @app.route("/api/random")
@@ -1303,15 +1311,16 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         return jsonify(bdt_job), 202
 
     # ------------------------------------------------------------------ tâches de fond
-    def preload_albums(todo: list[dict], label: str) -> None:
-        """Ouvre chaque album une fois : nombre de pages + couverture, en parallèle."""
+    def preload_albums(todo: list[dict], label: str, force: bool = False) -> None:
+        """Ouvre chaque album une fois : nombre de pages + couverture, en parallèle (`force` : couverture refaite
+        même si elle existe, à partir de la première page)."""
         lib.status.update(phase="covers", covers_total=len(todo), covers_done=0)
         t0 = time.time()
         counter_lock = threading.Lock()
 
         def one(n: dict) -> None:
             try:
-                count = comics.inspect(n, lib.abs_path(n["path"]), make_cover=True)
+                count = comics.inspect(n, lib.abs_path(n["path"]), make_cover=True, force=force)
                 lib.set_pages(n["id"], count, None)
                 lib.set_color(n["id"], comics.cover_color(n, lib.abs_path(n["path"])))
             except AlbumError as e:
@@ -1338,14 +1347,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def preload() -> None:
         preload_albums(lib.albums_without("page_count IS NULL AND error IS NULL"), "Couvertures")
 
+    def preload_thorough() -> None:
+        """Scan minutieux : chaque album est rouvert (pages recomptées, erreurs réessayées) et sa couverture refaite."""
+        preload_albums(lib.albums_without("1=1"), "Vérification minutieuse", force=True)
+
     def preload_missing_covers() -> None:
-        todo = [n for n in lib.albums_without("error IS NULL") if not os.path.exists(comics.cover_path(n["id"]))]
+        todo = [n for n in lib.albums_without("error IS NULL") if not os.path.exists(comics.cover_path(n))]
         preload_albums(todo, "Couvertures régénérées")
 
     def preload_colors() -> None:
         """Bibliothèques créées avant la v0.6 : calcule la couleur des couvertures existantes."""
         todo = [n for n in lib.albums_without("color IS NULL AND error IS NULL AND page_count IS NOT NULL")
-                if os.path.exists(comics.cover_path(n["id"]))]
+                if os.path.exists(comics.cover_path(n))]
         if not todo:
             return
         t0 = time.time()
@@ -1377,7 +1390,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             return
         except Exception:  # noqa: BLE001
             return
-        if settings()["preload_covers"]:
+        mode = settings().get("scan_mode") or "normal"
+        if mode == "thorough":
+            run_background(preload_thorough)
+        elif mode != "fast" and settings()["preload_covers"]:
             run_background(preload)
         try:
             preload_colors()
