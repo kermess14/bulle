@@ -592,7 +592,8 @@
         <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
         <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
         ${settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
-        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire tous les fichiers de cette série sur le disque (format, pages, couvertures)">↻ Rescanner</button></span></h1>`;
+        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire tous les fichiers de cette série sur le disque (format, pages, couvertures)">↻ Rescanner</button>
+        <button class="btn" type="button" data-ignore="${data.folder.id}" data-name="${esc(data.folder.name)}" data-folder="1" title="Enlever ce dossier de Bulle (rien n'est supprimé sur le disque)">✕ Retirer</button></span></h1>`;
       html += bdtPanelHtml(data);
     }
     html += lettersHtml(list);
@@ -848,6 +849,8 @@
         ${field("Rouvrir le dernier dossier au démarrage", chk("p", "remember_folder", p.remember_folder))}
         ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel), d'après Bédéthèque.")}
         ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
+        <div class="field"><div class="flabel"><span>Retirés de Bulle</span><small>Albums et dossiers enlevés avec « ✕ Retirer » : ils restent sur le disque mais les scans les ignorent.</small></div>
+          <div class="plist">${(g.ignored_paths || []).length ? g.ignored_paths.map(p => `<span class="prow"><code>${esc(p)}</code> <button class="btn mini" type="button" data-action="unignore" data-path="${esc(p)}">Remettre</button></span>`).join("") : `<span class="muted">Aucun</span>`}</div></div>
         ${field("Album considéré lu", sel("g", "read_threshold", [[1, "À la dernière page"], [0.95, "À partir de 95 %"], [0.9, "À partir de 90 %"], [0.8, "À partir de 80 %"]], g.read_threshold))}`,
       reader: () => `
         ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"], ["panels", "Case par case"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
@@ -996,6 +999,9 @@
         const j = await r.json();
         toast(`${plural(j.count, "fichier", "fichiers")} en cours de relecture…`);
         pollScan(true);
+      } else if (action === "unignore") {
+        await api("/api/ignored", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: btn.dataset.path }) });
+        toast(`« ${esc(btn.dataset.path)} » remis : il réapparaît avec le scan en cours…`); pollScan(true); route();
       } else if (action === "retry-errors") {
         const r = await fetch("/api/covers/retry-errors", { method: "POST" });
         if (r.status === 409) { toast("Un scan est déjà en cours, réessayez après."); return; }
@@ -1062,6 +1068,7 @@
           ${p && !p.completed ? `<button class="btn" type="button" data-unread="${it.id}">Effacer la progression</button>` : ""}
           <a class="btn" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
           <button class="btn" type="button" data-recover="${it.id}" title="Relire ce fichier sur le disque : format, taille, pages, couverture (rattrape un raté du scan)">↻ Rescanner ce fichier</button>
+          <button class="btn" type="button" data-ignore="${it.id}" data-name="${esc(it.name)}" title="Enlever cet album de Bulle (le fichier reste sur le disque)">✕ Retirer de Bulle</button>
           ${parent && parent.id ? `<a class="btn" href="#/f/${parent.id}" data-close>Ouvrir le dossier</a>` : ""}
         </div>
         <div class="lists-row" id="sheet-lists" data-id="${it.id}"></div>
@@ -1513,6 +1520,23 @@
       toast(it.error ? `${ICON.warn} Toujours en échec : ${esc(it.error)}` : "Album relu, couverture refaite");
     } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); btn.disabled = false; btn.classList.remove("spin"); }
   }
+  async function ignoreNode(btn) {
+    const folder = btn.dataset.folder === "1", name = btn.dataset.name;
+    if (!confirm(`Retirer ${folder ? "le dossier" : "l'album"} « ${name} » de Bulle ?\n\nRien n'est supprimé sur le disque : ${folder ? "le dossier n'apparaîtra plus" : "il n'apparaîtra plus"}, même après un scan. Progression et listes associées sont oubliées.\nAnnulable dans Réglages › Bibliothèque › Retirés de Bulle.`)) return;
+    btn.disabled = true;
+    try {
+      const r = await api(`/api/ignore/${btn.dataset.ignore}`, { method: "POST" });
+      closeModal();
+      toast(`« ${esc(name)} » retiré de Bulle${r.albums > 1 ? ` (${r.albums} albums)` : ""}`);
+      listsCache = null; renderSidebar(); loadStats();
+      if (folder) location.hash = r.parent_id && r.parent_id !== 1 ? `#/f/${r.parent_id}` : "#/";
+      else route();
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); btn.disabled = false; }
+  }
+  document.addEventListener("click", e => {
+    const ig = e.target.closest("[data-ignore]");
+    if (ig) { e.preventDefault(); ignoreNode(ig); }
+  });
   main.addEventListener("click", e => {
     const retry = e.target.closest("[data-retry]");
     if (retry) { e.preventDefault(); retryCover(retry); return; }
