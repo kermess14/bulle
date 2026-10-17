@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.7.1)
+# Bulle — lecteur de BD maison (v0.7.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -101,7 +101,7 @@ Après une modification du code, `python3 make_stack.py` régénère ce fichier.
 |---|---|---|
 | `LIBRARY_ROOT` | `/library` | dossier des BD dans le conteneur |
 | `DATA_DIR` | `/data` | base de données et cache |
-| `PORT` | `2203` | port d'écoute (`2205` dans la stack et le docker-compose fournis) |
+| `PORT` | `2205` | port d'écoute dans le conteneur (le `ports:` de la stack doit pointer dessus : `"2205:2205"`, ou `"2025:2205"` pour un autre port côté machine) |
 | `SCAN_INTERVAL_HOURS` | `12` | rescan automatique (0 = désactivé) |
 | `SCAN_ON_START` | `1` | scan au démarrage |
 | `PRELOAD_COVERS` | `1` | générer les couvertures après un scan |
@@ -118,7 +118,7 @@ mémorise dans la base) sans redémarrer le conteneur.
 pip install -r requirements.txt
 LIBRARY_ROOT="/chemin/vers/mes/BD" DATA_DIR=./data python -m bulle.server
 ```
-puis ouvrir `http://localhost:2203` (ou le port donné par `PORT`). Pour les CBR il faut l'outil `unar` (ou `unrar`, `7z`,
+puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR il faut l'outil `unar` (ou `unrar`, `7z`,
 `bsdtar`) installé sur la machine ; les PDF utilisent `pypdfium2` (installé par `requirements.txt`).
 
 ## Utilisation
