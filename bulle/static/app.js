@@ -40,6 +40,7 @@
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
+    bdt_ghosts: true, bdt_titles: false,
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
   const HOVER = { none: 1, light: 1.05, strong: 1.12 };
@@ -129,24 +130,57 @@
   }
 
   function card(item, { sub } = {}) {
+    if (item.kind === "ghost") return ghostCard(item);
     const letter = esc(letterOf(item.name));
     if (item.kind === "folder") {
-      const read = item.read_count ? `<div class="sub">${item.read_count}/${item.album_count} lus${item.reading_count ? " · " + plural(item.reading_count, "en cours", "en cours") : ""}</div>`
+      let read = item.read_count ? `<div class="sub">${item.read_count}/${item.album_count} lus${item.reading_count ? " · " + plural(item.reading_count, "en cours", "en cours") : ""}</div>`
         : item.reading_count ? `<div class="sub">${plural(item.reading_count, "album en cours", "albums en cours")}</div>` : "";
       const done = item.album_count && item.read_count >= item.album_count ? `<span class="badge ok" title="Tout lu">${ICON.check}</span>` : "";
+      let bdt = "";
+      if (item.bdt && item.bdt.total) {
+        const pct = Math.round((item.bdt.present / item.bdt.total) * 100);
+        const full = item.bdt.present >= item.bdt.total;
+        bdt = `<div class="sub bdt ${full ? "full" : ""}" title="Bédéthèque : ${esc(item.bdt.title || "")}${item.bdt.status ? " · " + esc(item.bdt.status) : ""}">${full ? "Série complète" : `${item.bdt.present}/${item.bdt.total} tomes`}<i style="width:${pct}%"></i></div>`;
+      }
       return `<a class="card" href="#/f/${item.id}" data-letter="${letter}">
         ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}`)}
-        <div class="title">${esc(item.name)}</div>${read || `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`}
+        <div class="title">${esc(item.name)}</div>${read || (bdt ? "" : `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`)}${bdt}
       </a>`;
     }
     const badge = item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress);
     const href = item.error ? "#" : `/read/${item.id}`;
-    const line2 = sub ? esc(sub) : (settings.profile.show_pages && item.pages ? plural(item.pages, "page", "pages") : "");
+    let title = item.name, line2 = sub ? esc(sub) : (settings.profile.show_pages && item.pages ? plural(item.pages, "page", "pages") : "");
+    if (settings.profile.bdt_titles && item.meta && item.meta.title) {
+      title = (item.meta.number != null ? (item.meta.kind === "hs" ? "HS" : item.meta.kind === "int" ? "INT" : "T") + item.meta.number + " · " : "") + item.meta.title;
+      if (!sub) line2 = esc(item.name);
+    }
     return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}">
       ${coverHtml(item, badge)}
       <button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>
-      <div class="title">${esc(item.name)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
+      <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;
+  }
+
+  function ghostCard(g) {
+    return `<a class="card ghost" href="${esc(g.url)}" target="_blank" rel="noopener" title="Tome manquant · voir sur Bédéthèque" data-letter="#">
+      <div class="cover ghost"><div class="gnum">T${g.number}</div><div class="glabel">manquant</div></div>
+      <div class="title">${esc(g.title || "Tome " + g.number)}</div><div class="sub">${g.year || ""}</div>
+    </a>`;
+  }
+
+  /* Insère les tomes manquants (fantômes) à leur place dans la liste des albums (tri naturel seulement). */
+  function withGhosts(list, bdt) {
+    if (!bdt || !bdt.missing || !bdt.missing.length || !settings.profile.bdt_ghosts || settings.profile.sort !== "natural") return list;
+    const ghosts = bdt.missing.slice().sort((a, b) => a.number - b.number).map(m => Object.assign({ kind: "ghost", name: "T" + m.number }, m));
+    const out = [];
+    let gi = 0;
+    for (const c of list) {
+      const n = c.kind === "album" && bdt.matches && bdt.matches[c.id] ? bdt.matches[c.id].number : null;
+      if (n != null) while (gi < ghosts.length && ghosts[gi].number < n) out.push(ghosts[gi++]);
+      out.push(c);
+    }
+    while (gi < ghosts.length) out.push(ghosts[gi++]);
+    return out;
   }
 
   // ================================================================ tri, filtre, pages, lettres
@@ -225,7 +259,7 @@
     if (data.empty) return renderEmpty(data.scan);
     setCrumbs(data.breadcrumb);
     document.title = (id ? data.folder.name + " — " : "") + "Bulle";
-    view.children = data.children; view.id = id;
+    view.children = data.children; view.id = id; view.folderName = id ? data.folder.name : "";
     const list = arrange(data.children);
     let html = "";
     if (!id) {
@@ -235,10 +269,166 @@
     } else {
       const folders = list.filter(c => c.kind === "folder").length, albums = list.length - folders;
       html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small></h1>`;
+      html += bdtPanelHtml(data);
     }
     html += lettersHtml(list);
-    html += gridFor(list, page || 1);
+    html += gridFor(id ? withGhosts(list, data.bdt) : list, page || 1);
     main.innerHTML = html;
+  }
+
+  // ================================================================ Bédéthèque
+  function bdtPanelHtml(data, extra) {
+    const hasAlbums = data.children.some(c => c.kind === "album");
+    if (!hasAlbums || data.bdt_enabled === false) return "";
+    const b = data.bdt;
+    if (!b) {
+      return `<div class="bdt-panel" id="bdt-panel"><div class="bdt-row"><span class="bdt-logo">BD</span>
+        <span>Comparer ce dossier avec <b>Bédéthèque</b> : tomes présents, manquants, auteurs.</span>
+        <button class="btn" type="button" data-bdt="analyze" data-folder="${data.folder.id}">Analyser</button></div>${extra || ""}</div>`;
+    }
+    const sr = b.series, pct = b.total ? Math.round((b.present / b.total) * 100) : 0;
+    const full = b.total && b.present >= b.total;
+    return `<div class="bdt-panel ${full ? "full" : ""}" id="bdt-panel">
+      <div class="bdt-row">
+        <span class="bdt-logo">BD</span>
+        <div class="bdt-main">
+          <div><b>${esc(sr.title || "Série")}</b>${sr.genre ? ` · ${esc(sr.genre)}` : ""}${sr.status ? ` · ${esc(sr.status)}` : ""}${sr.years ? ` · ${esc(sr.years)}` : ""}
+            <a class="ext" href="${esc(sr.url)}" target="_blank" rel="noopener">voir sur Bédéthèque ↗</a>
+            ${sr.score != null && sr.score < 0.9 && !sr.manual ? `<span class="warnlabel" title="La correspondance automatique n'est pas certaine">à vérifier</span>` : ""}</div>
+          <div class="bdt-progress"><span>${full ? "Série complète" : `${b.present} / ${b.total} tomes présents`}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
+          ${b.missing.length ? `<div class="bdt-missing">Manquants : ${b.missing.slice(0, 40).map(m => `<a href="${esc(m.url)}" target="_blank" rel="noopener" class="chip">T${m.number}${m.title ? " · " + esc(m.title) : ""}${m.year ? ` <small>${m.year}</small>` : ""}</a>`).join(" ")}${b.missing.length > 40 ? ` … (+${b.missing.length - 40})` : ""}</div>` : ""}
+          ${b.unmatched.length ? `<div class="bdt-unmatched">Non reconnus : ${b.unmatched.map(u => `<span class="chip gray" title="Ce fichier n'a pas pu être rattaché à un tome">${esc(u.name)}</span>`).join(" ")}</div>` : ""}
+          ${b.duplicates.length ? `<div class="bdt-unmatched">${plural(b.duplicates.length, "doublon", "doublons")} (plusieurs fichiers pour le même tome)</div>` : ""}
+        </div>
+        <div class="bdt-actions">
+          <button class="btn" type="button" data-bdt="refresh" data-folder="${data.folder.id}" title="Relire la fiche sur Bédéthèque">↻ Mettre à jour</button>
+          ${sr.detailed ? "" : `<button class="btn" type="button" data-bdt="details" data-folder="${data.folder.id}" title="Lire les auteurs, éditeur, ISBN de chaque tome (une page Bédéthèque par 10 tomes)">Auteurs et détails</button>`}
+          <button class="btn" type="button" data-bdt="change" data-folder="${data.folder.id}">Changer de série</button>
+          <button class="btn" type="button" data-bdt="forget" data-folder="${data.folder.id}">Oublier</button>
+        </div>
+      </div>${extra || ""}</div>`;
+  }
+
+  function bdtChooserHtml(folderId, report) {
+    const cands = (report && report.candidates) || [];
+    return `<div class="bdt-choose">
+      ${report && report.message ? `<p>${esc(report.message)}</p>` : ""}
+      ${cands.length ? `<div class="cands">${cands.map(c => `<button type="button" class="cand" data-bdt="pick" data-folder="${folderId}" data-url="${esc(c.url)}">
+          <b>${esc(c.name)}</b><small>${[c.genre, c.tomes ? plural(c.tomes, "tome", "tomes") : "", c.exact ? "correspondance exacte" : ""].filter(Boolean).join(" · ")}</small></button>`).join("")}</div>` : ""}
+      <form class="bdt-search" data-bdt="search" data-folder="${folderId}"><input type="search" name="q" placeholder="Chercher une série sur Bédéthèque…" value="${esc(report && report.query || "")}"><button class="btn" type="submit">Chercher</button></form>
+      <form class="bdt-search" data-bdt="url" data-folder="${folderId}"><input type="url" name="url" placeholder="…ou coller l'adresse de la série (https://www.bedetheque.com/serie-…html)"><button class="btn" type="submit">Utiliser</button></form>
+      <div class="bdt-results" id="bdt-results"></div>
+    </div>`;
+  }
+
+  async function bdtAction(action, el) {
+    const folderId = +el.dataset.folder;
+    const panel = $("#bdt-panel");
+    const busy = msg => { if (panel) panel.innerHTML = `<div class="bdt-row"><div class="spinner" style="margin:0"></div><span>${msg}</span></div>`; };
+    try {
+      if (action === "analyze" || action === "refresh" || action === "details" || action === "pick" || action === "url-submit") {
+        busy(action === "details" ? "Lecture des fiches détaillées sur Bédéthèque (quelques secondes par page)…" : "Interrogation de Bédéthèque…");
+        const body = {};
+        if (action === "refresh") body.force = true;
+        if (action === "details") body.details = true;
+        if (action === "pick" || action === "url-submit") body.url = el.dataset.url;
+        const r = await api(`/api/bdt/analyze/${folderId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        if (r.status === "ok") { toast(`Bédéthèque : ${esc(r.series.title)} — ${r.present}/${r.total} tomes`); route(); return; }
+        if (r.status === "no_albums") { toast(esc(r.message)); route(); return; }
+        const data = { folder: { id: folderId }, children: [{ kind: "album" }], bdt: null, bdt_enabled: true };
+        if (panel) { panel.outerHTML = bdtPanelHtml(data, bdtChooserHtml(folderId, r)); }
+        return;
+      }
+      if (action === "change") {
+        const data = { folder: { id: folderId }, children: [{ kind: "album" }], bdt: null, bdt_enabled: true };
+        if (panel) panel.outerHTML = bdtPanelHtml(data, bdtChooserHtml(folderId, { query: view.folderName || "" }));
+        return;
+      }
+      if (action === "forget") {
+        if (!confirm("Oublier le lien Bédéthèque de ce dossier ?")) return;
+        await api(`/api/bdt/series/${folderId}`, { method: "DELETE" });
+        toast("Lien Bédéthèque oublié"); route(); return;
+      }
+    } catch (e) {
+      toast(`${ICON.warn} ${esc(e.message)}`, { sticky: true });
+      route();
+    }
+  }
+  main.addEventListener("submit", async e => {
+    const form = e.target.closest("form[data-bdt]");
+    if (!form) return;
+    e.preventDefault();
+    const folderId = +form.dataset.folder;
+    if (form.dataset.bdt === "url") {
+      const url = form.elements.url.value.trim();
+      if (!url) return;
+      bdtAction("url-submit", { dataset: { folder: folderId, url } });
+      return;
+    }
+    const q = form.elements.q.value.trim();
+    if (q.length < 2) return;
+    const res = $("#bdt-results");
+    res.innerHTML = `<div class="spinner" style="margin:8px 0"></div>`;
+    try {
+      const cands = await api(`/api/bdt/search?q=${encodeURIComponent(q)}`);
+      res.innerHTML = cands.length ? `<div class="cands">${cands.map(c => `<button type="button" class="cand" data-bdt="pick" data-folder="${folderId}" data-url="${esc(c.url)}">
+          <b>${esc(c.name)}</b><small>${[c.genre, c.tomes ? plural(c.tomes, "tome", "tomes") : "", c.exact ? "correspondance exacte" : ""].filter(Boolean).join(" · ")}</small></button>`).join("")}</div>`
+        : `<p class="muted">Aucune série trouvée pour « ${esc(q)} ».</p>`;
+    } catch (err) { res.innerHTML = `<p class="error">${esc(err.message)}</p>`; }
+  });
+
+  // ================================================================ page Collection
+  let batchTimer = null;
+  async function viewCollection(filter) {
+    setCrumbs([{ id: 0, name: "Accueil" }], "Collection");
+    document.title = "Collection — Bulle";
+    main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    const [col, st] = await Promise.all([api("/api/bdt/collection"), api("/api/bdt/status")]);
+    filter = filter || "all";
+    const rows = col.series.map(r => Object.assign({}, r, { pct: r.total ? Math.round((r.present / r.total) * 100) : 0, full: r.total && r.present >= r.total }));
+    const shown = rows.filter(r => filter === "all" || (filter === "incomplete" && !r.full) || (filter === "complete" && r.full) || (filter === "ongoing" && /cours/i.test(r.status || "")));
+    const totals = { series: rows.length, full: rows.filter(r => r.full).length, missing: rows.reduce((n, r) => n + Math.max(0, (r.total || 0) - (r.present || 0)), 0) };
+    const job = st.job;
+    const tab = (key, label) => `<a class="tab ${filter === key ? "on" : ""}" href="#/collection/${key}">${label}</a>`;
+    main.innerHTML = `<h1>Collection <small class="muted h1sub">${plural(totals.series, "série liée à Bédéthèque", "séries liées à Bédéthèque")} · ${totals.full} complètes · ${plural(totals.missing, "tome manquant", "tomes manquants")}</small></h1>
+      <div class="bdt-panel" id="batch-panel">${batchHtml(job, col.unlinked.length, st)}</div>
+      <div class="tabs">${tab("all", "Toutes")}${tab("incomplete", "Incomplètes")}${tab("complete", "Complètes")}${tab("ongoing", "En cours de parution")}</div>
+      ${shown.length ? `<table class="coltable"><thead><tr><th>Dossier</th><th>Série Bédéthèque</th><th>Statut</th><th>Tomes</th><th></th></tr></thead><tbody>
+        ${shown.map(r => `<tr><td><a href="#/f/${r.folder_id}">${esc(r.folder_name)}</a></td><td><a class="ext" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "")}</a>${r.score != null && r.score < 0.9 && !r.manual ? ` <span class="warnlabel">à vérifier</span>` : ""}</td>
+          <td>${esc(r.status || "")}${r.years ? ` <small class="muted">${esc(r.years)}</small>` : ""}</td>
+          <td class="num ${r.full ? "ok" : ""}">${r.present ?? "?"} / ${r.total ?? "?"}<div class="pbar"><i style="width:${r.pct}%"></i></div></td>
+          <td>${r.full ? "✓" : plural(Math.max(0, (r.total || 0) - (r.present || 0)), "manquant", "manquants")}</td></tr>`).join("")}
+      </tbody></table>` : `<div class="empty">${rows.length ? "Rien dans cette catégorie." : "Aucune série analysée pour l'instant. Ouvrez un dossier d'albums et cliquez « Analyser », ou lancez l'analyse de tous les dossiers ci-dessus."}</div>`}
+      ${col.unlinked.length ? `<details class="unlinked"><summary>${plural(col.unlinked.length, "dossier pas encore analysé", "dossiers pas encore analysés")}</summary><div class="chips">${col.unlinked.slice(0, 400).map(u => `<a class="chip gray" href="#/f/${u.id}">${esc(u.name)} <small>${u.albums}</small></a>`).join(" ")}</div></details>` : ""}`;
+    if (job.running) pollBatch();
+  }
+  function batchHtml(job, unlinkedCount, st) {
+    if (!st.enabled) return `<div class="bdt-row"><span class="bdt-logo">BD</span><span>Les requêtes vers Bédéthèque sont désactivées dans les <a href="#/settings">réglages</a>.</span></div>`;
+    if (job.running) {
+      return `<div class="bdt-row"><div class="spinner" style="margin:0"></div><div class="bdt-main">Analyse en cours : ${job.done} / ${job.total}${job.current ? ` — <i>${esc(job.current)}</i>` : ""}
+        <div class="pbar"><i style="width:${job.total ? Math.round(job.done / job.total * 100) : 0}%"></i></div>
+        <small class="muted">${job.linked} liées · ${job.ambiguous} à choisir · ${job.not_found} introuvables · ${job.errors.length} erreurs</small></div>
+        <button class="btn" type="button" data-batch="stop">Arrêter</button></div>`;
+    }
+    const last = job.total ? `<small class="muted">Dernière analyse groupée : ${job.done}/${job.total} dossiers — ${job.linked} liées, ${job.ambiguous} à choisir à la main, ${job.not_found} introuvables${job.errors.length ? `, ${job.errors.length} erreurs (${esc(job.errors[0].error)})` : ""}.</small>` : "";
+    return `<div class="bdt-row"><span class="bdt-logo">BD</span><div class="bdt-main">${unlinkedCount ? `${plural(unlinkedCount, "dossier d'albums n'est pas encore comparé", "dossiers d'albums ne sont pas encore comparés")} à Bédéthèque. L'analyse groupée fait une requête toutes les ${st.interval} s (environ ${Math.ceil(unlinkedCount * st.interval * 2 / 60)} min) et s'arrête quand vous voulez.` : "Tous les dossiers d'albums ont été comparés à Bédéthèque."}${last ? "<br>" + last : ""}</div>
+      ${unlinkedCount ? `<button class="btn primary" type="button" data-batch="start">Analyser les ${unlinkedCount} dossiers</button>` : ""}</div>`;
+  }
+  async function pollBatch() {
+    clearTimeout(batchTimer);
+    try {
+      const [job, st, col] = await Promise.all([api("/api/bdt/batch"), api("/api/bdt/status"), api("/api/bdt/collection")]);
+      const p = $("#batch-panel");
+      if (p) p.innerHTML = batchHtml(job, col.unlinked.length, st);
+      if (job.running) batchTimer = setTimeout(pollBatch, 2000);
+      else if (location.hash.startsWith("#/collection")) route();
+    } catch (_) { /* ignore */ }
+  }
+  async function batchAction(action) {
+    try {
+      if (action === "start") { await api("/api/bdt/batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); pollBatch(); }
+      else if (action === "stop") { await api("/api/bdt/batch", { method: "DELETE" }); toast("Arrêt demandé (après le dossier en cours)"); }
+    } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
   }
 
   async function viewSearch(q) {
@@ -319,6 +509,14 @@
           <button class="btn" type="button" data-action="rebuild-covers">Régénérer les couvertures</button></div></div>
       </section>
       <section>
+        <h2>Bédéthèque</h2>
+        ${field("Autoriser les requêtes vers bedetheque.com", chk("g", "bdt_enabled", g.bdt_enabled), "Uniquement quand vous cliquez « Analyser » (ou l'analyse groupée de la page Collection).")}
+        ${field("Délai entre deux requêtes (s)", num("g", "bdt_interval", g.bdt_interval, 1, 30, 0.5), "Par politesse envers le site ; 2,5 s par défaut.")}
+        ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel).")}
+        ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
+        <p class="muted">Rien n'est jamais écrit dans vos fichiers : les informations Bédéthèque restent dans la base de Bulle. <a href="#/collection">Voir la collection</a>.</p>
+      </section>
+      <section>
         <h2>À propos</h2>
         <p class="muted">Bulle ${esc(settings.meta.version || "")} · ${plural(stats.albums || 0, "album", "albums")} dans ${plural(stats.folders || 0, "dossier", "dossiers")} (${fmtSize(stats.size || 0)}) · dernier scan : ${fmtDate(stats.last_scan)}<br>
         Dossier des BD : <code>${esc(settings.meta.library_root || "")}</code> · <a href="https://github.com/kermess14/bulle" target="_blank" rel="noopener">github.com/kermess14/bulle</a></p>
@@ -384,6 +582,12 @@
           <dt>Progression</dt><dd>${p ? (p.completed ? "Lu ✓" : `Page ${p.page + 1} sur ${it.pages ?? "?"} — ${pct} %`) : "Non lu"}
             ${p && !p.completed && it.pages ? `<div class="pbar"><i style="width:${pct}%"></i></div>` : ""}</dd>
           <dt>Fichier</dt><dd class="path">${esc(it.path.split("/").pop())}</dd>
+          ${it.meta ? `<dt>Bédéthèque</dt><dd>${it.meta.number != null ? `<b>Tome ${it.meta.number}</b> · ` : ""}${esc(it.meta.title || "")}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">↗</a></dd>` : (it.series ? `<dt>Bédéthèque</dt><dd class="muted">tome non reconnu dans « ${esc(it.series.title)} »</dd>` : "")}
+          ${it.meta && it.meta.writers.length ? `<dt>Scénario</dt><dd>${esc(it.meta.writers.join(", "))}</dd>` : ""}
+          ${it.meta && it.meta.pencillers.length ? `<dt>Dessin</dt><dd>${esc(it.meta.pencillers.join(", "))}</dd>` : ""}
+          ${it.meta && it.meta.colorists.length ? `<dt>Couleurs</dt><dd>${esc(it.meta.colorists.join(", "))}</dd>` : ""}
+          ${it.meta && it.meta.publisher ? `<dt>Éditeur</dt><dd>${esc(it.meta.publisher)}${it.meta.collection ? ` · ${esc(it.meta.collection)}` : ""}${it.meta.date ? ` · ${esc(it.meta.date)}` : ""}</dd>` : ""}
+          ${it.meta && it.meta.isbn ? `<dt>ISBN</dt><dd>${esc(it.meta.isbn)}${it.meta.pages ? ` · ${it.meta.pages} planches` : ""}</dd>` : ""}
         </dl>
         <div class="actions">
           ${it.error ? "" : `<a class="btn primary" href="/read/${it.id}${p && !p.completed ? "" : "?page=0"}">${ICON.play} ${p && !p.completed ? `Reprendre p. ${p.page + 1}` : (p ? "Relire" : "Lire")}</a>`}
@@ -485,6 +689,10 @@
     if (info) { e.preventDefault(); openInfo(info.dataset.info); return; }
     const action = e.target.closest("[data-action]");
     if (action) { settingsAction(action.dataset.action, action); return; }
+    const bdtEl = e.target.closest("[data-bdt]:not(form)");
+    if (bdtEl) { bdtAction(bdtEl.dataset.bdt, bdtEl); return; }
+    const batch = e.target.closest("[data-batch]");
+    if (batch) { batchAction(batch.dataset.batch); return; }
     const pg = e.target.closest(".pager .pg");
     if (pg) { goPage(+pg.dataset.page); return; }
     const letter = e.target.closest(".letters button");
@@ -521,6 +729,8 @@
         await viewSearch(q);
       } else if (h.startsWith("#/settings")) {
         await viewSettings();
+      } else if ((m = /^#\/collection(?:\/(\w+))?/.exec(h))) {
+        await viewCollection(m[1]);
       } else {
         searchInput.value = "";
         m = /^#\/p(\d+)/.exec(h);
