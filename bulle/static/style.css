@@ -359,8 +359,11 @@ body:has(.letters.rail.left.size-normal) main { padding-left: 48px; }
 .btn.mini { height: 28px; padding: 0 9px; font-size: 12.5px; }
 
 /* toast */
-.toast { position: fixed; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60; background: var(--card-2); border: 1px solid var(--line); color: var(--text); padding: 10px 16px; border-radius: 12px; box-shadow: var(--shadow); font-size: 14px; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 10px; }
+.toast { position: fixed; right: 16px; top: calc(var(--bar-h) + env(safe-area-inset-top, 0px) + 12px); z-index: 60; animation: toastin .25s cubic-bezier(.2, .8, .3, 1.1); background: var(--card-2); border: 1px solid var(--line); color: var(--text); padding: 10px 16px; border-radius: 12px; box-shadow: var(--shadow); font-size: 14px; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 10px; }
 .toast .spinner { width: 16px; height: 16px; border-width: 2px; margin: 0; }
+@keyframes toastin { from { opacity: 0; transform: translateY(-10px) scale(.96); } }
+body:has(.letters.rail.right) .toast { right: 72px; }   /* à gauche de la barre des lettres, sans la cacher */
+@media (max-width: 700px) { .toast, body:has(.letters.rail.right) .toast { left: 12px; right: 12px; justify-content: center; } }
 
 /* ---------- réglages mobiles ---------- */
 @media (max-width: 700px) {
@@ -706,8 +709,8 @@ body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, trans
 :root[data-skin="bd"] .badge.ok { background: var(--ok); }
 :root[data-skin="bd"] .card .info { border: 2px solid var(--ink); background: var(--paper); color: var(--ink); font-family: Georgia, serif; }
 /* le toast = une bulle de BD avec sa queue */
-:root[data-skin="bd"] .toast { background: var(--paper); color: var(--pop-ink); border: 2.5px solid var(--ink); border-radius: 22px; padding: 12px 20px; font-family: var(--hand); font-size: 18px; box-shadow: 4px 4px 0 var(--ink); bottom: calc(34px + env(safe-area-inset-bottom)); }
-:root[data-skin="bd"] .toast::after { content: ""; position: absolute; left: 36px; bottom: -14px; width: 22px; height: 22px; background: var(--paper); border-right: 2.5px solid var(--ink); border-bottom: 2.5px solid var(--ink); transform: skewX(30deg) rotate(45deg); }
+:root[data-skin="bd"] .toast { background: var(--paper); color: var(--pop-ink); border: 2.5px solid var(--ink); border-radius: 22px; padding: 12px 20px; font-family: var(--hand); font-size: 18px; box-shadow: 4px 4px 0 var(--ink); top: calc(var(--bar-h) + env(safe-area-inset-top, 0px) + 22px); }
+:root[data-skin="bd"] .toast::after { content: ""; position: absolute; right: 40px; top: -14px; width: 22px; height: 22px; background: var(--paper); border-left: 2.5px solid var(--ink); border-top: 2.5px solid var(--ink); transform: skewX(30deg) rotate(45deg); }   /* queue de la bulle vers la barre du haut */
 :root[data-skin="bd"] .toast .btn { font-size: 13px; }
 :root[data-skin="bd"] .toast a { color: #1d4ed8; text-decoration: underline; }
 /* onomatopée : étoile jaune qui éclate */
