@@ -350,7 +350,7 @@
     const img = id && !item.error
       ? `<img loading="lazy" decoding="async" alt="" src="${coverUrl(item, cssWidth || (THUMB[settings.profile.thumb_size] || THUMB.m))}" onerror="this.parentNode.classList.add('fail');this.remove()">`
       : "";
-    const retry = item.kind === "album" ? `<button class="retry" type="button" data-retry="${item.id}" title="Réessayer : relire l'album et refaire sa couverture" aria-label="Réessayer">↻</button>` : "";
+    const retry = item.kind === "album" ? `<button class="retry" type="button" data-retry="${item.id}" title="Relire le fichier et refaire la couverture (première page)" aria-label="Refaire la couverture">↻</button>` : "";
     return `<div class="cover ${item.kind === "folder" ? "folder" : ""} ${item.error ? "err" : ""}">${ph}${img}${retry}${inner}</div>`;
   }
   const FORMAT_EXT = { zip: ["CBZ", "ZIP"], rar: ["CBR", "RAR"], pdf: ["PDF"], "7z": ["CB7", "7Z"], tar: ["CBT", "TAR", "TGZ"], ace: ["ACE"] };
@@ -798,15 +798,15 @@
         ${field("Qualité JPEG", sel("g", "quality", [["eco", "Économique (80, plus rapide sur mobile)"], ["normal", "Normale (90, couleurs intactes)"], ["max", "Maximale (95)"]], g.quality), "Les pages déjà en cache gardent leur ancienne qualité jusqu'à ce qu'on vide le cache.")}
         ${field("Renforcer la netteté après réduction", chk("g", "sharpen", g.sharpen))}
         ${field("Largeur des couvertures (px)", sel("g", "cover_width", [[400, "400"], [600, "600"], [800, "800"], [1000, "1000"]], g.cover_width), "Après changement, utilisez « Régénérer les couvertures ».")}
+        ${field("Scan", sel("g", "scan_mode", [["fast", "Rapide : liste des fichiers seulement, couvertures faites à l'affichage"], ["normal", "Normal : liste + couvertures manquantes en tâche de fond"], ["thorough", "Minutieux : chaque album rouvert, pages recomptées, couverture refaite"]], g.scan_mode || "normal"), "Minutieux : long sur un gros disque réseau (NAS), mais rien ne peut rester faux. La couverture est toujours la première page, dans l'ordre naturel des noms de fichiers.")}
         ${field("Rescan automatique", sel("g", "scan_interval_hours", [[0, "Jamais (bouton ↻ seulement)"], [1, "Toutes les heures"], [6, "Toutes les 6 h"], [12, "Toutes les 12 h"], [24, "Une fois par jour"], [168, "Une fois par semaine"]], g.scan_interval_hours))}
-        ${field("Couvertures générées après un scan", chk("g", "preload_covers", g.preload_covers))}
         ${field("Couvertures générées en parallèle", num("g", "preload_threads", g.preload_threads, 1, 8), "Baisser à 1 sur un petit serveur.")}
         ${field("Taille maximale du cache des pages (Go)", num("g", "cache_max_gb", g.cache_max_gb, 0, 1000), "0 = sans limite. Les pages les moins récentes sont supprimées en premier.")}
         <div class="field"><div class="flabel"><span>Cache actuel</span><small id="cache-size">${cacheLine}</small></div>
           <div class="actions"><button class="btn" type="button" data-action="scan">↻ Scanner maintenant</button>
           <button class="btn" type="button" data-action="clear-cache">Vider le cache des pages</button>
           <button class="btn" type="button" data-action="rebuild-covers">Régénérer toutes les couvertures</button></div></div>
-        <p class="muted">Pour une seule série : bouton « ↻ Couvertures » en haut de sa page. Pour un seul album en échec : le petit ↻ en haut à droite de sa pochette.</p>`,
+        <p class="muted">Pour une seule série : bouton « ↻ Couvertures » en haut de sa page. Pour un seul album : le petit ↻ en bas à droite de sa pochette (au survol), ou « Refaire la couverture » dans sa fiche.</p>`,
       bdt: () => `
         ${field("Autoriser les requêtes vers bedetheque.com", chk("g", "bdt_enabled", g.bdt_enabled), "Uniquement quand vous cliquez « Analyser » (ou l'analyse groupée de la page Collection).")}
         ${field("Requêtes par minute (maximum)", num("g", "bdt_per_minute", g.bdt_per_minute, 1, 60), "Intervalle irrégulier autour de 60 / ce nombre, jamais plus dans une minute glissante. 10 par défaut.")}
@@ -984,6 +984,7 @@
             : `<button class="btn" type="button" data-read="${it.id}">${ICON.check} Marquer comme lu</button>`)}
           ${p && !p.completed ? `<button class="btn" type="button" data-unread="${it.id}">Effacer la progression</button>` : ""}
           <a class="btn" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
+          <button class="btn" type="button" data-recover="${it.id}" title="Relire le fichier : pages recomptées, couverture refaite à partir de la première page">↻ Refaire la couverture</button>
           ${parent && parent.id ? `<a class="btn" href="#/f/${parent.id}" data-close>Ouvrir le dossier</a>` : ""}
         </div>
         <div class="lists-row" id="sheet-lists" data-id="${it.id}"></div>
@@ -1014,7 +1015,22 @@
       if (+slot.dataset.id === +it.id) slot.innerHTML = `<p class="summary muted">Résumé indisponible : ${esc(e.message)}</p>`;
     }
   }
-  modal.addEventListener("click", e => {
+  modal.addEventListener("click", async e => {
+    const rc = e.target.closest("[data-recover]");
+    if (rc) {
+      rc.disabled = true; rc.textContent = "↻ En cours…";
+      try {
+        const it = await api(`/api/covers/retry/${rc.dataset.recover}`, { method: "POST" });
+        it.bust = Date.now();
+        const i = view.children.findIndex(c => c.id === it.id);
+        if (i >= 0) view.children[i] = Object.assign(view.children[i], it);
+        const cardEl = main.querySelector(`.card[data-id="${it.id}"]`); if (cardEl) cardEl.outerHTML = card(it, it.folder ? { sub: it.folder } : {});
+        const cov = modal.querySelector(".sheet .cover img"); if (cov) cov.src = coverUrl(it, 300);
+        toast(it.error ? `${ICON.warn} ${esc(it.error)}` : "Album relu, couverture refaite à partir de la première page");
+      } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
+      rc.disabled = false; rc.textContent = "↻ Refaire la couverture";
+      return;
+    }
     const b = e.target.closest("[data-summary]");
     if (!b) return;
     e.preventDefault();
