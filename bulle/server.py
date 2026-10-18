@@ -26,7 +26,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.21.1"
+VERSION = "0.21.2"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -1155,7 +1155,11 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         require_admin()
         if lib.status["running"]:
             return jsonify(lib.status), 409
-        start_scan_thread()
+        body = request.get_json(silent=True) or {}
+        force = bool(body.get("force"))
+        if force:
+            log.warning("Scan forcé par l'administrateur : le garde-fou « bibliothèque vide » est ignoré pour ce scan")
+        start_scan_thread(force=force)
         time.sleep(0.2)
         return jsonify(lib.status), 202
 
@@ -1821,11 +1825,17 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     pending_scan = threading.Event()   # scan demandé pendant qu'un autre tournait
 
-    def scan_job(under: Optional[str] = None) -> None:
+    retry = {"at": 0.0}   # scan annulé par sécurité : on retente tout seul un peu plus tard (partage remonté entre-temps)
+
+    def scan_job(under: Optional[str] = None, force: bool = False) -> None:
         try:
-            lib.scan(under=under)
+            lib.scan(under=under, force=force)
+            retry["at"] = 0.0
         except RuntimeError as e:
             log.warning("%s", e)
+            if lib.status.get("aborted") and not under:
+                retry["at"] = time.time() + 600
+                log.info("Nouvel essai de scan automatique dans 10 minutes")
             return
         except Exception:  # noqa: BLE001
             return
@@ -1847,8 +1857,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             pending_scan.clear()
             start_scan_thread()
 
-    def start_scan_thread(under: Optional[str] = None) -> None:
-        threading.Thread(target=scan_job, args=(under,), name="bulle-scan", daemon=True).start()
+    def start_scan_thread(under: Optional[str] = None, force: bool = False) -> None:
+        threading.Thread(target=scan_job, args=(under, force), name="bulle-scan", daemon=True).start()
 
     def scheduler() -> None:
         last_trim = time.time()
@@ -1858,6 +1868,11 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 continue
             if pending_scan.is_set():
                 pending_scan.clear()
+                start_scan_thread()
+                continue
+            if retry["at"] and time.time() >= retry["at"]:
+                retry["at"] = 0.0
+                log.info("Nouvel essai du scan annulé par sécurité")
                 start_scan_thread()
                 continue
             interval = int(settings()["scan_interval_hours"])
