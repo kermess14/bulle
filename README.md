@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.14.3)
+# Bulle — lecteur de BD maison (v0.15.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -145,6 +145,12 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - Dans les gros dossiers (40 entrées et plus, ou toujours selon le réglage), une barre de lettres (grandes,
   à droite ; taille et côté réglables) permet de sauter directement à une lettre, même si la liste est
   découpée en pages.
+- Qualité HD / SD : Bulle mesure la vraie taille des pages (deux pages par album, vers le tiers et les deux tiers ;
+  le fichier n'est jamais modifié). Grand côté de 2400 px et plus = HD, en dessous = SD. Une pastille « HD » se pose
+  sur la couverture (« HD 4/6 » sur une série mélangée), la fiche « i » donne la résolution, et le sélecteur
+  « Qualité : Tout / HD / SD » sous « Bibliothèque » filtre les vignettes (mémorisé par profil). Seuls les albums
+  déjà mesurés sont classés : la mesure se lance par `POST /api/quality/measure` avec `{"limit": 500}`
+  (premiers albums de la bibliothèque) ou `{"ids": [...]}` ; `GET /api/quality` donne l'avancement.
 - Glissez une vignette (album ou série) sur « À lire », « Favoris » ou une liste de la colonne de gauche
   pour l'y ajouter ; sur « Listes » pour créer une liste. Au survol d'un album dont le résumé est connu,
   une info-bulle le montre.
