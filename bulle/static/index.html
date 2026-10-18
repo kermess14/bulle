@@ -43,6 +43,10 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
     <a href="#/" data-tab="home" title="Bibliothèque">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14.5"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M8 7h8M8 11h5"/></svg>
       <span class="lbl">Bibliothèque</span></a>
+    <div class="qual" id="side-quality" role="group" aria-label="Qualité des albums" title="Qualité des albums (mesurée sur les pages : HD à partir de 2400 px)">
+      <span class="qlbl">Qualité</span>
+      <button type="button" data-quality="all" title="Tous les albums">Tout</button><button type="button" data-quality="hd" title="Albums HD seulement (pages de 2400 px et plus)">HD</button><button type="button" data-quality="sd" title="Albums SD seulement (pages de moins de 2400 px)">SD</button>
+    </div>
     <i class="ono" style="--rot:-6deg;--c1:#ffd23f">WIZZ !</i>
     <a href="#/list/readlater" data-tab="readlater" data-drop="readlater" title="À lire — déposez ici un album ou une série">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>

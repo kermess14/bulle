@@ -166,7 +166,7 @@
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
-    bdt_ghosts: true, bdt_titles: false,
+    bdt_ghosts: true, bdt_titles: false, quality: "all",
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
   const SKINS = ["bd", "sobre", "bling", "girly", "neon", "ocean", "stars", "riso"];
@@ -453,6 +453,35 @@
 
   const colorStyle = item => /^#[0-9a-f]{6}$/i.test(item.color || "") ? ` style="--c:${item.color}"` : "";
   const FAV = `<span class="fav" title="Favori"><b>★</b></span>`;
+  // ------------------------------------------------ qualité HD / SD (mesurée sur les pages, voir /api/quality)
+  const QUALITY_LABEL = { all: "Tout", hd: "HD", sd: "SD" };
+  function qualityOk(item) {
+    const q = settings.profile.quality;
+    if (!q || q === "all" || item.kind === "ghost") return true;
+    if (item.kind === "album") return item.q === q;
+    if (item.hd_count == null && item.sd_count == null) return true;   // dossier sans album mesuré dedans : on ne sait pas
+    return (q === "hd" ? item.hd_count : item.sd_count) > 0;
+  }
+  const qf = list => (list || []).filter(qualityOk);
+  function resLabel(it) { return it.res ? `${it.res[0]} × ${it.res[1]} px` : ""; }
+  function qualityBadge(item) {
+    if (item.kind === "album") {
+      return item.q === "hd" ? `<span class="qtag hd" title="Album HD : pages de ${resLabel(item)}">HD</span>` : "";
+    }
+    const hd = item.hd_count || 0, sd = item.sd_count || 0;
+    if (!hd) return "";
+    return !sd ? `<span class="qtag hd" title="Tous les albums mesurés sont en HD">HD</span>`
+      : `<span class="qtag hd part" title="${hd} albums HD sur ${hd + sd} mesurés">HD ${hd}/${hd + sd}</span>`;
+  }
+  function renderQualitySwitch() {
+    const box = $("#side-quality");
+    if (!box) return;
+    const cur = settings.profile.quality || "all";
+    for (const b of box.querySelectorAll("button[data-quality]")) {
+      b.classList.toggle("on", b.dataset.quality === cur);
+      b.setAttribute("aria-pressed", b.dataset.quality === cur ? "true" : "false");
+    }
+  }
   function card(item, { sub } = {}) {
     if (item.kind === "ghost") return ghostCard(item);
     const letter = esc(letterOf(item.name));
@@ -467,7 +496,7 @@
         bdt = `<div class="sub bdt ${full ? "full" : ""}" title="Bédéthèque : ${esc(item.bdt.title || "")}${item.bdt.status ? " · " + esc(item.bdt.status) : ""}">${full ? "Série complète" : `${item.bdt.present}/${item.bdt.total} tomes`}<i style="width:${pct}%"></i></div>`;
       }
       return `<a class="card folder" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}" draggable="true"${colorStyle(item)}>
-        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${item.adult ? `<span class="badge adult" title="Rubrique Adulte">18+</span>` : ""}${item.fav ? FAV : ""}`)}
+        ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${qualityBadge(item)}${item.adult ? `<span class="badge adult" title="Rubrique Adulte">18+</span>` : ""}${item.fav ? FAV : ""}`)}
         <div class="title">${esc(item.name)}</div>${read || (bdt ? "" : `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`)}${bdt}
       </a>`;
     }
@@ -480,7 +509,7 @@
     }
     const tip = item.meta && item.meta.summary ? ` title="${esc(item.meta.summary.length > 320 ? item.meta.summary.slice(0, 320) + "…" : item.meta.summary)}"` : "";
     return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
-      ${coverHtml(item, badge + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>${item.meta ? `<button class="info sum" type="button" data-sum="${item.id}" title="Résumé" aria-label="Résumé">…</button>` : ""}`)}
+      ${coverHtml(item, badge + qualityBadge(item) + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>${item.meta ? `<button class="info sum" type="button" data-sum="${item.id}" title="Résumé" aria-label="Résumé">…</button>` : ""}`)}
       <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;
   }
@@ -510,7 +539,7 @@
   // ================================================================ tri, filtre, pages, lettres
   function arrange(children) {
     const p = settings.profile;
-    let list = children.slice();
+    let list = qf(children);
     if (p.hide_read) {
       list = list.filter(c => c.kind === "folder" ? !(c.album_count && c.read_count >= c.album_count) : !(c.progress && c.progress.completed));
     }
@@ -571,7 +600,7 @@
     const slice = per ? list.slice((page - 1) * per, page * per) : list;
     view.page = page; view.pages = pages; view.list = list;
     return `${pagerHtml(page, pages, list.length)}
-      ${list.length ? `<div class="grid" id="grid">${slice.map(c => card(c)).join("")}</div>` : `<div class="empty">${settings.profile.hide_read ? "Tout est lu ici (les albums lus sont masqués dans les réglages)." : "Dossier vide"}</div>`}
+      ${list.length ? `<div class="grid" id="grid">${slice.map(c => card(c)).join("")}</div>` : `<div class="empty">${settings.profile.quality && settings.profile.quality !== "all" && view.children.length ? `Aucun album ${QUALITY_LABEL[settings.profile.quality]} ici (seuls les albums déjà mesurés sont classés). Filtre « Tout » dans le menu pour tout revoir.` : settings.profile.hide_read ? "Tout est lu ici (les albums lus sont masqués dans les réglages)." : "Dossier vide"}</div>`}
       ${pages > 1 ? pagerHtml(page, pages, list.length) : ""}`;
   }
 
@@ -589,9 +618,10 @@
     const list = arrange(data.children);
     let html = "";
     if (!id) {
-      if (cont && cont.length) html += `<h2>Reprendre la lecture</h2><div class="row">${cont.map(a => card(a, { sub: a.folder })).join("")}</div>`;
-      if (recent && recent.length && data.children.length) html += `<h2>Ajouts récents</h2><div class="row">${recent.map(a => card(a, { sub: a.folder })).join("")}</div>`;
-      html += `<h2>Bibliothèque <small class="muted">${plural(list.length, "entrée", "entrées")}</small></h2>`;
+      const contQ = qf(cont), recentQ = qf(recent);
+      if (contQ.length) html += `<h2>Reprendre la lecture</h2><div class="row">${contQ.map(a => card(a, { sub: a.folder })).join("")}</div>`;
+      if (recentQ.length && data.children.length) html += `<h2>Ajouts récents</h2><div class="row">${recentQ.map(a => card(a, { sub: a.folder })).join("")}</div>`;
+      html += `<h2>Bibliothèque <small class="muted">${plural(list.length, "entrée", "entrées")}${p.quality && p.quality !== "all" ? ` · filtre ${QUALITY_LABEL[p.quality]}` : ""}</small></h2>`;
     } else {
       const folders = list.filter(c => c.kind === "folder").length, albums = list.length - folders;
       html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small>
@@ -797,7 +827,7 @@
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
     const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
     if (!res.length) { main.innerHTML = `<div class="empty"><strong>Rien trouvé pour « ${esc(q)} »</strong><p>La recherche ignore les accents et les majuscules et porte sur les noms des dossiers et des fichiers.</p></div>`; return; }
-    const folders = res.filter(r => r.kind === "folder"), albums = res.filter(r => r.kind === "album");
+    const folders = qf(res).filter(r => r.kind === "folder"), albums = qf(res).filter(r => r.kind === "album");
     let html = "";
     if (folders.length) html += `<h2>Séries / dossiers <small class="muted">${folders.length}</small></h2><div class="grid">${folders.map(f => card(f, {})).join("")}</div>`;
     if (albums.length) html += `<h2>Albums <small class="muted">${albums.length}</small></h2><div class="grid">${albums.map(a => card(a, { sub: a.folder })).join("")}</div>`;
@@ -1057,6 +1087,7 @@
           <dt>Format</dt><dd>${esc(formatLabel(it))}</dd>
           <dt>Taille</dt><dd>${fmtSize(it.size)}</dd>
           <dt>Pages</dt><dd>${it.pages ?? "?"}</dd>
+          ${it.res ? `<dt>Qualité</dt><dd>${it.q === "hd" ? "HD" : "SD"} — ${resLabel(it)}</dd>` : ""}
           <dt>Progression</dt><dd>${p ? (p.completed ? "Lu ✓" : `Page ${p.page + 1} sur ${it.pages ?? "?"} — ${pct} %`) : "Non lu"}
             ${p && !p.completed && it.pages ? `<div class="pbar"><i style="width:${pct}%"></i></div>` : ""}</dd>
           <dt>Fichier</dt><dd class="path">${esc(it.path.split("/").pop())}</dd>
@@ -1282,6 +1313,7 @@
     document.title = `${l.name} — Bulle`;
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
     const data = await api(`/api/lists/${l.id}`);
+    data.items = qf(data.items);
     const icon = l.kind === "favorites" ? "★" : l.kind === "readlater" ? "🔖" : "📚";
     const empty = l.kind === "favorites" ? "Aucun favori pour l'instant : le bouton ☆ se trouve dans la fiche d'un album (« i ») ou en haut d'une série."
       : l.kind === "readlater" ? "Rien à lire pour l'instant : « Ajouter à une liste » dans la fiche d'un album ou en haut d'une série."
@@ -1329,7 +1361,7 @@
     setCrumbs([{ id: 0, name: "Accueil" }], "Historique");
     document.title = "Historique — Bulle";
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-    const items = await api("/api/history");
+    const items = qf(await api("/api/history"));
     main.innerHTML = `<h1>Historique <small class="muted h1sub">${plural(items.length, "album lu", "albums lus")}, les plus récents d'abord</small></h1>
       ${items.length ? `<div class="grid" id="grid">${items.map(it => card(it, { sub: `${it.folder}${it.progress && it.progress.updated_at ? " · " + new Date(it.progress.updated_at * 1000).toLocaleDateString("fr-FR") : ""}` })).join("")}</div>` : `<div class="empty">Aucun album terminé pour l'instant.</div>`}`;
   }
@@ -1560,6 +1592,18 @@
     const ig = e.target.closest("[data-ignore]");
     if (ig) { e.preventDefault(); ignoreNode(ig); }
   });
+  document.addEventListener("click", e => {
+    const qb = e.target.closest("#side-quality button[data-quality]");
+    if (!qb) return;
+    e.preventDefault();
+    if (qb.dataset.quality === (settings.profile.quality || "all")) return;
+    saveSettings({ quality: qb.dataset.quality });
+    renderQualitySwitch();
+    view.page = 1;
+    const h = location.hash || "#/";
+    const nh = h.replace(/\/p\d+$/, "");
+    if (nh !== h) location.hash = nh === "#" ? "#/" : nh; else route();
+  });
   main.addEventListener("click", e => {
     const retry = e.target.closest("[data-retry]");
     if (retry) { e.preventDefault(); retryCover(retry); return; }
@@ -1658,6 +1702,7 @@
       }
       sessionStorage.setItem("bulle:visited", "1");
     } catch (_) { /* ignore */ }
+    renderQualitySwitch();
     route();
     loadStats();
     renderSidebar();
