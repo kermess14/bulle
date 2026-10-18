@@ -139,6 +139,8 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- Un bouton « ‹ » devant le fil d'Ariane ramène en arrière (série → accueil, réglages → page d'avant), pratique sur
+  tablette et téléphone où il n'y a pas de touche Échap.
 - Cliquer sur une couverture : ouvre le dossier, ou lance la lecture de l'album (reprise automatique).
 - Le petit « i » sur un album : fiche (taille, pages, progression, marquer lu / non lu,
   recommencer, télécharger, ouvrir le dossier). Un album illisible y explique pourquoi.
