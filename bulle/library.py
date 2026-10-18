@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS nodes(
   cover_id    INTEGER,
   color       TEXT,
   cover_page  INTEGER,
+  res_w       INTEGER,
+  res_h       INTEGER,
   added_at    REAL NOT NULL,
   seen        INTEGER NOT NULL DEFAULT 0
 );
@@ -137,7 +139,7 @@ CREATE TABLE IF NOT EXISTS panels(
   PRIMARY KEY(node_id, page)
 );
 """
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 DEFAULT_PROFILE = 1
 
 
@@ -245,6 +247,11 @@ class Library:
             conn.commit()
         if node_cols and "cover_page" not in node_cols:
             conn.execute("ALTER TABLE nodes ADD COLUMN cover_page INTEGER")   # page choisie comme couverture (sinon la 1re)
+            conn.commit()
+        if node_cols and "res_w" not in node_cols:
+            # taille réelle des pages (mesurée sur deux pages de l'album) : sert à classer HD / SD ; 0 = pas mesurable
+            conn.execute("ALTER TABLE nodes ADD COLUMN res_w INTEGER")
+            conn.execute("ALTER TABLE nodes ADD COLUMN res_h INTEGER")
             conn.commit()
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(progress)")]
         if cols and "profile_id" not in cols:
@@ -530,7 +537,7 @@ class Library:
                             fmt = detect_format(self.abs_path(a["path"]), a["file"])
                             cur.execute(
                                 "UPDATE nodes SET parent_id=?, name=?, name_norm=?, search_text=?, sort_key=?, "
-                                "kind='album', format=?, size=?, mtime=?, page_count=NULL, error=NULL, seen=? "
+                                "kind='album', format=?, size=?, mtime=?, page_count=NULL, error=NULL, res_w=NULL, res_h=NULL, seen=? "
                                 "WHERE id=?",
                                 (parent_id, a["name"], normalize(a["name"]), normalize(a["path"]),
                                  natural_key(a["name"]), fmt, a["size"], a["mtime"], gen, row["id"]))
@@ -541,7 +548,7 @@ class Library:
                             # répondu) ; on relit les premiers octets et on lui redonne sa chance s'il a changé
                             fmt = detect_format(self.abs_path(a["path"]), a["file"])
                             if fmt != row.get("format"):
-                                cur.execute("UPDATE nodes SET parent_id=?, format=?, page_count=NULL, error=NULL, seen=? "
+                                cur.execute("UPDATE nodes SET parent_id=?, format=?, page_count=NULL, error=NULL, res_w=NULL, res_h=NULL, seen=? "
                                             "WHERE id=?", (parent_id, fmt, gen, row["id"]))
                                 invalidate.append(row["id"])
                                 changed += 1
@@ -644,7 +651,7 @@ class Library:
             return None
         fmt = detect_format(path, os.path.basename(path))
         with self._write_lock:
-            self.conn.execute("UPDATE nodes SET format=?, size=?, mtime=?, page_count=NULL, error=NULL WHERE id=?",
+            self.conn.execute("UPDATE nodes SET format=?, size=?, mtime=?, page_count=NULL, error=NULL, res_w=NULL, res_h=NULL WHERE id=?",
                               (fmt, st.st_size, st.st_mtime, node_id))
             self.conn.commit()
         self.panels_clear([node_id])
@@ -756,6 +763,49 @@ class Library:
             for r in self.conn.execute(f"SELECT id, color, mtime FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", chunk):
                 out[r["id"]] = {"id": r["id"], "color": r["color"], "mtime": r["mtime"]}
         return out
+
+    # -- qualité (HD / SD) ------------------------------------------------------
+    def set_resolution(self, node_id: int, width: int, height: int) -> None:
+        """Taille des pages d'un album (0×0 = pas mesurable, ex. PDF) ; remise à zéro quand le fichier change."""
+        with self._write_lock:
+            self.conn.execute("UPDATE nodes SET res_w=?, res_h=? WHERE id=?", (int(width), int(height), node_id))
+            self.conn.commit()
+
+    def albums_for_measure(self, ids: Optional[list[int]] = None, limit: Optional[int] = None,
+                           remeasure: bool = False) -> list[dict]:
+        """Albums à mesurer : ceux demandés (ids), sinon les premiers de la bibliothèque dans l'ordre des dossiers."""
+        cols = "id, path, name, format, mtime, size, page_count, error, cover_page, res_w"
+        if ids:
+            out = []
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                out += [dict(r) for r in self.conn.execute(
+                    f"SELECT {cols} FROM nodes WHERE kind='album' AND id IN ({','.join('?' * len(chunk))})", chunk)]
+            order = {v: k for k, v in enumerate(ids)}
+            out.sort(key=lambda r: order.get(r["id"], 0))
+        else:
+            out = [dict(r) for r in self.conn.execute(
+                f"SELECT {cols} FROM nodes WHERE kind='album' ORDER BY path COLLATE NOCASE")]
+        if not remeasure:
+            out = [r for r in out if r["res_w"] is None]
+        return out[:limit] if limit else out
+
+    def quality_by_dir(self, hd_min: int) -> dict[str, list[int]]:
+        """Dossier (chemin) → [albums HD, albums SD] directement dedans, pour les albums déjà mesurés."""
+        out: dict[str, list[int]] = {}
+        for r in self.conn.execute("SELECT path, res_w, res_h FROM nodes WHERE kind='album' AND res_w > 0"):
+            d = r["path"].rsplit("/", 1)[0] if "/" in r["path"] else ""
+            c = out.setdefault(d, [0, 0])
+            c[0 if max(r["res_w"], r["res_h"]) >= hd_min else 1] += 1
+        return out
+
+    def quality_stats(self, hd_min: int) -> dict:
+        r = self.conn.execute(
+            "SELECT SUM(CASE WHEN res_w > 0 AND MAX(res_w, res_h) >= ? THEN 1 ELSE 0 END) AS hd, "
+            "SUM(CASE WHEN res_w > 0 AND MAX(res_w, res_h) < ? THEN 1 ELSE 0 END) AS sd, "
+            "SUM(CASE WHEN res_w IS NULL THEN 1 ELSE 0 END) AS todo, "
+            "SUM(CASE WHEN res_w = 0 THEN 1 ELSE 0 END) AS na FROM nodes WHERE kind='album'", (hd_min, hd_min)).fetchone()
+        return {k: r[k] or 0 for k in ("hd", "sd", "todo", "na")}
 
     def set_pages(self, node_id: int, page_count: Optional[int], error: Optional[str]) -> None:
         with self._write_lock:

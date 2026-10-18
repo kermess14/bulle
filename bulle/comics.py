@@ -836,6 +836,34 @@ class Comics:
                     self._write_atomic(self.cover_path(node), data)
                 return n
 
+    def measure(self, node: dict, abs_path: str) -> tuple[int, int]:
+        """Taille réelle des pages (largeur, hauteur), lue sur deux pages prises vers le tiers et les deux tiers de
+        l'album (la couverture et les pages de fin sont souvent à part). Des deux, on garde la plus petite : une double
+        page ne fait pas passer un album en HD. Seul l'en-tête des images est décodé ; le fichier n'est jamais modifié.
+        PDF : (0, 0), la taille d'une page de PDF dépend du rendu, pas du fichier."""
+        if node.get("format") == "pdf":
+            return 0, 0
+        with self.lock(node["id"]):
+            with self.open(node, abs_path) as album:
+                n = len(album.pages)
+                if n == 0:
+                    raise AlbumError("Aucune image trouvée dans ce fichier")
+                picks = sorted({p for p in (int(n * 0.3), int(n * 0.6)) if 0 < p < n}) or [0]
+                best = None
+                for i in picks:
+                    try:
+                        data, _ = album.read(i)
+                        with Image.open(io.BytesIO(data)) as im:
+                            w, h = im.size
+                    except (AlbumError, OSError, ValueError, Image.DecompressionBombError) as e:
+                        log.warning("Mesure de %s, page %d : %s", abs_path, i + 1, e)
+                        continue
+                    if best is None or max(w, h) < max(best):
+                        best = (w, h)
+                if best is None:
+                    raise AlbumError("Pages illisibles : taille inconnue")
+                return best
+
     def fallback_marker(self, node_id: int) -> str:
         return os.path.join(self.covers_dir, f"{node_id}.fallback")
 
