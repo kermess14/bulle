@@ -226,6 +226,11 @@ class ScanStopped(RuntimeError):
     """Scan arrêté à la demande : rien n'a été écrit dans la base."""
 
 
+class ScanAborted(RuntimeError):
+    """Scan annulé par sécurité (dossier des BD vide ou injoignable, ou la moitié des albums disparus d'un coup) :
+    rien n'a été écrit dans la base, pour ne pas tout effacer à cause d'un partage réseau pas encore monté."""
+
+
 class Library:
     def __init__(self, root: str, db_path: str,
                  on_invalidate: Optional[Callable[[Iterable[int]], None]] = None):
@@ -385,7 +390,10 @@ class Library:
         return os.path.join(self.root, rel) if rel else self.root
 
     # -- scan ------------------------------------------------------------------
-    def scan(self, under: Optional[str] = None) -> dict:
+    SAFETY_MIN_ALBUMS = 10      # en dessous, la bibliothèque est trop petite pour juger
+    SAFETY_MAX_GONE = 0.5       # plus de la moitié des albums disparus d'un coup : on n'y croit pas
+
+    def scan(self, under: Optional[str] = None, force: bool = False) -> dict:
         """Parcourt le dossier des BD et met la base à jour. Thread-safe (un scan à la fois).
         `under` : ne relit sur le disque que ce dossier (et ses sous-dossiers) ; le reste de la base est gardé tel
         quel. Les fichiers ajoutés y apparaissent, ceux jetés disparaissent."""
@@ -394,11 +402,16 @@ class Library:
         t0 = time.time()
         self.stop_requested.clear()
         self.status.update(running=True, phase="scan", started_at=t0, finished_at=None,
-                           error=None, added=0, removed=0, changed=0, renamed=0, stopped=False)
+                           error=None, added=0, removed=0, changed=0, renamed=0, stopped=False, aborted=False)
         try:
-            result = self._scan(under)
+            result = self._scan(under, force=force)
             self.status.update(**result)
             return result
+        except ScanAborted as e:
+            log.warning("Scan annulé par sécurité, base inchangée : %s", e)
+            self.status["error"] = str(e)
+            self.status["aborted"] = True
+            raise
         except ScanStopped:
             log.info("Scan arrêté à la demande : base inchangée")
             self.status["stopped"] = "scan"
@@ -447,7 +460,7 @@ class Library:
             for d in dirs:
                 stack.append(f"{rel}/{d}" if rel else d)
 
-    def _scan(self, under: Optional[str] = None) -> dict:
+    def _scan(self, under: Optional[str] = None, force: bool = False) -> dict:
         if not os.path.isdir(self.root):
             raise RuntimeError(f"Dossier des BD introuvable : {self.root}")
         # numéro de passage toujours croissant (deux scans dans la même seconde ne doivent pas se confondre)
@@ -498,6 +511,21 @@ class Library:
             for name, size, mtime in files:
                 albums.append({"path": f"{rel}/{name}" if rel else name, "parent": rel,
                                "name": display_name(name), "file": name, "size": size, "mtime": mtime})
+        # Garde-fou, avant toute écriture : un dossier des BD vide ou injoignable (partage réseau pas encore monté,
+        # disque en veille, NAS éteint) ressemble à « tout a été supprimé ». Sans ce contrôle, Bulle effacerait
+        # toute sa base (couvertures, mesures, progression) puis referait tout au scan suivant.
+        if not under and not force:
+            known = [r["path"] for r in self.conn.execute(
+                "SELECT path FROM nodes WHERE kind='album'")]
+            if len(known) >= self.SAFETY_MIN_ALBUMS:
+                seen_paths = {a["path"] for a in albums}
+                gone = sum(1 for p in known if p not in seen_paths)
+                if not albums:
+                    raise ScanAborted(f"le dossier des BD paraît vide ou injoignable ({self.root}) alors que Bulle "
+                                      f"connaît {len(known)} albums : le partage n'est peut-être pas monté")
+                if gone > len(known) * self.SAFETY_MAX_GONE:
+                    raise ScanAborted(f"{gone} albums sur {len(known)} auraient disparu d'un coup (seulement "
+                                      f"{len(albums)} trouvés) : disque ou partage réseau injoignable ?")
             self.status["albums"] = len(albums)
 
         # 2) Nombre d'albums par dossier (y compris sous-dossiers)

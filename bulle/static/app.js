@@ -1143,7 +1143,7 @@
         ${field("Qualité JPEG", sel("g", "quality", [["eco", "Économique (80, plus rapide sur mobile)"], ["normal", "Normale (90, couleurs intactes)"], ["max", "Maximale (95)"]], g.quality), "Les pages déjà en cache gardent leur ancienne qualité jusqu'à ce qu'on vide le cache.")}
         ${field("Renforcer la netteté après réduction", chk("g", "sharpen", g.sharpen))}
         ${field("Largeur des couvertures (px)", sel("g", "cover_width", [[400, "400"], [600, "600"], [800, "800"], [1000, "1000"]], g.cover_width), "Après changement, utilisez « Régénérer les couvertures ».")}
-        ${field("Scan", sel("g", "scan_mode", [["fast", "Rapide : liste des fichiers seulement, couvertures faites à l'affichage"], ["normal", "Normal : liste + couvertures manquantes en tâche de fond"], ["thorough", "Minutieux : chaque album rouvert, pages recomptées, couverture refaite"]], g.scan_mode || "normal"), "Minutieux : long sur un gros disque réseau (NAS), mais rien ne peut rester faux. La couverture est toujours la première page, dans l'ordre naturel des noms de fichiers.")}
+        ${field("Scan", sel("g", "scan_mode", [["fast", "Rapide : liste des fichiers seulement, couvertures faites à l'affichage"], ["normal", "Normal : liste + couvertures manquantes en tâche de fond"], ["thorough", "Minutieux : à CHAQUE scan, tous les albums rouverts et toutes les couvertures refaites"]], g.scan_mode || "normal"), "Minutieux refait tout à chaque scan (y compris le scan automatique) : très long sur un NAS. À utiliser une fois pour réparer, puis revenir en Normal. La couverture est toujours la première page, dans l'ordre naturel des noms de fichiers.")}
         ${field("Scan au démarrage", chk("g", "scan_on_start", g.scan_on_start !== false), "Après une mise à jour ou un redémarrage du conteneur, Bulle repasse sur tous les dossiers. Désactivé : rien au démarrage, les nouvelles BD arrivent avec le bouton ↻ ou le rescan automatique ci-dessous. Ce réglage l'emporte sur la variable SCAN_ON_START de la stack.")}
         ${field("Rescan automatique", sel("g", "scan_interval_hours", [[0, "Jamais (bouton ↻ seulement)"], [1, "Toutes les heures"], [6, "Toutes les 6 h"], [12, "Toutes les 12 h"], [24, "Une fois par jour"], [168, "Une fois par semaine"]], g.scan_interval_hours))}
         ${field("Couvertures générées en parallèle", num("g", "preload_threads", g.preload_threads, 1, 8), "Baisser à 1 sur un petit serveur.")}
@@ -1801,6 +1801,7 @@
     } else if (refreshWhenDone) {
       scanStopping = false;
       if (s.stopped) toast(s.stopped === "covers" ? `Couvertures arrêtées (${s.covers_done}/${s.covers_total}) : les autres se feront à l'ouverture des albums` : "Scan arrêté : la bibliothèque est restée comme avant");
+      else if (s.aborted) toast(`${ICON.warn} Scan annulé par sécurité, rien n'a été effacé : ${esc(s.error)}.${isAdmin() ? ` <button class="btn mini" type="button" data-force-scan title="À faire seulement si vous avez vraiment supprimé ou déplacé ces albums">Scanner quand même</button>` : ""}`, { sticky: true });
       else if (s.error) toast(`${ICON.warn} Scan impossible : ${esc(s.error)}`);
       else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.renamed ? `, ${s.renamed} renommés ou déplacés` : ""}${s.removed ? `, ${s.removed} disparus` : ""}`);
       if (!location.hash.startsWith("#/settings")) route();
@@ -1847,7 +1848,14 @@
     try { await fetch("/api/scan/stop", { method: "POST" }); } catch (_) { /* ignore */ }
     pollScan(true);
   }
-  toastEl.addEventListener("click", e => { if (e.target.closest("[data-stop-scan]")) stopScan(); });
+  toastEl.addEventListener("click", async e => {
+    if (e.target.closest("[data-stop-scan]")) { stopScan(); return; }
+    if (e.target.closest("[data-force-scan]")) {
+      if (!confirm("Scanner quand même ? Les albums introuvables seront retirés de Bulle (couvertures, mesures et progression comprises). À faire seulement si vous les avez vraiment supprimés ou déplacés.")) return;
+      try { await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }) }); } catch (_) { /* ignore */ }
+      pollScan(true);
+    }
+  });
 
   /* Bulle mis à jour pendant que la page était ouverte : la page garde l'ancien code tant qu'on ne la recharge pas. */
   const PAGE_VERSION = ($('meta[name="bulle-version"]') || {}).content || "";

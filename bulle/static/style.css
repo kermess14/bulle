@@ -1047,7 +1047,7 @@ body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, trans
 :root[data-tabs="top"] .sidebar .qual { margin: 0 4px; border-radius: 999px; }
 :root[data-tabs="top"] .sidebar .qual .qlbl { display: none; }
 :root[data-tabs="top"] .sidebar .qual button { padding: 3px 9px; border-radius: 999px; }
-.qtag { position: absolute; right: 7px; bottom: 11px; z-index: 2; padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 800; letter-spacing: .03em; line-height: 16px; pointer-events: none;
+.qtag { position: absolute; left: 8px; top: 8px; z-index: 2; padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 800; letter-spacing: .03em; line-height: 16px; pointer-events: none;
   background: rgba(15, 17, 21, .78); color: #fff; border: 1px solid rgba(255, 255, 255, .35); backdrop-filter: blur(4px); }
 .qtag.hd { background: #1f6feb; border-color: rgba(255, 255, 255, .55); }
 .qtag.hd.part { background: rgba(31, 111, 235, .72); font-weight: 700; }
@@ -1056,6 +1056,10 @@ body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, trans
 :root[data-skin="bd"] .qtag { border: 2px solid var(--ink); border-radius: 3px; box-shadow: 2px 2px 0 var(--ink); }
 .setsub { margin: 22px 0 6px; font-size: 15px; }
 .qtag.static { position: static; display: inline-block; vertical-align: 1px; }
+/* pastille HD / SD en haut à gauche ; si le coin est pris par le ruban « favori », elle se décale à côté */
+.card .cover:has(.fav) .qtag { left: 40px; }
+:root[data-covers="book"] .card .cover .qtag { left: 12px; }
+:root[data-covers="book"] .card .cover:has(.fav) .qtag { left: 44px; }
 .qstats { font-size: 14px; margin-bottom: 6px; }
 .qrun { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13.5px; }
 .qrun .pbar { flex-basis: 100%; }
