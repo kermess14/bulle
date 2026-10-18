@@ -212,6 +212,23 @@
     const md = (d.getMonth() + 1) * 100 + d.getDate();
     return md >= 1221 || md < 320 ? "winter" : md < 621 ? "spring" : md < 922 ? "summer" : "autumn";
   }
+  /* Mode léger (bouton « planche de BD » à côté du champignon) : coupe tout ce qui bouge en arrière-plan (mosaïque,
+     verre dépoli, couvertures au hasard, bulles, saisons, petits mots animés). Mémorisé sur l'appareil, pas sur le
+     profil : léger sur la tablette, complet sur le PC. */
+  function liteMode() { try { return localStorage.getItem("bulle:lite") === "1"; } catch (_) { return false; } }
+  function updateLiteBtn() {
+    const b = $("#lite-btn"); if (!b) return;
+    const on = liteMode();
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.title = on ? "Mode léger activé : rien ne bouge en arrière-plan (cliquer pour revenir au mode complet)" : "Mode léger : couper les animations et effets de fond pour un affichage plus fluide";
+  }
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#lite-btn")) return;
+    const on = !liteMode();
+    try { localStorage.setItem("bulle:lite", on ? "1" : "0"); } catch (_) { /* ignore */ }
+    applyAppearance(); updateLiteBtn();
+    toast(on ? "Mode léger : animations et effets de fond coupés sur cet appareil" : "Mode complet : animations et effets de fond rétablis");
+  });
   const SEASON_LABEL = { spring: "printemps", summer: "été", autumn: "automne", winter: "hiver" };
   const SEASON_ORDER = ["spring", "summer", "autumn", "winter"], SEASON_EMOJI = { spring: "🌸", summer: "☀️", autumn: "🍂", winter: "❄️" };
   /* Bouton de saison : il affiche l'emblème de la saison en cours (🍂 en automne…) ; un clic passe à la suivante.
@@ -251,8 +268,10 @@
     const words = root.dataset.skin === "seasons" ? ONO[season] : ONO[root.dataset.skin];
     if (words) document.querySelectorAll("#maintabs .ono").forEach((el, i) => { el.textContent = words[i % words.length]; });
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    root.dataset.mosaic = p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
-    root.dataset.glass = p.mosaic_glass !== false && root.dataset.mosaic !== "off" ? "on" : "off";
+    const lite = liteMode();
+    root.dataset.lite = lite ? "on" : "off";
+    root.dataset.mosaic = lite || p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
+    root.dataset.glass = !lite && p.mosaic_glass !== false && root.dataset.mosaic !== "off" ? "on" : "off";
     root.style.setProperty("--mosaic-opacity", String(Math.max(5, Math.min(100, +p.mosaic_opacity || 45)) / 100));
     root.style.setProperty("--mosaic-brightness", String(Math.max(10, Math.min(150, +p.mosaic_brightness || 70)) / 100));
     $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
@@ -261,6 +280,7 @@
     setupBubbles();
     setupSeasonFx();
     updateSeasonBtn();
+    updateLiteBtn();
   }
 
   // ================================================================ quatre saisons : ce qui flotte dans l'air
@@ -272,7 +292,7 @@
      rien n'est animé si l'appareil demande moins d'animations. */
   let seasonFx = null;
   function setupSeasonFx() {
-    const root = document.documentElement, want = root.dataset.skin === "seasons" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const root = document.documentElement, want = root.dataset.skin === "seasons" && !liteMode() && !matchMedia("(prefers-reduced-motion: reduce)").matches;
     const kind = want ? root.dataset.season : null;
     const theme = root.dataset.theme;
     if (seasonFx && seasonFx.kind === kind && seasonFx.theme === theme) return;
@@ -559,7 +579,7 @@
     setTimeout(kill, dur * 1000 + 200);
   }
   function setupBubbles() {
-    const want = document.documentElement.dataset.skin === "ocean" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const want = document.documentElement.dataset.skin === "ocean" && !liteMode() && !matchMedia("(prefers-reduced-motion: reduce)").matches;
     let box = $("#bubbles");
     updateMuteBtn();
     if (!want) { clearInterval(bubbleTimer); bubbleTimer = null; if (box) box.remove(); return; }
@@ -577,7 +597,7 @@
     const el = $("#side-covers");
     if (!el) return false;
     const p = settings.profile;
-    return p.side_covers !== false && document.documentElement.dataset.tabs === "left" && window.innerWidth > 1000 && el.clientHeight >= 110;
+    return !liteMode() && p.side_covers !== false && document.documentElement.dataset.tabs === "left" && window.innerWidth > 1000 && el.clientHeight >= 110;
   }
   async function setupSideCovers() {
     const el = $("#side-covers");
