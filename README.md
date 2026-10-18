@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.14.2)
+# Bulle — lecteur de BD maison (v0.14.3)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -183,7 +183,10 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - Page illisible dans un album (image abîmée, format inconnu, HEIC/JPEG XL sans module) : le reste de l'album
   s'ouvre, la couverture est prise sur la page lisible suivante, et la miniature du lecteur affiche quel fichier de
   l'archive pose problème et son vrai format (une extension .jpg ne garantit rien). Les pages HEIC/HEIF et JPEG XL
-  sont lues avec l'image Docker.
+  sont lues avec l'image Docker. Une couverture « de secours » est refaite toute seule (à l'ouverture de l'album
+  ou au scan) dès que la vraie page redevient lisible.
+- Pages JPEG portant des métadonnées géantes (commentaire, XMP…) : ces métadonnées sont ignorées à la
+  conversion, la page s'affiche (« broken data stream when writing image file »).
 - Couverture choisie à la main : dans le lecteur, clic droit (ou T) ouvre les miniatures ; au survol d'une page,
   « ★ Couverture » en fait la couverture de l'album (gardé dans la base de Bulle, le fichier n'est pas touché ;
   re-choisir la page 1 revient au comportement normal).
