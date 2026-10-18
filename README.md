@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.17.0)
+# Bulle — lecteur de BD maison (v0.18.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -154,6 +154,11 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   automatique (variable QUALITY_AUTO) et seuil HD réglable (changer le seuil reclasse sans remesurer).
   API : `POST /api/quality/measure` (`{"limit": n}`, `{"ids": [...]}`, `{"remeasure": true}`), `POST /api/quality/stop`,
   `GET /api/quality`.
+- Comptes : chaque profil a un rôle, administrateur (réglages, scans, comptes, rubrique Adulte) ou lecteur (lecture,
+  progression, listes, réglages d'affichage) ; le premier profil est administrateur, il en faut toujours un. Mot de
+  passe facultatif par compte (4 caractères au moins, gardé chiffré) ; sans profil choisi, les droits d'administrateur
+  ne valent que si rien ne protège Bulle. Réglages › Mon compte : vignette (photo réduite à 96 px, ou emoji / initiales),
+  nom, mot de passe, déconnexion ; Réglages › Comptes et accès (administrateur) : rôles, ajout, suppression.
 - Glissez une vignette (album ou série) sur « À lire », « Favoris » ou une liste de la colonne de gauche
   pour l'y ajouter ; sur « Listes » pour créer une liste. Au survol d'un album dont le résumé est connu,
   une info-bulle le montre.
