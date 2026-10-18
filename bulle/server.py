@@ -26,7 +26,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.20.0"
+VERSION = "0.20.2"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -731,6 +731,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 abort(403, description="adult_locked")
             lib.set_settings(validate_global(g), None)
             apply_settings(settings())
+            if "hd_min_px" in g:
+                log.info("Seuil HD changé : %d px (albums reclassés sans remesurer)", hdcfg["min"])
             if g.get("quality_auto") is True:
                 auto_measure()   # mesure automatique rallumée : on rattrape tout de suite les albums pas mesurés
         if isinstance(body.get("profile"), dict):
@@ -1030,35 +1032,65 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                    "started_at": None, "finished_at": None, "stop": False, "reason": None}
     quality_lock = threading.Lock()
 
+    REASONS = {"auto": "automatique, après le scan", "manual": "à la demande", "remeasure": "tout remesurer"}
+
+    def fmt_eta(sec: float) -> str:
+        sec = int(max(0, sec))
+        return f"{sec // 3600} h {sec % 3600 // 60:02d}" if sec >= 3600 else f"{sec // 60} min {sec % 60:02d} s" if sec >= 60 else f"{sec} s"
+
     def measure_job(todo: list[dict], reason: str = "manual") -> None:
         if not quality_lock.acquire(blocking=False):
             return
         quality_job.update(running=True, done=0, total=len(todo), hd=0, sd=0, na=0, errors=0,
-                           started_at=time.time(), finished_at=None, stop=False, reason=reason)
+                           started_at=time.time(), finished_at=None, stop=False, reason=reason, current=None)
+        total, t0 = len(todo), time.time()
+        log.info("Mesure HD/SD : début (%s) — %d albums à mesurer, seuil HD %d px, lecture seule",
+                 REASONS.get(reason, reason), total, hdcfg["min"])
+        last_report, failures = t0, []
         try:
             for n in todo:
                 if quality_job["stop"]:
-                    log.info("Mesure de la qualité arrêtée à la demande après %d albums", quality_job["done"])
+                    log.info("Mesure HD/SD : arrêtée à la demande après %d albums sur %d", quality_job["done"], total)
                     break
+                quality_job["current"] = n.get("name") or n["path"]
+                t1 = time.time()
                 try:
                     w, h = comics.measure(n, lib.abs_path(n["path"]))
                     lib.set_resolution(n["id"], w, h)
                     key = "na" if not w else "hd" if max(w, h) >= hdcfg["min"] else "sd"
                     quality_job[key] += 1
+                    log.debug("Mesure HD/SD : %s → %s (%d × %d) en %.2f s", n["path"], key.upper(), w, h, time.time() - t1)
                 except AlbumError as e:
                     # illisible : noté « pas mesurable » (0 × 0) pour ne pas le retenter à chaque scan ; remis à zéro
                     # si le fichier change, et « Tout remesurer » le retente
                     lib.set_resolution(n["id"], 0, 0)
                     quality_job["errors"] += 1
-                    log.info("Qualité de %s non mesurée : %s", n["path"], e)
+                    failures.append(n["path"])
+                    log.warning("Mesure HD/SD : %s illisible, noté « pas mesurable » : %s", n["path"], e)
                 except Exception:  # noqa: BLE001
                     quality_job["errors"] += 1
-                    log.exception("Mesure de %s", n["path"])
+                    failures.append(n["path"])
+                    log.exception("Mesure HD/SD : erreur inattendue sur %s", n["path"])
                 quality_job["done"] += 1
-            log.info("Qualité mesurée : %d albums (%d HD, %d SD) en %.0f s", quality_job["done"], quality_job["hd"],
-                     quality_job["sd"], time.time() - quality_job["started_at"])
+                done = quality_job["done"]
+                if time.time() - last_report >= 20 or done % 250 == 0:
+                    last_report = time.time()
+                    el = time.time() - t0
+                    rate = done / el if el > 0 else 0
+                    log.info("Mesure HD/SD : %d / %d (%d %%) — %d HD, %d SD, %d illisibles — %.1f albums/s, reste ≈ %s",
+                             done, total, done * 100 // max(1, total), quality_job["hd"], quality_job["sd"],
+                             quality_job["errors"], rate, fmt_eta((total - done) / rate) if rate else "?")
+            el = time.time() - t0
+            log.info("Mesure HD/SD : terminée — %d albums en %s (%.1f/s) : %d HD, %d SD, %d PDF ou non mesurables, %d illisibles",
+                     quality_job["done"], fmt_eta(el), quality_job["done"] / el if el > 0 else 0, quality_job["hd"],
+                     quality_job["sd"], quality_job["na"], quality_job["errors"])
+            if failures:
+                log.info("Mesure HD/SD : albums illisibles (%d) : %s%s", len(failures), " | ".join(failures[:10]),
+                         f" … et {len(failures) - 10} autres" if len(failures) > 10 else "")
+            st = lib.quality_stats(hdcfg["min"])
+            log.info("Mesure HD/SD : bibliothèque — %d HD, %d SD, %d à mesurer, %d non mesurables", st["hd"], st["sd"], st["todo"], st["na"])
         finally:
-            quality_job.update(running=False, finished_at=time.time(), stop=False)
+            quality_job.update(running=False, finished_at=time.time(), stop=False, current=None)
             quality_lock.release()
 
     def start_measure(todo: list[dict], reason: str) -> bool:
@@ -1072,8 +1104,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if not settings().get("quality_auto", True):
             return
         todo = [n for n in lib.albums_for_measure() if not n.get("error")]
-        if start_measure(todo, "auto"):
-            log.info("Mesure de la qualité en arrière-plan : %d albums", len(todo))
+        if not todo:
+            log.debug("Mesure HD/SD : rien de nouveau à mesurer")
+        elif not start_measure(todo, "auto"):
+            log.info("Mesure HD/SD : déjà en cours, les %d nouveaux albums attendront la prochaine fois", len(todo))
 
     @app.route("/api/quality", methods=["GET"])
     def api_quality_status():
@@ -1847,7 +1881,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # LOG_LEVEL=DEBUG dans la stack pour voir le détail (ex. chaque album mesuré) ; INFO par défaut
+    level = getattr(logging, env_str("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     port = env_int("PORT", 2205)
     host = os.environ.get("HOST", "0.0.0.0")
     app = create_app()

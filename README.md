@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.20.0)
+# Bulle — lecteur de BD maison (v0.20.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -140,7 +140,7 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 ## Utilisation
 
 - Habillages : Bande dessinée, Sobre, Bling-bling, Girly, Aquarium (bulles qui gonflent et éclatent au hasard, avec un
-  petit « blop » synthétisé ; bouton haut-parleur pour couper le son, mémorisé sur l'appareil), Nuit étoilée (bleu nuit
+  petit « blop » grave et étouffé, synthétisé ; bouton haut-parleur pour couper le son, mémorisé sur l'appareil), Nuit étoilée (bleu nuit
   qui passe lentement du clair au foncé), Fanzine (papier, deux encres risographie, surligneur, scotch, tampons).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
 - Un bouton « ‹ » devant le fil d'Ariane ramène en arrière (série → accueil, réglages → page d'avant), pratique sur
@@ -159,7 +159,9 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   Réglages › Bibliothèque › Qualité HD / SD : compteurs, « Mesurer maintenant », « Tout remesurer », arrêt, mesure
   automatique (variable QUALITY_AUTO) et seuil HD réglable (changer le seuil reclasse sans remesurer).
   API : `POST /api/quality/measure` (`{"limit": n}`, `{"ids": [...]}`, `{"remeasure": true}`), `POST /api/quality/stop`,
-  `GET /api/quality`.
+  `GET /api/quality`. Pendant la mesure, une bulle de notification montre l'avancement (avec « ■ Arrêter » pour
+  l'administrateur) ; les journaux du conteneur donnent le début, l'avancement toutes les 20 s, la fin, les albums
+  illisibles et l'état de la bibliothèque. `LOG_LEVEL=DEBUG` dans la stack détaille chaque album mesuré.
 - Comptes : chaque profil a un rôle, administrateur (réglages, scans, comptes, rubrique Adulte) ou lecteur (lecture,
   progression, listes, réglages d'affichage) ; le premier profil est administrateur, il en faut toujours un. Mot de
   passe facultatif par compte (4 caractères au moins, gardé chiffré) ; sans profil choisi, les droits d'administrateur

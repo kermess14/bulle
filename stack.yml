@@ -21,6 +21,7 @@ services:
       PRELOAD_COVERS: "1"         # couvertures générées en arrière-plan après chaque scan
       PRELOAD_THREADS: "3"        # baisser à 1 si le serveur est petit
       PAGE_CACHE: "1"
+      LOG_LEVEL: "INFO"           # DEBUG = journal détaillé (ex. chaque album mesuré en HD / SD)
     volumes:
       # Le dossier des BD (le même que Kavita / Ubooquity), en lecture seule : Bulle ne modifie jamais vos fichiers.
       - "/uncomp3/V3X.BD/00 - BD Français:/library:ro"
