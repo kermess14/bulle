@@ -149,8 +149,11 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
 - Case par case fluide : au passage de planche, l'ancienne case reste affichée (avec le petit rond de
   chargement si ça dure) pendant que Bulle prépare la suivante — image décodée et cases repérées — puis tout
-  s'échange d'un seul coup : plus jamais de fond noir ni de planche mal cadrée, même sur un NAS lent. La planche
-  précédente est préchargée aussi (retour arrière immédiat), et les appuis répétés pendant un chargement sont
+  s'échange d'un seul coup : plus jamais de fond noir ni de planche mal cadrée, même sur un NAS lent. Les pages
+  sans cases (garde, page blanche, titre) ne paient plus la détection : si les cases d'une planche jamais vue
+  tardent, la planche s'affiche entière tout de suite puis glisse sur la première case dès qu'elles arrivent.
+  La planche précédente est préchargée aussi (retour arrière immédiat), les préchargements passent en priorité
+  réseau basse (la planche demandée garde la voie libre), et les appuis répétés pendant un chargement sont
   gardés (trois au plus) puis rejoués dans l'ordre.
 - Mode léger : le bouton « planche de BD » à côté du champignon coupe tout ce qui bouge en arrière-plan (mosaïque,
   verre dépoli, couvertures au hasard, bulles de l'aquarium, saisons, petits mots animés, ciel de la Nuit étoilée)
