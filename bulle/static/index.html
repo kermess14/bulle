@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/style.css">
 <script>/* thème et disposition avant le premier rendu, pour éviter un flash */
-try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "neon", "ocean", "stars", "riso"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
+try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
 </head>
 <body>
 <header class="topbar">
@@ -30,6 +30,9 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
     <input id="search" type="search" placeholder="Rechercher une série, un album…" aria-label="Rechercher">
   </form>
   <span class="stats" id="stats"></span>
+  <button class="iconbtn" id="bubble-mute" type="button" title="Son des bulles (aquarium)" aria-label="Son des bulles">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path class="w" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/><path class="x" d="m16 9 5 6M21 9l-5 6"/></svg>
+  </button>
   <button class="iconbtn" id="profile-btn" type="button" title="Profil" hidden></button>
   <button class="iconbtn" id="scan-btn" type="button" title="Rechercher les nouveaux albums (scan)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
