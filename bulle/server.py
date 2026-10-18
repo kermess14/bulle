@@ -26,7 +26,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.16.0"
+VERSION = "0.16.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -1114,7 +1114,29 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if desc == "adult_locked":
                 return jsonify({"error": "Rubrique Adulte verrouillée : entrez le code", "adult_locked": True}), 403
             return jsonify({"error": desc}), e.code
-        return e
+        if request.path.startswith("/static/") or request.path.startswith("/opds"):
+            return e
+        return error_page(e), e.code
+
+    def error_page(e) -> str:
+        """Page d'erreur aux couleurs de Bulle (au lieu de la page nue de Flask) : l'adresse demandée est affichée pour
+        comprendre d'où vient le lien cassé, avec un bouton vers l'accueil."""
+        from markupsafe import escape
+        titles = {404: "Page introuvable", 403: "Accès refusé", 400: "Demande incorrecte", 409: "Déjà en cours"}
+        title = titles.get(e.code, f"Erreur {e.code}")
+        desc = getattr(e, "description", "") or ""
+        if e.code == 404:
+            desc = "Cette adresse ne correspond à rien dans Bulle. Si vous arrivez d'un lien ou d'une icône, il pointe peut-être vers une adresse d'une ancienne version."
+        return f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} — Bulle</title><link rel="stylesheet" href="/static/style.css?v={VERSION}">
+<style>.errpage{{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}}
+.errbox{{max-width:560px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px 26px}}
+.errbox h1{{margin:0 0 8px;font-size:26px}}.errbox code{{display:block;word-break:break-all;background:var(--bg-2);padding:8px 10px;border-radius:8px;margin:12px 0}}
+.errbox .btn{{display:inline-block;margin-top:10px}}</style></head>
+<body><div class="errpage"><div class="errbox"><h1>{title}</h1><p class="muted">{escape(desc)}</p>
+<small class="muted">Adresse demandée</small><code>{escape(request.url)}</code>
+<a class="btn" href="/">← Retour à l'accueil</a> <small class="muted" style="margin-left:10px">Bulle v{VERSION}</small></div></div></body></html>"""
 
     # ------------------------------------------------------------------ API : listes, favoris, historique, hasard
     def list_json(l: dict) -> dict:
