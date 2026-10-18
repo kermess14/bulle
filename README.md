@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.15.0)
+# Bulle — lecteur de BD maison (v0.16.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -148,9 +148,12 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - Qualité HD / SD : Bulle mesure la vraie taille des pages (deux pages par album, vers le tiers et les deux tiers ;
   le fichier n'est jamais modifié). Grand côté de 2400 px et plus = HD, en dessous = SD. Une pastille « HD » se pose
   sur la couverture (« HD 4/6 » sur une série mélangée), la fiche « i » donne la résolution, et le sélecteur
-  « Qualité : Tout / HD / SD » sous « Bibliothèque » filtre les vignettes (mémorisé par profil). Seuls les albums
-  déjà mesurés sont classés : la mesure se lance par `POST /api/quality/measure` avec `{"limit": 500}`
-  (premiers albums de la bibliothèque) ou `{"ids": [...]}` ; `GET /api/quality` donne l'avancement.
+  « Qualité : Tout / HD / SD » sous « Bibliothèque » filtre les vignettes (mémorisé par profil). La mesure se fait
+  toute seule en arrière-plan après chaque scan (albums nouveaux ou modifiés, et tout le stock la première fois) ;
+  Réglages › Bibliothèque › Qualité HD / SD : compteurs, « Mesurer maintenant », « Tout remesurer », arrêt, mesure
+  automatique (variable QUALITY_AUTO) et seuil HD réglable (changer le seuil reclasse sans remesurer).
+  API : `POST /api/quality/measure` (`{"limit": n}`, `{"ids": [...]}`, `{"remeasure": true}`), `POST /api/quality/stop`,
+  `GET /api/quality`.
 - Glissez une vignette (album ou série) sur « À lire », « Favoris » ou une liste de la colonne de gauche
   pour l'y ajouter ; sur « Listes » pour créer une liste. Au survol d'un album dont le résumé est connu,
   une info-bulle le montre.

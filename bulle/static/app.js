@@ -476,7 +476,11 @@
   function renderQualitySwitch() {
     const box = $("#side-quality");
     if (!box) return;
-    const cur = settings.profile.quality || "all";
+    const cur = settings.profile.quality || "all", px = settings.global.hd_min_px || 2400;
+    box.title = `Qualité des albums (mesurée sur les pages : HD à partir de ${px} px)`;
+    const hdB = box.querySelector('[data-quality="hd"]'), sdB = box.querySelector('[data-quality="sd"]');
+    if (hdB) hdB.title = `Albums HD seulement (pages de ${px} px et plus)`;
+    if (sdB) sdB.title = `Albums SD seulement (pages de moins de ${px} px)`;
     for (const b of box.querySelectorAll("button[data-quality]")) {
       b.classList.toggle("on", b.dataset.quality === cur);
       b.setAttribute("aria-pressed", b.dataset.quality === cur ? "true" : "false");
@@ -853,8 +857,9 @@
     document.title = "Réglages — Bulle";
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
     if (!Object.keys(pendingProfile).length && !Object.keys(pendingGlobal).length) await loadSettings();   // pas pendant qu'un réglage part vers le serveur
-    let cache = {}, stats = {}, adult = {};
+    let cache = {}, stats = {}, adult = {}, quality = null;
     try { [cache, stats, adult] = await Promise.all([api("/api/cache"), api("/api/stats"), api("/api/adult")]); } catch (_) { /* ignore */ }
+    try { quality = await api("/api/quality"); } catch (_) { /* ignore */ }
     const p = settings.profile, g = settings.global;
     const tabs = p.settings_layout !== "bricks";
     if (!SETTINGS_GROUPS.some(([k]) => k === group)) group = "look";
@@ -890,6 +895,11 @@
         ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
         <div class="field"><div class="flabel"><span>Retirés de Bulle</span><small>Albums et dossiers enlevés avec « ✕ Retirer » : ils restent sur le disque mais les scans les ignorent.</small></div>
           <div class="plist">${(g.ignored_paths || []).length ? g.ignored_paths.map(p => `<span class="prow"><code>${esc(p)}</code> <button class="btn mini" type="button" data-action="unignore" data-path="${esc(p)}">Remettre</button></span>`).join("") : `<span class="muted">Aucun</span>`}</div></div>
+        <h3 class="setsub">Qualité HD / SD</h3>
+        ${field("Mesurer automatiquement", chk("g", "quality_auto", g.quality_auto !== false), "Après chaque scan, Bulle mesure en arrière-plan la taille des pages des albums nouveaux ou modifiés (deux pages par album, lecture seule : les fichiers ne sont jamais modifiés).")}
+        ${field("Seuil HD", num("g", "hd_min_px", g.hd_min_px || 2400, 800, 8000, 100) + ` <span class="muted">px</span>`, "Grand côté des pages à partir duquel un album compte comme HD. Repères : 1920 × 2650 ≈ 2650 px, 2560 × 3450 ≈ 3450 px, 3184 × 4200 = 4200 px. Changer le seuil reclasse tout de suite, sans remesurer.")}
+        <div class="field"><div class="flabel"><span>Albums mesurés</span><small>Le filtre « Qualité » du menu ne classe que les albums déjà mesurés.</small></div>
+          <div id="quality-box">${qualityBoxHtml(quality)}</div></div>
         ${field("Album considéré lu", sel("g", "read_threshold", [[1, "À la dernière page"], [0.95, "À partir de 95 %"], [0.9, "À partir de 90 %"], [0.8, "À partir de 80 %"]], g.read_threshold))}`,
       reader: () => `
         ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"], ["panels", "Case par case"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
@@ -966,6 +976,7 @@
     } else {
       main.innerHTML = `${head}<div class="settings">${SETTINGS_GROUPS.map(section).join("")}</div>`;
     }
+    if (quality && quality.job && quality.job.running) pollQuality();
   }
 
   main.addEventListener("change", e => {
@@ -976,13 +987,47 @@
     if (el.dataset.scope === "g") saveSettings(null, { [el.dataset.key]: val });
     else saveSettings({ [el.dataset.key]: val }, null);
     if (el.dataset.key === "settings_layout") route();
+    if (el.dataset.key === "hd_min_px" || el.dataset.key === "quality_auto") { renderQualitySwitch(); setTimeout(pollQuality, 1200); }
   });
+
+  function qualityBoxHtml(q) {
+    if (!q) return `<span class="muted">Indisponible</span>`;
+    const st = q.stats, j = q.job, total = st.hd + st.sd + st.todo + st.na;
+    let html = `<div class="qstats"><span class="qtag hd static">HD</span> ${st.hd} · <b>SD</b> ${st.sd} · à mesurer ${st.todo}${st.na ? ` · illisibles ou PDF ${st.na}` : ""} <span class="muted">(sur ${total})</span></div>`;
+    if (j.running) {
+      const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      html += `<div class="qrun"><div class="spinner" style="margin:0;width:16px;height:16px"></div> Mesure en cours${j.reason === "auto" ? " (automatique)" : ""} : ${j.done} / ${j.total} — ${j.hd} HD, ${j.sd} SD${j.errors ? `, ${j.errors} illisibles` : ""}
+        <div class="pbar"><i style="width:${pct}%"></i></div></div>
+        <p><button class="btn" type="button" data-action="quality-stop">Arrêter</button></p>`;
+    } else {
+      if (j.finished_at && j.total) html += `<small class="muted">Dernière mesure : ${j.done} albums, ${fmtDate(j.finished_at)}.</small>`;
+      html += `<p><button class="btn" type="button" data-action="quality-measure" ${st.todo ? "" : "disabled"}>Mesurer maintenant${st.todo ? ` (${st.todo})` : ""}</button>
+        <button class="btn" type="button" data-action="quality-remeasure">Tout remesurer</button></p>`;
+    }
+    return html;
+  }
+  let qualityTimer = null;
+  async function pollQuality() {
+    clearTimeout(qualityTimer);
+    const box = $("#quality-box");
+    if (!box) return;
+    let q;
+    try { q = await api("/api/quality"); } catch (_) { return; }
+    box.innerHTML = qualityBoxHtml(q);
+    if (q.job.running) qualityTimer = setTimeout(pollQuality, 1500);
+  }
 
   async function settingsAction(action, btn) {
     btn.disabled = true;
     try {
       if (action === "back") { escapeBack(); return; }
       if (action === "scan") { await fetch("/api/scan", { method: "POST" }); pollScan(true); }
+      else if (action === "quality-measure" || action === "quality-remeasure") {
+        if (action === "quality-remeasure" && !confirm("Remesurer tous les albums ? Ça relit deux pages de chaque album (quelques minutes, en arrière-plan).")) return;
+        const r = await fetch("/api/quality/measure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action === "quality-remeasure" ? { remeasure: true } : {}) });
+        if (r.status === 409) toast("Une mesure est déjà en cours.");
+        pollQuality();
+      } else if (action === "quality-stop") { await fetch("/api/quality/stop", { method: "POST" }); setTimeout(pollQuality, 800); }
       else if (action === "clear-cache") {
         const r = await api("/api/cache/clear", { method: "POST" });
         toast(`Cache des pages vidé (${fmtSize(r.cache.total)} restants : couvertures)`);

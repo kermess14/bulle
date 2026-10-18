@@ -26,8 +26,8 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.15.0"
-HD_MIN_PX = 2400   # grand côté des pages à partir duquel un album compte comme HD (sinon SD)
+VERSION = "0.16.0"
+HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -84,6 +84,8 @@ def global_defaults() -> dict:
         "tools_url": "auto",          # BDConverter dans le menu caché (champignon) : adresse, "auto" = même machine, port 3111, "" = masqué
         "adult_paths": [],            # dossiers de la rubrique Adulte (chemins relatifs), cachés tant que le code n'est pas entré
         "adult_hide_tab": False,      # l'entrée « Adulte » n'apparaît pas dans le menu (accès par Réglages › Adulte)
+        "quality_auto": env_bool("QUALITY_AUTO", True),   # mesure HD / SD des albums nouveaux ou modifiés après chaque scan
+        "hd_min_px": HD_MIN_PX,       # grand côté des pages à partir duquel un album est HD
     }
 
 
@@ -94,6 +96,7 @@ GLOBAL_TYPES = {
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
     "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
+    "quality_auto": (bool,), "hd_min_px": (int, 800, 8000),
 }
 
 
@@ -146,7 +149,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     bdt_job = {"running": False, "done": 0, "total": 0, "current": None, "errors": [], "stop": False, "linked": 0,
                "ambiguous": 0, "not_found": 0}
 
+    hdcfg = {"min": HD_MIN_PX}   # seuil HD en cours (relu à chaque changement de réglage)
+
     def apply_settings(s: dict) -> None:
+        hdcfg["min"] = int(s.get("hd_min_px") or HD_MIN_PX)
         comics.configure(quality=s["quality"], sharpen=s["sharpen"], cover_width=s["cover_width"],
                          page_cache=s["page_cache"])
         bdt.min_interval = float(s["bdt_interval"])
@@ -317,7 +323,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if n["kind"] == "album" and n.get("res_w"):
             # qualité mesurée sur les pages elles-mêmes (pas sur le nom ni la fiche)
             d["res"] = [n["res_w"], n["res_h"]]
-            d["q"] = "hd" if max(n["res_w"], n["res_h"]) >= HD_MIN_PX else "sd"
+            d["q"] = "hd" if max(n["res_w"], n["res_h"]) >= hdcfg["min"] else "sd"
         if n["kind"] == "album" and n.get("page_count"):
             # version de la couverture (date du fichier de cache) : refaite = nouvelle adresse, le navigateur ne peut pas
             # ressortir l'ancienne image de son cache
@@ -402,7 +408,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         links = lib.bdt_series_for([c["id"] for c in children if c["kind"] == "folder"])
         favs = lib.favorites_ids(profile_id)
         cover_meta = lib.cover_meta_for([c["cover_id"] for c in children if c["kind"] == "folder" and c.get("cover_id")])
-        qdirs = lib.quality_by_dir(HD_MIN_PX)
+        qdirs = lib.quality_by_dir(hdcfg["min"])
         out = []
         for c in children:
             j = album_json(c, with_progress=False)
@@ -705,6 +711,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 abort(403, description="adult_locked")
             lib.set_settings(validate_global(g), None)
             apply_settings(settings())
+            if g.get("quality_auto") is True:
+                auto_measure()   # mesure automatique rallumée : on rattrape tout de suite les albums pas mesurés
         if isinstance(body.get("profile"), dict):
             lib.set_settings(validate_profile_settings(body["profile"]), pid)
         resp = make_response(api_settings_get())
@@ -954,19 +962,28 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     # ------------------------------------------------------------------ API : qualité (HD / SD)
     quality_job = {"running": False, "done": 0, "total": 0, "hd": 0, "sd": 0, "na": 0, "errors": 0,
-                   "started_at": None, "finished_at": None}
+                   "started_at": None, "finished_at": None, "stop": False, "reason": None}
+    quality_lock = threading.Lock()
 
-    def measure_job(todo: list[dict]) -> None:
+    def measure_job(todo: list[dict], reason: str = "manual") -> None:
+        if not quality_lock.acquire(blocking=False):
+            return
         quality_job.update(running=True, done=0, total=len(todo), hd=0, sd=0, na=0, errors=0,
-                           started_at=time.time(), finished_at=None)
+                           started_at=time.time(), finished_at=None, stop=False, reason=reason)
         try:
             for n in todo:
+                if quality_job["stop"]:
+                    log.info("Mesure de la qualité arrêtée à la demande après %d albums", quality_job["done"])
+                    break
                 try:
                     w, h = comics.measure(n, lib.abs_path(n["path"]))
                     lib.set_resolution(n["id"], w, h)
-                    key = "na" if not w else "hd" if max(w, h) >= HD_MIN_PX else "sd"
+                    key = "na" if not w else "hd" if max(w, h) >= hdcfg["min"] else "sd"
                     quality_job[key] += 1
                 except AlbumError as e:
+                    # illisible : noté « pas mesurable » (0 × 0) pour ne pas le retenter à chaque scan ; remis à zéro
+                    # si le fichier change, et « Tout remesurer » le retente
+                    lib.set_resolution(n["id"], 0, 0)
                     quality_job["errors"] += 1
                     log.info("Qualité de %s non mesurée : %s", n["path"], e)
                 except Exception:  # noqa: BLE001
@@ -976,11 +993,27 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             log.info("Qualité mesurée : %d albums (%d HD, %d SD) en %.0f s", quality_job["done"], quality_job["hd"],
                      quality_job["sd"], time.time() - quality_job["started_at"])
         finally:
-            quality_job.update(running=False, finished_at=time.time())
+            quality_job.update(running=False, finished_at=time.time(), stop=False)
+            quality_lock.release()
+
+    def start_measure(todo: list[dict], reason: str) -> bool:
+        if quality_job["running"] or not todo:
+            return False
+        threading.Thread(target=measure_job, args=(todo, reason), name="bulle-quality", daemon=True).start()
+        return True
+
+    def auto_measure() -> None:
+        """Après un scan : albums lisibles pas encore mesurés (nouveaux, modifiés, ou tout le stock la première fois)."""
+        if not settings().get("quality_auto", True):
+            return
+        todo = [n for n in lib.albums_for_measure() if not n.get("error")]
+        if start_measure(todo, "auto"):
+            log.info("Mesure de la qualité en arrière-plan : %d albums", len(todo))
 
     @app.route("/api/quality", methods=["GET"])
     def api_quality_status():
-        return jsonify({"job": quality_job, "stats": lib.quality_stats(HD_MIN_PX), "hd_min": HD_MIN_PX})
+        return jsonify({"job": quality_job, "stats": lib.quality_stats(hdcfg["min"]), "hd_min": hdcfg["min"],
+                        "auto": bool(settings().get("quality_auto", True))})
 
     @app.route("/api/quality/measure", methods=["POST"])
     def api_quality_measure():
@@ -993,9 +1026,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         limit = body.get("limit")
         limit = int(limit) if isinstance(limit, (int, float, str)) and str(limit).isdigit() else None
         todo = lib.albums_for_measure(ids or None, limit, bool(body.get("remeasure")))
-        threading.Thread(target=measure_job, args=(todo,), name="bulle-quality", daemon=True).start()
+        start_measure(todo, "remeasure" if body.get("remeasure") else "manual")
         time.sleep(0.1)
-        return jsonify({"job": quality_job}), 202
+        return jsonify({"job": quality_job, "stats": lib.quality_stats(hdcfg["min"])}), 202
+
+    @app.route("/api/quality/stop", methods=["POST"])
+    def api_quality_stop():
+        if quality_job["running"]:
+            quality_job["stop"] = True
+        return jsonify({"job": quality_job})
 
     @app.route("/api/stats")
     def api_stats():
@@ -1654,6 +1693,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             preload_colors()
         except Exception:  # noqa: BLE001
             log.exception("Couleurs des couvertures")
+        try:
+            auto_measure()
+        except Exception:  # noqa: BLE001
+            log.exception("Mesure de la qualité")
         trim_cache()
         if pending_scan.is_set() and not lib.status["running"]:
             pending_scan.clear()
