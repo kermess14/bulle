@@ -219,7 +219,8 @@
       if (token !== loadToken) return;
       single.hidden = false; spread.hidden = true;
       img.classList.add("nofx");
-      if (a) img.src = a.src; else { img.removeAttribute("src"); img.style.transform = ""; reportError(n); }
+      pendingSwap = null; endMove();
+      if (a) { img.src = a.src; img.style.backgroundColor = tintOf(a, n); } else { img.removeAttribute("src"); img.style.transform = ""; reportError(n); }
       resetZoom(false);
       clearTimeout(spin); loading.hidden = true;
       current = n; shown = list;
@@ -235,7 +236,7 @@
         updateCounter();
         drainStep();
       });
-      if (!ready && a) loadImage(n).then(full => { if (token === loadToken && current === n && full && full.src !== img.src) img.src = full.src; });
+      if (!ready && a) loadImage(n).then(full => { if (token === loadToken && current === n && full && full.src !== img.src) swapSrc(img, full.src, n); });
       updateCounter();
       done();
       drainStep();
@@ -288,12 +289,42 @@
     return d.panels[order ? order[i] : i];
   }
   /* Cadre la case courante : l'image reste mise en page « page entière », on la déplace et on l'agrandit (transition CSS). */
+  // Pendant qu'une case glisse vers la suivante (animation de la transformation), on ne change JAMAIS l'image
+  // affichée : la carte graphique devrait redessiner une grande image en plein mouvement, et le temps qu'elle
+  // le fasse, la case apparaît noire. La version plus nette attend la fin du glissement.
+  let panelMoving = false, movingTimer = null, pendingSwap = null;
+  function endMove() {
+    clearTimeout(movingTimer); panelMoving = false;
+    if (pendingSwap) { const { el, src, n } = pendingSwap; pendingSwap = null; if (shown.includes(n) && el.src !== src) el.src = src; }
+  }
+  img.addEventListener("transitionend", e => { if (e.propertyName === "transform") endMove(); });
+  function startMove() { panelMoving = true; clearTimeout(movingTimer); movingTimer = setTimeout(endMove, 800); }
+  function swapSrc(el, src, n) {
+    if (el === img && panelMoving) { pendingSwap = { el, src, n }; return; }
+    pendingSwap = null;
+    el.src = src;
+  }
+  // couleur moyenne de la planche, posée sous l'image : si l'écran met un instant à dessiner une grande image,
+  // on voit sa teinte plutôt qu'un trou noir
+  const tints = new Map();
+  function tintOf(im, n) {
+    if (tints.has(n)) return tints.get(n);
+    let c = "";
+    try {
+      const cv = document.createElement("canvas"); cv.width = cv.height = 1;
+      const cx = cv.getContext("2d"); cx.drawImage(im, 0, 0, 1, 1);
+      const [r, g, b] = cx.getImageData(0, 0, 1, 1).data; c = `rgb(${r},${g},${b})`;
+    } catch (_) { /* ignore */ }
+    tints.set(n, c);
+    return c;
+  }
   function applyPanel(animate = true) {
     const d = panelsCache.get(current);
     zoomBounds = null;
     img.classList.toggle("nofx", !animate);
     panelBox = null;
     if (!d || !(d.panels instanceof Array) || panelIdx < 0 || !d.panels.length || !img.naturalWidth) {
+      if (animate && img.style.transform) startMove();
       img.style.transform = "";
       if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
       return;
@@ -314,7 +345,9 @@
     if (panelOff.page !== current || panelOff.idx !== panelIdx) Object.assign(panelOff, { x: 0, y: 0, page: current, idx: panelIdx });
     panelFrame = { tx, ty, s, ix, iy, iw, ih, vw, vh };
     panelScale = s;
+    const before = img.style.transform;
     placePanel();
+    if (animate && img.style.transform !== before) startMove();
     if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
     scheduleRefine();   // une fois cadrée, la case est rechargée plus nette si besoin
   }
@@ -712,7 +745,7 @@
         if (el.naturalWidth >= w) continue;
         const better = await loadImageAt(n, w);
         if (token !== loadToken || !better || !shown.includes(n)) return;   // la page a changé entre-temps
-        if (better.naturalWidth > el.naturalWidth) { el.src = better.src; zoomBounds = null; }
+        if (better.naturalWidth > el.naturalWidth) { swapSrc(el, better.src, n); zoomBounds = null; }
       }
     } finally {
       refining = false;
