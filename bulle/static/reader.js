@@ -79,7 +79,8 @@
     const crumbs = item.breadcrumb || [];
     folderEl.textContent = crumbs.slice(1).map(c => c.name).join(" › ");
     const parent = crumbs[crumbs.length - 1];
-    folderHref = parent && parent.id ? `/#/f/${parent.id}` : "/";
+    // dossier de l'album ; un album rangé à la racine ramène à l'accueil lui-même (pas à sa version « dossier »)
+    folderHref = parent && parent.id && crumbs.length > 1 ? `/#/f/${parent.id}` : "/";
     backBtn.href = folderHref;
     if (item.error || !item.pages) {
       showMessage("Album illisible", item.error || "Aucune page", `<a class="btn" href="${folderHref}">Retour au dossier</a>`);
