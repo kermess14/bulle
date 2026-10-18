@@ -184,13 +184,12 @@
     bdt_ghosts: true, bdt_titles: false, quality: "all",
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
-  const SKINS = ["bd", "sobre", "bling", "girly", "neon", "ocean", "stars", "riso"];
+  const SKINS = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso"];   // « neon » retiré : retombe sur « bd »
   /* Onomatopées de la colonne de gauche et des petits éclats, par habillage */
   const ONO = {
     bd: ["WIZZ !", "Zzz…", "PAF !", "CLAC", "BOUM", "TADAM !", "ZOU !"],
     bling: ["BLING !", "$$$", "CHA-CHING", "WOW", "DE LUXE", "VIP", "CASH !"],
     girly: ["Trop mignon", "♥ ♥ ♥", "Oh la la", "Youpi !", "Bisous", "Chouette !", "Hihi"],
-    neon: ["ZAP !", "GAME ON", "1UP", "BZZT", "INSERT COIN", "HI-SCORE", "COMBO !"],
     ocean: ["BLOUP !", "PLOUF", "GLOU GLOU", "SPLASH !", "BLUB…", "><((°>", "OHÉ !"],
     stars: ["Waouh…", "Fais un vœu", "Scintille", "Ooooh", "Filante !", "Shhh…", "Zénith"],
     riso: ["PHOTOCOPIE", "N° 0", "AGRAFE !", "SCOTCH", "50 EX.", "FAIT MAIN", "ZINE !"],
@@ -199,7 +198,6 @@
     bd: { fav: ["HOP !", "YES !", "TOP !"], list: ["PAF !", "TCHAC !", "HOP !"], read: ["FINI !", "BRAVO !"], random: ["ZOU !", "TADAM !"], adult: ["CHUT…", "PSSST"] },
     bling: { fav: ["BLING !", "WOW !"], list: ["CHA-CHING", "VIP !"], read: ["JACKPOT !", "BRAVO !"], random: ["CASH !", "TADAM !"], adult: ["PRIVÉ", "VIP"] },
     girly: { fav: ["♥ ♥ ♥", "Trop bien !"], list: ["Hop !", "Youpi !"], read: ["Bravo !", "Fini !"], random: ["Surprise !", "Tadam !"], adult: ["Chut…", "Oh !"] },
-    neon: { fav: ["1UP !", "ZAP !"], list: ["COMBO !", "BZZT"], read: ["GAME OVER", "HI-SCORE !"], random: ["RANDOM !", "INSERT COIN"], adult: ["ACCESS", "UNLOCKED"] },
     ocean: { fav: ["BLOUP !", "PÊCHÉ !"], list: ["PLOUF !", "SPLASH !"], read: ["REMONTÉE !", "BRAVO !"], random: ["À L'EAU !", "PLOUF !"], adult: ["ABYSSES", "GLOU…"] },
     stars: { fav: ["✦ Étoile !", "Brille !"], list: ["Rangé !", "Constellé"], read: ["Bravo !", "Fin…"], random: ["Vœu !", "Filante !"], adult: ["Nuit noire", "Shhh…"] },
     riso: { fav: ["COUP DE CŒUR", "TAMPONNÉ"], list: ["AGRAFÉ !", "CLAC !"], read: ["LU & APPROUVÉ", "FIN"], random: ["AU PIF !", "TIRAGE !"], adult: ["CENSURÉ", "X"] },
@@ -227,6 +225,79 @@
     $('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5f8" : "#0f1115");
     setupMosaic();
     setupSideCovers();
+    setupBubbles();
+  }
+
+  // ================================================================ aquarium : bulles qui éclatent (et leur « blop »)
+  /* Les bulles montent du bas de l'écran ; environ une sur trois, tirée au sort, gonfle puis éclate en route avec un
+     petit bruit synthétisé (pas de fichier son). Le son ne joue qu'après un premier clic ou toucher sur la page
+     (règle des navigateurs) et se coupe avec le bouton haut-parleur, mémorisé sur l'appareil. */
+  let bubbleTimer = null, audioCtx = null, lastPop = 0;
+  const bubbleMuted = () => { try { return localStorage.getItem("bulle:bubbles_mute") === "1"; } catch (_) { return false; } };
+  function updateMuteBtn() {
+    const b = $("#bubble-mute"); if (!b) return;
+    const m = bubbleMuted();
+    b.classList.toggle("off", m);
+    b.title = m ? "Son des bulles coupé (cliquer pour l'activer)" : "Son des bulles (cliquer pour couper)";
+  }
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#bubble-mute")) return;
+    try { localStorage.setItem("bulle:bubbles_mute", bubbleMuted() ? "0" : "1"); } catch (_) { /* ignore */ }
+    updateMuteBtn(); unlockAudio();
+    toast(bubbleMuted() ? "Bulles en sourdine" : "Blop ! Le son des bulles est activé");
+  });
+  function unlockAudio() {
+    if (audioCtx || bubbleMuted()) { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); return; }
+    try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) audioCtx = new AC(); } catch (_) { audioCtx = null; }
+  }
+  ["pointerdown", "keydown", "touchstart"].forEach(t => document.addEventListener(t, () => { if (document.documentElement.dataset.skin === "ocean") unlockAudio(); }, { passive: true }));
+  function blop(size) {
+    if (bubbleMuted() || !audioCtx || audioCtx.state !== "running" || document.hidden) return;
+    const now = audioCtx.currentTime;
+    if (performance.now() - lastPop < 120) return;   // pas de rafale
+    lastPop = performance.now();
+    const big = Math.min(1, size / 20), f0 = 1300 - big * 600 + Math.random() * 300;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(f0, now);
+    o.frequency.exponentialRampToValueAtTime(f0 * 0.28, now + 0.09);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.09, now + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(now); o.stop(now + 0.15);
+    // petit claquement d'air au début
+    const n = audioCtx.createBufferSource(), buf = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.02), audioCtx.sampleRate);
+    const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+    const ng = audioCtx.createGain(); ng.gain.value = 0.025; n.buffer = buf; n.connect(ng).connect(audioCtx.destination); n.start(now);
+  }
+  function spawnBubble(box) {
+    if (document.hidden || box.childElementCount > 22) return;
+    const el = document.createElement("span"), size = 5 + Math.random() * 15, dur = 9 + Math.random() * 9;
+    el.className = "bub";
+    el.style.setProperty("--x", (Math.random() * 100).toFixed(1) + "vw");
+    el.style.setProperty("--s", size.toFixed(1) + "px");
+    el.style.setProperty("--d", dur.toFixed(1) + "s");
+    el.style.animationDelay = `0s, ${(-Math.random() * 2.6).toFixed(2)}s`;
+    el.innerHTML = "<i></i>";
+    box.appendChild(el);
+    const kill = () => el.remove();
+    if (Math.random() < 0.35) {   // celle-ci éclatera en route
+      const at = dur * (0.25 + Math.random() * 0.5) * 1000;
+      el.style.setProperty("--g", (1.8 + Math.random() * 1.2).toFixed(2));
+      setTimeout(() => { if (!el.isConnected) return; el.classList.add("grow");
+        setTimeout(() => { if (!el.isConnected) return; el.classList.add("pop"); blop(size); setTimeout(kill, 420); }, 700 + Math.random() * 900);
+      }, at);
+    }
+    setTimeout(kill, dur * 1000 + 200);
+  }
+  function setupBubbles() {
+    const want = document.documentElement.dataset.skin === "ocean" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let box = $("#bubbles");
+    updateMuteBtn();
+    if (!want) { clearInterval(bubbleTimer); bubbleTimer = null; if (box) box.remove(); return; }
+    if (!box) { box = document.createElement("div"); box.id = "bubbles"; box.setAttribute("aria-hidden", "true"); document.body.prepend(box); }
+    if (!bubbleTimer) { for (let i = 0; i < 4; i++) setTimeout(() => spawnBubble(box), i * 500); bubbleTimer = setInterval(() => spawnBubble(box), 850); }
   }
 
   // ================================================================ couvertures au hasard en bas de la colonne de gauche
@@ -661,12 +732,8 @@
         <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
         <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
         ${!isAdmin() ? "" : settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
-        ${isAdmin() ? `<button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire cette série sur le disque : fichiers ajoutés ou jetés, format, pages, couvertures">↻ Rescanner</button>
-        <button class="btn" type="button" data-ignore="${data.folder.id}" data-name="${esc(data.folder.name)}" data-folder="1" title="Enlever ce dossier de Bulle (rien n'est supprimé sur le disque)">✕ Retirer</button>` : ""}</span></h1>`;
+        ${isAdmin() ? `<button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire cette série sur le disque : fichiers ajoutés ou jetés, format, pages, couvertures">↻ Rescanner</button>` : ""}</span></h1>`;
       html += bdtPanelHtml(data);
-      const ig = data.ignored_here || [];
-      if (ig.length) html += `<div class="ignored-here"><span class="muted">${ig.length > 1 ? `${ig.length} éléments retirés` : "1 élément retiré"} de Bulle ici (toujours sur le disque) :</span>
-        ${ig.map(p => `<span class="prow"><code>${esc(p.slice(data.folder.path.length + 1))}</code> <button class="btn mini" type="button" data-action="unignore" data-path="${esc(p)}">Remettre</button></span>`).join("")}</div>`;
     }
     html += lettersHtml(list);
     html += gridFor(id ? withGhosts(list, data.bdt) : list, page || 1);
@@ -900,7 +967,7 @@
     const cacheLine = cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—";
     const sections = {
       look: () => `
-        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["neon", "Néon arcade (nuit, cyan et magenta, grille)"], ["ocean", "Aquarium (grand bleu, poissons, bulles)"], ["stars", "Nuit étoilée (ciel profond, étoiles filantes)"], ["riso", "Fanzine risographie (papier, encres fluo, scotch, tampons)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
+        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["ocean", "Aquarium (grand bleu, poissons, bulles qui éclatent)"], ["stars", "Nuit étoilée (bleu nuit qui respire, étoiles filantes)"], ["riso", "Fanzine (papier, deux encres risographie, scotch, tampons)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
         ${field("Thème", sel("p", "theme", [["dark", "Sombre"], ["light", "Clair"], ["auto", "Comme l'appareil"]], p.theme))}
         ${field("Réglages : présentation", sel("p", "settings_layout", [["tabs", "Signets (une rubrique à la fois)"], ["bricks", "Briques (tout sur une page)"]], p.settings_layout), "Cette page.")}
         ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
@@ -927,8 +994,6 @@
         ${field("Rouvrir le dernier dossier au démarrage", chk("p", "remember_folder", p.remember_folder))}
         ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel), d'après Bédéthèque.")}
         ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
-        ${admin ? `<div class="field"><div class="flabel"><span>Retirés de Bulle</span><small>Albums et dossiers enlevés avec « ✕ Retirer » : ils restent sur le disque mais les scans les ignorent.</small></div>
-          <div class="plist">${(g.ignored_paths || []).length ? g.ignored_paths.map(p => `<span class="prow"><code>${esc(p)}</code> <button class="btn mini" type="button" data-action="unignore" data-path="${esc(p)}">Remettre</button></span>`).join("") : `<span class="muted">Aucun</span>`}</div></div>` : ""}
         ${admin ? `<h3 class="setsub">Qualité HD / SD</h3>
         ${field("Mesurer automatiquement", chk("g", "quality_auto", g.quality_auto !== false), "Après chaque scan, Bulle mesure en arrière-plan la taille des pages des albums nouveaux ou modifiés (deux pages par album, lecture seule : les fichiers ne sont jamais modifiés).")}
         ${field("Seuil HD", num("g", "hd_min_px", g.hd_min_px || 2400, 800, 8000, 100) + ` <span class="muted">px</span>`, "Grand côté des pages à partir duquel un album compte comme HD. Repères : 1920 × 2650 ≈ 2650 px, 2560 × 3450 ≈ 3450 px, 3184 × 4200 = 4200 px. Changer le seuil reclasse tout de suite, sans remesurer.")}
@@ -1235,19 +1300,24 @@
           ${it.meta && it.meta.isbn ? `<dt>ISBN</dt><dd>${esc(it.meta.isbn)}${it.meta.pages ? ` · ${it.meta.pages} planches` : ""}</dd>` : ""}
         </dl>
         <div class="summary-slot" id="sheet-summary" data-id="${it.id}"></div>
-        <div class="actions">
-          ${it.error ? "" : `<a class="btn primary" href="/read/${it.id}${p && !p.completed ? "" : "?page=0"}">${ICON.play} ${p && !p.completed ? `Reprendre p. ${p.page + 1}` : (p ? "Relire" : "Lire")}</a>`}
-          ${p && !p.completed && !it.error ? `<a class="btn" href="/read/${it.id}?page=0">Recommencer</a>` : ""}
-          ${it.error ? "" : (p && p.completed
-            ? `<button class="btn" type="button" data-unread="${it.id}">Marquer non lu</button>`
-            : `<button class="btn" type="button" data-read="${it.id}">${ICON.check} Marquer comme lu</button>`)}
-          ${p && !p.completed ? `<button class="btn" type="button" data-unread="${it.id}">Effacer la progression</button>` : ""}
-          <a class="btn" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
-          <button class="btn" type="button" data-recover="${it.id}" title="Relire ce fichier sur le disque : format, taille, pages, couverture (rattrape un raté du scan)">↻ Rescanner ce fichier</button>
-          ${isAdmin() ? `<button class="btn" type="button" data-ignore="${it.id}" data-name="${esc(it.name)}" title="Enlever cet album de Bulle (le fichier reste sur le disque)">✕ Retirer de Bulle</button>` : ""}
-          ${parent && parent.id ? `<a class="btn" href="#/f/${parent.id}" data-close>Ouvrir le dossier</a>` : ""}
+        <div class="sheet-actions">
+          <div class="sa-main">
+            ${it.error ? "" : `<a class="btn primary big" href="/read/${it.id}${p && !p.completed ? "" : "?page=0"}">${ICON.play} ${p && !p.completed ? `Reprendre p. ${p.page + 1}` : (p ? "Relire" : "Lire")}</a>`}
+            ${p && !p.completed && !it.error ? `<a class="btn" href="/read/${it.id}?page=0">Recommencer</a>` : ""}
+          </div>
+          <div class="sa-row">
+            ${it.error ? "" : (p && p.completed
+              ? `<button class="btn" type="button" data-unread="${it.id}">Marquer non lu</button>`
+              : `<button class="btn" type="button" data-read="${it.id}">${ICON.check} Marquer comme lu</button>`)}
+            ${p && !p.completed ? `<button class="btn" type="button" data-unread="${it.id}">Effacer la progression</button>` : ""}
+            <span class="lists-row" id="sheet-lists" data-id="${it.id}"></span>
+          </div>
+          <div class="sa-row sa-minor">
+            ${parent && parent.id ? `<a class="btn mini" href="#/f/${parent.id}" data-close>📁 Ouvrir le dossier</a>` : ""}
+            <a class="btn mini" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
+            <button class="btn mini" type="button" data-recover="${it.id}" title="Relire ce fichier sur le disque : format, taille, pages, couverture (rattrape un raté du scan)">↻ Rescanner</button>
+          </div>
         </div>
-        <div class="lists-row" id="sheet-lists" data-id="${it.id}"></div>
       </div></div></div>`;
     renderSheetLists($("#sheet-lists"), it.id, it.lists || []);
     renderSummary($("#sheet-summary"), it);
