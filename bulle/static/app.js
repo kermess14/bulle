@@ -1370,7 +1370,7 @@
   function markTab() {
     const h = location.hash || "#/";
     let m;
-    const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/adult") ? "adult" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
+    const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/activity") ? "activity" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/adult") ? "adult" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
     for (const a of document.querySelectorAll("#maintabs a")) a.classList.toggle("on", a.dataset.tab === tab);
   }
 
@@ -1479,13 +1479,46 @@
       <div class="listgrid">${lists.map(l => `<a class="listcard" href="#/list/${l.kind === "custom" ? l.id : l.kind}" data-drop="${l.kind === "custom" ? l.id : l.kind}"><span class="lic">${icon(l)}</span><span><b>${esc(l.name)}</b><small>${plural(l.count, "élément", "éléments")}</small></span></a>`).join("")}</div>
       <p class="muted" style="margin-top:16px">Les listes et les favoris sont propres à chaque profil. Ajoutez un album depuis sa fiche (« i »), une série depuis le haut de sa page, ou glissez-déposez une vignette sur une liste de la colonne de gauche.</p>`;
   }
+  const fmtDay = ts => ts ? new Date(ts * 1000).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) : "";
+  const fmtDur = sec => { const m = Math.round((sec || 0) / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`; };
   async function viewHistory() {
     setCrumbs([{ id: 0, name: "Accueil" }], "Historique");
     document.title = "Historique — Bulle";
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-    const items = qf(await api("/api/history"));
-    main.innerHTML = `<h1>Historique <small class="muted h1sub">${plural(items.length, "album lu", "albums lus")}, les plus récents d'abord</small></h1>
-      ${items.length ? `<div class="grid" id="grid">${items.map(it => card(it, { sub: `${it.folder}${it.progress && it.progress.updated_at ? " · " + new Date(it.progress.updated_at * 1000).toLocaleDateString("fr-FR") : ""}` })).join("")}</div>` : `<div class="empty">Aucun album terminé pour l'instant.</div>`}`;
+    const [done, reading] = await Promise.all([api("/api/history"), api("/api/history/reading")]);
+    const items = qf(done), cur = qf(reading);
+    const subOf = it => `${it.folder}${it.progress && it.progress.updated_at ? " · " + fmtDay(it.progress.updated_at) : ""}${it.progress && !it.progress.completed && it.pages ? ` · p. ${it.progress.page + 1}/${it.pages}` : ""}`;
+    main.innerHTML = `<h1>Historique <small class="muted h1sub">${plural(cur.length, "album en cours", "albums en cours")} · ${plural(items.length, "terminé", "terminés")}</small> <span class="h1tools"><a class="btn" href="#/activity">Activité</a></span></h1>
+      ${cur.length ? `<h2>En cours</h2><div class="grid">${cur.map(it => card(it, { sub: subOf(it) })).join("")}</div>` : ""}
+      <h2>Terminés <small class="muted">les plus récents d'abord</small></h2>
+      ${items.length ? `<div class="grid" id="grid">${items.map(it => card(it, { sub: subOf(it) })).join("")}</div>` : `<div class="empty">Aucun album terminé pour l'instant.</div>`}`;
+  }
+  async function viewActivity() {
+    setCrumbs([{ id: 0, name: "Accueil" }], "Activité");
+    document.title = "Activité — Bulle";
+    main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    const a = await api("/api/activity");
+    const tile = (n, label, sub = "") => `<div class="stile"><b>${n}</b><span>${label}</span>${sub ? `<small class="muted">${sub}</small>` : ""}</div>`;
+    const maxM = Math.max(1, ...a.months.map(m => m.pages)), maxD = Math.max(1, ...a.days.map(d => d.pages));
+    const monthLabel = m => { const [y, mo] = m.split("-"); return new Date(+y, +mo - 1, 1).toLocaleDateString("fr-FR", { month: "short", year: "2-digit" }); };
+    const bars = (rows, key, max, label, title) => `<div class="bars">${rows.map(r => `<div class="bar" title="${title(r)}"><i style="height:${Math.max(2, Math.round(r[key] / max * 100))}%"></i><span>${label(r)}</span></div>`).join("")}</div>`;
+    main.innerHTML = `<h1>Activité <small class="muted h1sub">vos lectures, d'après les pages tournées dans Bulle</small> <span class="h1tools"><a class="btn" href="#/history">Historique</a></span></h1>
+      <h2>30 derniers jours</h2>
+      <div class="stiles">${tile(a.last30.finished, "albums terminés")}${tile(a.last30.pages, "pages lues")}${tile(fmtDur(a.last30.seconds), "de lecture")}${tile(a.last30.days, "jours avec lecture")}</div>
+      <h2>Par jour <small class="muted">14 derniers jours, pages lues</small></h2>
+      ${bars(a.days, "pages", maxD, d => d.day.slice(8), d => `${d.day} : ${plural(d.pages, "page", "pages")}, ${fmtDur(d.seconds)}${d.finished ? `, ${plural(d.finished, "album terminé", "albums terminés")}` : ""}`)}
+      ${a.months.length ? `<h2>Par mois <small class="muted">pages lues · albums terminés</small></h2>
+      ${bars(a.months, "pages", maxM, m => `${monthLabel(m.month)}${m.finished ? `<em>${m.finished}</em>` : ""}`, m => `${monthLabel(m.month)} : ${plural(m.pages, "page", "pages")}, ${fmtDur(m.seconds)}, ${plural(m.finished, "album terminé", "albums terminés")}, ${plural(m.days, "jour", "jours")} de lecture`)}` : ""}
+      <div class="acols">
+        <section><h2>Séries en cours</h2>${a.series.length ? `<ul class="alist">${a.series.map(sr => `<li><a href="#/f/${sr.id}">${esc(sr.name)}</a><span class="muted">${sr.done || 0}/${sr.album_count} lus · ${plural(sr.reading, "en cours", "en cours")} · ${fmtDay(sr.last_at)}</span></li>`).join("")}</ul>` : `<p class="muted">Aucune série commencée.</p>`}</section>
+        <section><h2>Les plus lus <small class="muted">30 jours, en temps</small></h2>${a.top.length ? `<ul class="alist">${a.top.map(t => `<li><a href="/read/${t.id}">${esc(t.name)}</a><span class="muted">${fmtDur(t.seconds)} · ${plural(t.pages, "page", "pages")}</span></li>`).join("")}</ul>` : `<p class="muted">Rien encore : tournez des pages !</p>`}</section>
+      </div>
+      <h2>Depuis le début</h2>
+      <div class="stiles">${tile(a.total.finished, "albums terminés")}${tile(a.total.pages, "pages lues")}${tile(fmtDur(a.total.seconds), "de lecture")}${tile(a.total.days, "jours avec lecture")}</div>
+      ${a.profiles ? `<h2>Tous les comptes <small class="muted">30 derniers jours</small></h2>
+      <table class="coltable atable"><thead><tr><th>Compte</th><th>Pages</th><th>Temps</th><th>Terminés</th><th>Dernière lecture</th></tr></thead>
+      <tbody>${a.profiles.map(pr => `<tr><td>${avatarHtml(pr, "small")} ${esc(pr.name)}</td><td>${pr.pages}</td><td>${fmtDur(pr.seconds)}</td><td>${pr.finished}</td><td>${pr.last_at ? fmtDay(pr.last_at) : "—"}</td></tr>`).join("")}</tbody></table>` : ""}
+      <p class="muted">Bulle note les pages tournées dans son lecteur (pas celles lues dans une autre appli) ; le temps compte les écarts entre deux pages, plafonnés à 5 minutes.</p>`;
   }
   async function viewRandom() {
     try {
@@ -1792,6 +1825,8 @@
         await viewLists();
       } else if (h.startsWith("#/history")) {
         await viewHistory();
+      } else if (h.startsWith("#/activity")) {
+        await viewActivity();
       } else if (h.startsWith("#/random")) {
         await viewRandom(); return;
       } else {

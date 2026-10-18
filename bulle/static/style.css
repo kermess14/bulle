@@ -1200,3 +1200,21 @@ img.pavatar { object-fit: cover; padding: 0; }
 .ptile .prole { position: absolute; left: 6px; top: 6px; font-size: 9.5px; padding: 0 5px; }
 .avatar-edit { align-items: center; gap: 10px; flex-wrap: wrap; }
 .prow select { margin-left: 4px; }
+/* ---- page Activité */
+.stiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 6px 0 18px; }
+.stile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; }
+.stile b { font-size: 26px; line-height: 1.1; }
+.stile span { font-size: 13px; color: var(--muted); }
+.bars { display: flex; justify-content: flex-start; align-items: flex-end; gap: 6px; height: 120px; padding: 0 2px 22px; margin: 4px 0 18px; border-bottom: 1px solid var(--line); position: relative; }
+.bars .bar { flex: 1; min-width: 0; max-width: 90px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; position: relative; }
+.bars .bar i { display: block; background: var(--accent); border-radius: 6px 6px 2px 2px; min-height: 2px; opacity: .9; }
+.bars .bar span { position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; text-align: center; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.bars .bar span em { display: block; font-style: normal; font-weight: 700; color: var(--text); font-size: 11px; }
+.acols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0 28px; }
+.alist { list-style: none; margin: 4px 0 16px; padding: 0; }
+.alist li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.alist li .muted { font-size: 12.5px; }
+.atable td, .atable th { padding: 6px 10px; text-align: left; }
+.atable td:nth-child(n+2), .atable th:nth-child(n+2) { text-align: right; }
+.atable .pavatar.small { vertical-align: middle; margin-right: 4px; }
+:root[data-skin="bd"] .stile { border: 2px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); border-radius: 6px; }
