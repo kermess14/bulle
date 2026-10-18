@@ -141,7 +141,12 @@
   }
   function waitFor(im, n) {
     return new Promise(resolve => {
-      const done = () => { if (im.naturalWidth) aspects[n] = im.naturalWidth / im.naturalHeight; resolve(im.naturalWidth ? im : null); };
+      const done = () => {
+        if (!im.naturalWidth) { resolve(null); return; }
+        aspects[n] = im.naturalWidth / im.naturalHeight;
+        // décodée AVANT d'être rendue : l'échange de src peint immédiatement, sans à-coup ni image vide
+        (im.decode ? im.decode().catch(() => {}) : Promise.resolve()).then(() => resolve(im));
+      };
       if (im.complete) done();
       else { im.onload = done; im.onerror = () => resolve(null); }
     });
@@ -167,8 +172,8 @@
     return computeSpreads().find(sp => sp.includes(n)) || [n];
   }
   async function go(n, { save = true, panel = "first" } = {}) {
-    if (n < 0) { flash("Début de l'album"); return; }
-    if (n >= pages) { showEnd(); return; }
+    if (n < 0) { pendingStep = 0; flash("Début de l'album"); return; }
+    if (n >= pages) { pendingStep = 0; showEnd(); return; }
     hideEnd();
     if (mode === "scroll") { scrollToPage(n, save); return; }
     const token = ++loadToken;
@@ -190,27 +195,41 @@
       imgA.src = a ? a.src : ""; imgA.hidden = !a;
       if (list.length === 2) { imgB.src = b ? b.src : ""; imgB.hidden = !b; } else { imgB.hidden = true; imgB.removeAttribute("src"); }
       n = list[0];
+    } else if (mode === "panels") {
+      // Case par case : l'ancienne case reste affichée, cadrée, pendant qu'on prépare la nouvelle planche
+      // (image décodée + découpage en cases). L'échange image + cadrage se fait ensuite d'un seul coup, dans la
+      // même image d'écran : jamais de planche mal cadrée ni de fond noir pendant le chargement.
+      list = [n];
+      const hi = images.get(n);
+      const ready = hi && hi.complete && hi.naturalWidth && hi.src.endsWith(pageUrl(n));
+      const imageP = ready ? loadImage(n) : loadImageAt(n, baseWidth(n));
+      const [a, data] = await Promise.all([imageP, getPanels(n)]);
+      if (token !== loadToken) return;
+      single.hidden = false; spread.hidden = true;
+      img.classList.add("nofx");
+      if (a) img.src = a.src; else { img.removeAttribute("src"); img.style.transform = ""; reportError(n); }
+      resetZoom(false);
+      clearTimeout(spin); loading.hidden = true;
+      current = n; shown = list;
+      fitImages();
+      stage.scrollTop = 0; stage.scrollLeft = 0;
+      const count = data.panels.length;
+      panelIdx = panel === "keep" ? Math.min(panelIdx, count - 1) : panel === "last" ? count - 1 : (prefs.reader_panels_full_first || !count ? -1 : 0);
+      applyPanel(false);
+      if (!ready && a) loadImage(n).then(full => { if (token === loadToken && current === n && full && full.src !== img.src) img.src = full.src; });
+      updateCounter();
+      done();
+      drainStep();
+      if (save) saveProgress(n);
+      const u = new URL(location.href); u.searchParams.set("page", n); history.replaceState(null, "", u);
+      preloadAround(n);
+      return;
     } else {
       list = [n];
-      let a = null;
-      const hi = images.get(n);
-      if (mode === "panels" && !(hi && hi.complete && hi.naturalWidth && hi.src.endsWith(pageUrl(n)))) {
-        // case par case : l'image nette est lourde → on montre d'abord la version « page entière » (souvent déjà en cache)
-        const low = await loadImageAt(n, baseWidth(n));
-        if (token !== loadToken) return;
-        getPanels(n);
-        single.hidden = false; spread.hidden = true;
-        if (low) img.src = low.src;
-        clearTimeout(spin); loading.hidden = true;
-        loadImage(n).then(full => { if (token === loadToken && full && full.src !== img.src) { img.src = full.src; } });
-        a = low;
-      } else {
-        a = await loadImage(n);
-        if (token !== loadToken) return;
-        single.hidden = false; spread.hidden = true;
-        if (a) img.src = a.src;
-        if (mode === "panels") getPanels(n);
-      }
+      const a = await loadImage(n);
+      if (token !== loadToken) return;
+      single.hidden = false; spread.hidden = true;
+      if (a) img.src = a.src;
       if (!a) { img.removeAttribute("src"); reportError(n); }
     }
     resetZoom(false);
@@ -218,16 +237,9 @@
     current = n; shown = list;
     fitImages();
     stage.scrollTop = 0; stage.scrollLeft = 0;
-    if (mode === "panels") {
-      const data = await getPanels(n);
-      if (token !== loadToken) return;
-      const count = data.panels.length;
-      panelIdx = panel === "keep" ? Math.min(panelIdx, count - 1) : panel === "last" ? count - 1 : (prefs.reader_panels_full_first || !count ? -1 : 0);
-      applyPanel(false);
-    }
     updateCounter();
     done();
-    if (pendingStep && mode === "panels") { const d = pendingStep; pendingStep = 0; setTimeout(() => panelStep(d), 60); }
+    if (mode === "panels") drainStep();
     if (save) saveProgress(n);
     const u = new URL(location.href); u.searchParams.set("page", n); history.replaceState(null, "", u);
     preloadAround(list[list.length - 1]);
@@ -288,6 +300,7 @@
     scheduleRefine();   // une fois cadrée, la case est rechargée plus nette si besoin
   }
   let panelScale = 1, panelBox = null, pendingStep = 0;
+  const queueStep = dir => { pendingStep = Math.max(-3, Math.min(3, pendingStep + dir)); };
   /* Recadrage à la main en case par case : la case est déplacée du doigt (ou à la souris) quand la détection l'a mal
      cadrée ou qu'un bout déborde ; on ne peut pas sortir de la planche. La case suivante repart d'un cadrage propre. */
   let panelFrame = null, panelDrag = null;
@@ -325,16 +338,23 @@
     if (moved) { dragMoved = true; requestAnimationFrame(() => img.classList.remove("nofx")); }
     return moved;
   }
+  // Dépile un pas gardé pendant un chargement (appuis répétés) : un à la fois, dans l'ordre.
+  function drainStep() {
+    if (!pendingStep || busy()) return;
+    const d = pendingStep > 0 ? 1 : -1;
+    pendingStep -= d;
+    setTimeout(() => panelStep(d), 60);
+  }
   async function panelStep(dir) {
     const d = panelsCache.get(current);
     const count = d && d.panels instanceof Array ? d.panels.length : 0;
     if (dir > 0) {
-      if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); return; }
+      if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); drainStep(); return; }
       go(current + 1);
     } else {
       // en arrière : case précédente ; la page entière n'est une étape que si l'option « page entière d'abord » est active
-      if (panelIdx > 0 || (panelIdx === 0 && prefs.reader_panels_full_first)) { panelIdx -= 1; applyPanel(true); updateCounter(); return; }
-      if (current <= 0) { flash("Début de l'album"); return; }
+      if (panelIdx > 0 || (panelIdx === 0 && prefs.reader_panels_full_first)) { panelIdx -= 1; applyPanel(true); updateCounter(); drainStep(); return; }
+      if (current <= 0) { pendingStep = 0; flash("Début de l'album"); return; }
       go(current - 1, { panel: "last" });
     }
   }
@@ -344,7 +364,11 @@
     if (n - 1 >= 0) loadImage(n - 1);
     for (const k of [...images.keys()]) if (Math.abs(k - n) > count + 4) images.delete(k);
     for (const k of [...lowImages.keys()]) if (Math.abs(k - n) > count + 4) lowImages.delete(k);
-    if (mode === "panels") for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) { const m = n + k; loadImageAt(m, baseWidth(m)).then(() => getPanels(m)); }
+    if (mode === "panels") {
+      for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) { const m = n + k; loadImageAt(m, baseWidth(m)).then(() => getPanels(m)); }
+      if (n - 1 >= 0) { const m = n - 1; loadImageAt(m, baseWidth(m)).then(() => getPanels(m)); }
+      if (n + 1 < pages) loadImage(n + 1);   // version nette de la planche suivante, pour un échange sans rechargement
+    }
   }
   async function next() {
     if (mode === "scroll") { scrollStep(1); return; }
@@ -824,7 +848,7 @@
     if (!sameGesture) wheelStream.used = false;
     if (Math.abs(e.deltaY) < 3) return;
     wheelStream.used = true;
-    if (busy()) { if (mode === "panels") pendingStep = e.deltaY > 0 ? 1 : -1; return; }   // planche en cours de chargement : le pas est gardé, pas empilé
+    if (busy()) { if (mode === "panels") queueStep(e.deltaY > 0 ? 1 : -1); return; }   // planche en cours de chargement : le pas est gardé (3 maxi)
     if (mode === "panels") { panelStep(e.deltaY > 0 ? 1 : -1); return; }
     if (e.deltaY > 0) next(); else prev();
   }, { passive: true });
@@ -833,7 +857,7 @@
   document.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.repeat && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ")) { e.preventDefault(); return; }
-    if (busy() && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ") && mode === "panels") { pendingStep = (e.key === "ArrowLeft") !== manga ? -1 : 1; e.preventDefault(); return; }
+    if (busy() && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ") && mode === "panels") { queueStep((e.key === "ArrowLeft") !== manga ? -1 : 1); e.preventDefault(); return; }
     if (!endEl.hidden && e.key === "Enter" && item && item.next) { location.href = `/read/${item.next.id}?page=0`; return; }
     if (!strip.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       e.preventDefault();
