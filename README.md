@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.23.0)
+# Bulle — lecteur de BD maison (v0.23.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
