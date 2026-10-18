@@ -251,25 +251,41 @@
     try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) audioCtx = new AC(); } catch (_) { audioCtx = null; }
   }
   ["pointerdown", "keydown", "touchstart"].forEach(t => document.addEventListener(t, () => { if (document.documentElement.dataset.skin === "ocean") unlockAudio(); }, { passive: true }));
+  /* « Blop » de bulle : une vraie bulle qui éclate sous l'eau monte un peu en hauteur au lieu de descendre (sinon on
+     entend un tir de pistolet laser). Son grave et rond : une sinusoïde basse (environ 180 à 420 Hz selon la taille,
+     plus grave pour les grosses) qui glisse vers le haut, une attaque douce et un filtre passe-bas qui l'étouffe,
+     plus un tout petit « pof » d'air feutré. */
   function blop(size) {
     if (bubbleMuted() || !audioCtx || audioCtx.state !== "running" || document.hidden) return;
-    const now = audioCtx.currentTime;
-    if (performance.now() - lastPop < 120) return;   // pas de rafale
+    if (performance.now() - lastPop < 140) return;   // pas de rafale
     lastPop = performance.now();
-    const big = Math.min(1, size / 20), f0 = 1300 - big * 600 + Math.random() * 300;
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    const ctx = audioCtx, now = ctx.currentTime + 0.005;
+    const big = Math.max(0, Math.min(1, (size - 5) / 15));
+    const f0 = 420 - big * 240 + (Math.random() - .5) * 60, dur = 0.16 + big * 0.08;
+    const out = ctx.createGain(); out.gain.value = 0.5;
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 700 + (1 - big) * 300; lp.Q.value = 0.6;
+    lp.connect(out).connect(ctx.destination);
+    // la bulle : sinusoïde qui remonte en hauteur, enveloppe arrondie
+    const o = ctx.createOscillator(), g = ctx.createGain();
     o.type = "sine";
     o.frequency.setValueAtTime(f0, now);
-    o.frequency.exponentialRampToValueAtTime(f0 * 0.28, now + 0.09);
+    o.frequency.exponentialRampToValueAtTime(f0 * 1.9, now + dur * 0.7);
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.09, now + 0.006);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
-    o.connect(g).connect(audioCtx.destination);
-    o.start(now); o.stop(now + 0.15);
-    // petit claquement d'air au début
-    const n = audioCtx.createBufferSource(), buf = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.02), audioCtx.sampleRate);
-    const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-    const ng = audioCtx.createGain(); ng.gain.value = 0.025; n.buffer = buf; n.connect(ng).connect(audioCtx.destination); n.start(now);
+    g.gain.linearRampToValueAtTime(0.22, now + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g).connect(lp);
+    o.start(now); o.stop(now + dur + 0.02);
+    // un léger écho d'octave, très bas, pour l'arrondi
+    const o2 = ctx.createOscillator(), g2 = ctx.createGain();
+    o2.type = "sine"; o2.frequency.setValueAtTime(f0 * 0.5, now); o2.frequency.exponentialRampToValueAtTime(f0 * 0.95, now + dur * 0.7);
+    g2.gain.setValueAtTime(0.0001, now); g2.gain.linearRampToValueAtTime(0.08, now + 0.015); g2.gain.exponentialRampToValueAtTime(0.0001, now + dur * 0.8);
+    o2.connect(g2).connect(lp); o2.start(now); o2.stop(now + dur);
+    // le « pof » : un souffle très court et très étouffé
+    const len = Math.floor(ctx.sampleRate * 0.03), buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    const n = ctx.createBufferSource(), nf = ctx.createBiquadFilter(), ng = ctx.createGain();
+    nf.type = "lowpass"; nf.frequency.value = 450; ng.gain.value = 0.12;
+    n.buffer = buf; n.connect(nf).connect(ng).connect(out); n.start(now);
   }
   function spawnBubble(box) {
     if (document.hidden || box.childElementCount > 22) return;
