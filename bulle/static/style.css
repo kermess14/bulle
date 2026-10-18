@@ -1326,3 +1326,16 @@ img.pavatar { object-fit: cover; padding: 0; }
 :root[data-skin="seasons"] #season-btn { display: inline-flex; }
 #season-btn.turn { animation: season-turn .5s ease; }
 @keyframes season-turn { 0% { transform: rotate(0) scale(1); } 50% { transform: rotate(180deg) scale(.6); } 100% { transform: rotate(360deg) scale(1); } }
+
+/* ---- mode léger : bouton « planche de BD » à côté du champignon, et tout ce qu'il coupe */
+.lite { width: 34px; height: 34px; border: 0; background: transparent; padding: 2px; opacity: .45; transition: opacity .2s, transform .2s; flex: none; margin-left: -6px; cursor: pointer; }
+.lite svg { width: 100%; height: 100%; }
+.lite svg .zz { display: none; }
+.lite:hover, .lite:focus-visible { opacity: 1; transform: rotate(6deg) scale(1.12); }
+.lite.on { opacity: 1; filter: grayscale(.85); }
+.lite.on svg .zz { display: inline; }
+:root[data-lite="on"] *, :root[data-lite="on"] *::before, :root[data-lite="on"] *::after { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+:root[data-lite="on"] body, :root[data-lite="on"] body::before, :root[data-lite="on"] body::after,
+:root[data-lite="on"] .sidebar .ono, :root[data-lite="on"] h2::before, :root[data-lite="on"] h1, :root[data-lite="on"] .card .cover { animation: none !important; }
+:root[data-lite="on"][data-skin="stars"] body::after, :root[data-lite="on"][data-skin="ocean"] body::before { display: none; }
+:root[data-lite="on"] .card .cover, :root[data-lite="on"] .card:hover .cover { transition: none; }
