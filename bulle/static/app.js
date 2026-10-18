@@ -1180,7 +1180,7 @@
         if (action === "quality-remeasure" && !confirm("Remesurer tous les albums ? Ça relit deux pages de chaque album (quelques minutes, en arrière-plan).")) return;
         const r = await fetch("/api/quality/measure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action === "quality-remeasure" ? { remeasure: true } : {}) });
         if (r.status === 409) toast("Une mesure est déjà en cours.");
-        pollQuality();
+        pollQuality(); setTimeout(pollQualityToast, 600);
       } else if (action === "quality-stop") { await fetch("/api/quality/stop", { method: "POST" }); setTimeout(pollQuality, 800); }
       else if (action === "clear-cache") {
         const r = await api("/api/cache/clear", { method: "POST" });
@@ -1707,8 +1707,34 @@
       else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.renamed ? `, ${s.renamed} renommés ou déplacés` : ""}${s.removed ? `, ${s.removed} disparus` : ""}`);
       if (!location.hash.startsWith("#/settings")) route();
       loadStats();
+      setTimeout(() => pollQualityToast(), 1500);   // le scan enchaîne souvent sur la mesure HD / SD
     }
   }
+  /* Bulle de notification pendant la mesure HD / SD (automatique après un scan, ou lancée à la main) */
+  let qToastTimer = null, qToastShown = false;
+  async function pollQualityToast() {
+    clearTimeout(qToastTimer);
+    if (scanBtn.classList.contains("spin")) return;   // le scan a sa propre bulle
+    let q;
+    try { q = await api("/api/quality"); } catch (_) { return; }
+    const j = q.job;
+    if (j.running) {
+      qToastShown = true;
+      const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      const stop = isAdmin() ? ` <button class="btn mini" type="button" data-stop-quality title="Arrêter (rien n'est perdu)">■ Arrêter</button>` : "";
+      toast(`<div class="spinner"></div>Mesure HD / SD : ${j.done} / ${j.total} (${pct} %) · ${j.hd} HD, ${j.sd} SD${j.errors ? `, ${j.errors} illisibles` : ""}${stop}`, { sticky: true });
+      qToastTimer = setTimeout(pollQualityToast, 2000);
+    } else if (qToastShown) {
+      qToastShown = false;
+      toast(`Mesure HD / SD terminée : ${j.done} albums — ${j.hd} HD, ${j.sd} SD${j.errors ? `, ${j.errors} illisibles` : ""}`);
+      if (!location.hash.startsWith("#/settings")) route();
+    }
+  }
+  toastEl.addEventListener("click", async e => {
+    if (!e.target.closest("[data-stop-quality]")) return;
+    try { await fetch("/api/quality/stop", { method: "POST" }); } catch (_) { /* ignore */ }
+    setTimeout(pollQualityToast, 800);
+  });
   let scanStopping = false;
   scanBtn.addEventListener("click", async () => {
     if (scanBtn.classList.contains("spin")) {   // scan déjà en cours : le bouton propose de l'arrêter
@@ -1744,6 +1770,7 @@
       checkUpdated(s.version);
       statsEl.title = `${s.folders} dossiers · ${s.read} lus · dernier scan : ${fmtDate(s.last_scan)}`;
       if (s.scan && s.scan.running) pollScan(true);
+      else if (!qToastShown) pollQualityToast();
     } catch (_) { /* ignore */ }
   }
 
