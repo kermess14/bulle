@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.24.0)
+# Bulle — lecteur de BD maison (v0.24.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -160,6 +160,10 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   La planche précédente est préchargée aussi (retour arrière immédiat), les préchargements passent en priorité
   réseau basse (la planche demandée garde la voie libre), et les appuis répétés pendant un chargement sont
   gardés (trois au plus) puis rejoués dans l'ordre.
+  Pendant qu'une case glisse vers la suivante, l'image n'est jamais remplacée par sa version plus nette (elle
+  attend la fin du glissement) : c'était la cause des cases noires passagères sur un NAS lent, la carte graphique
+  devant redessiner une grande image en plein mouvement. Et sous l'image, la teinte moyenne de la planche remplace
+  le noir si l'écran met un instant à la dessiner.
 - Mode léger : le bouton « planche de BD » à côté du champignon coupe tout ce qui bouge en arrière-plan (mosaïque,
   verre dépoli, couvertures au hasard, bulles de l'aquarium, saisons, petits mots animés, ciel de la Nuit étoilée)
   pour un affichage plus fluide, sur tablette surtout. Mémorisé sur l'appareil (pas sur le profil).
