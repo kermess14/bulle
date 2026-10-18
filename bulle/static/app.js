@@ -184,7 +184,7 @@
     bdt_ghosts: true, bdt_titles: false, quality: "all",
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
-  const SKINS = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso"];   // « neon » retiré : retombe sur « bd »
+  const SKINS = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso", "seasons"];   // « neon » retiré : retombe sur « bd »
   /* Onomatopées de la colonne de gauche et des petits éclats, par habillage */
   const ONO = {
     bd: ["WIZZ !", "Zzz…", "PAF !", "CLAC", "BOUM", "TADAM !", "ZOU !"],
@@ -193,6 +193,10 @@
     ocean: ["BLOUP !", "PLOUF", "GLOU GLOU", "SPLASH !", "BLUB…", "><((°>", "OHÉ !"],
     stars: ["Waouh…", "Fais un vœu", "Scintille", "Ooooh", "Filante !", "Shhh…", "Zénith"],
     riso: ["PHOTOCOPIE", "N° 0", "AGRAFE !", "SCOTCH", "50 EX.", "FAIT MAIN", "ZINE !"],
+    spring: ["Ça bourgeonne", "Cui-cui", "Floraison", "Brise", "Pâquerette", "Éclosion", "Printemps !"],
+    summer: ["Soleil !", "Glaces", "Farniente", "Plouf", "Cigales", "Sieste", "Été !"],
+    autumn: ["Crounch", "Châtaignes", "Feuilles", "Bruine", "Champignons", "Cocooning", "Automne !"],
+    winter: ["Brrr…", "Flocons", "Chocolat chaud", "Bonhomme", "Givre", "Plaid", "Hiver !"],
   };
   const POWS = {
     bd: { fav: ["HOP !", "YES !", "TOP !"], list: ["PAF !", "TCHAC !", "HOP !"], read: ["FINI !", "BRAVO !"], random: ["ZOU !", "TADAM !"], adult: ["CHUT…", "PSSST"] },
@@ -201,7 +205,14 @@
     ocean: { fav: ["BLOUP !", "PÊCHÉ !"], list: ["PLOUF !", "SPLASH !"], read: ["REMONTÉE !", "BRAVO !"], random: ["À L'EAU !", "PLOUF !"], adult: ["ABYSSES", "GLOU…"] },
     stars: { fav: ["✦ Étoile !", "Brille !"], list: ["Rangé !", "Constellé"], read: ["Bravo !", "Fin…"], random: ["Vœu !", "Filante !"], adult: ["Nuit noire", "Shhh…"] },
     riso: { fav: ["COUP DE CŒUR", "TAMPONNÉ"], list: ["AGRAFÉ !", "CLAC !"], read: ["LU & APPROUVÉ", "FIN"], random: ["AU PIF !", "TIRAGE !"], adult: ["CENSURÉ", "X"] },
+    seasons: { fav: ["Coup de cœur !", "Chouette !"], list: ["Rangé !", "Hop !"], read: ["Bravo !", "Fini !"], random: ["Surprise !", "Au hasard !"], adult: ["Chut…", "Psst"] },
   };
+  /* Saison du moment (hémisphère nord, dates des équinoxes et solstices arrondies) ; réglable à la main */
+  function currentSeason(d = new Date()) {
+    const md = (d.getMonth() + 1) * 100 + d.getDate();
+    return md >= 1221 || md < 320 ? "winter" : md < 621 ? "spring" : md < 922 ? "summer" : "autumn";
+  }
+  const SEASON_LABEL = { spring: "printemps", summer: "été", autumn: "automne", winter: "hiver" };
   const HOVER = { none: 1, light: 1.05, strong: 1.12 };
   const settings = { profile: Object.assign({}, PROFILE_DEFAULTS), global: {}, meta: {} };
   try { Object.assign(settings.profile, JSON.parse(localStorage.getItem("bulle:profile") || "{}")); } catch (_) { /* ignore */ }
@@ -215,7 +226,9 @@
     root.dataset.tabs = p.tabs_side === "top" || window.innerWidth <= 700 ? "top" : "left";
     root.dataset.covers = ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
     root.dataset.skin = SKINS.includes(p.skin) ? p.skin : "bd";
-    const words = ONO[root.dataset.skin];
+    const season = ["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason();
+    if (root.dataset.skin === "seasons") root.dataset.season = season; else delete root.dataset.season;
+    const words = root.dataset.skin === "seasons" ? ONO[season] : ONO[root.dataset.skin];
     if (words) document.querySelectorAll("#maintabs .ono").forEach((el, i) => { el.textContent = words[i % words.length]; });
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     root.dataset.mosaic = p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
@@ -226,6 +239,86 @@
     setupMosaic();
     setupSideCovers();
     setupBubbles();
+    setupSeasonFx();
+  }
+
+  // ================================================================ quatre saisons : ce qui flotte dans l'air
+  /* Une seule toile (canvas) derrière le contenu, animée image par image : pétales de cerisier au printemps,
+     lucioles en été, feuilles mortes qui tournoient en automne, flocons en hiver. Arrêtée quand l'onglet est caché,
+     absente si l'appareil demande moins d'animations. */
+  let seasonFx = null;
+  function setupSeasonFx() {
+    const root = document.documentElement, want = root.dataset.skin === "seasons" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const kind = want ? root.dataset.season : null;
+    if (seasonFx && seasonFx.kind === kind) return;
+    if (seasonFx) { cancelAnimationFrame(seasonFx.raf); seasonFx.canvas.remove(); seasonFx = null; }
+    if (!kind) return;
+    const canvas = document.createElement("canvas"); canvas.id = "seasonfx"; canvas.setAttribute("aria-hidden", "true");
+    document.body.prepend(canvas);
+    const ctx = canvas.getContext("2d");
+    const fx = seasonFx = { kind, canvas, raf: 0, parts: [], w: 0, h: 0, last: performance.now() };
+    const resize = () => { const dpr = Math.min(2, window.devicePixelRatio || 1); fx.w = innerWidth; fx.h = innerHeight; canvas.width = fx.w * dpr; canvas.height = fx.h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
+    resize(); window.addEventListener("resize", resize);
+    const light = () => root.dataset.theme === "light";
+    const R = (a, b) => a + Math.random() * (b - a);
+    const COUNT = { spring: 28, summer: 26, autumn: 24, winter: 80 }[kind];
+    const LEAF = ["#c8541f", "#e0841e", "#a8361a", "#d9a83a", "#b5651d", "#8f2d17"];
+    const PETAL = ["#ffc4d8", "#ffb0cb", "#ffd9e6", "#f7a6c2"];
+    function make(initial) {
+      const p = { x: R(0, fx.w), y: initial ? R(-fx.h, fx.h) : R(-80, -20), r: 0, vx: 0, vy: 0, a: R(0, Math.PI * 2), va: 0, ph: R(0, 6.3) };
+      if (kind === "winter") { p.r = R(1.4, 4.2); p.vy = R(18, 46) * (p.r / 2.4); p.vx = R(-8, 8); p.al = R(.45, .95); }
+      else if (kind === "autumn") { p.r = R(9, 17); p.vy = R(28, 52); p.vx = R(-12, 12); p.va = R(-1.6, 1.6); p.c = LEAF[Math.floor(Math.random() * LEAF.length)]; p.flip = R(0, 6.3); }
+      else if (kind === "spring") { p.r = R(5, 9); p.vy = R(20, 38); p.vx = R(6, 22); p.va = R(-2, 2); p.c = PETAL[Math.floor(Math.random() * PETAL.length)]; p.flip = R(0, 6.3); }
+      else { p.y = initial ? R(0, fx.h) : fx.h + 10; p.r = R(1.4, 2.8); p.vy = -R(6, 16); p.vx = R(-6, 6); p.al = 0; }
+      return p;
+    }
+    for (let i = 0; i < COUNT; i++) fx.parts.push(make(true));
+    function leaf(p, t) {
+      const sx = Math.cos(t * 1.7 + p.flip);   // la feuille se retourne en tombant
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.a); ctx.scale(Math.max(.25, Math.abs(sx)), 1);
+      ctx.fillStyle = p.c; ctx.globalAlpha = .85;
+      ctx.beginPath(); ctx.moveTo(0, -p.r);
+      ctx.bezierCurveTo(p.r * .9, -p.r * .55, p.r * .75, p.r * .5, 0, p.r);
+      ctx.bezierCurveTo(-p.r * .75, p.r * .5, -p.r * .9, -p.r * .55, 0, -p.r); ctx.fill();
+      ctx.strokeStyle = "rgba(60, 25, 10, .45)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, -p.r * .9); ctx.lineTo(0, p.r * 1.25); ctx.stroke();
+      ctx.restore();
+    }
+    function petal(p, t) {
+      const sx = Math.cos(t * 2.2 + p.flip);
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.a); ctx.scale(Math.max(.3, Math.abs(sx)), 1);
+      ctx.fillStyle = p.c; ctx.globalAlpha = .9;
+      ctx.beginPath(); ctx.ellipse(0, 0, p.r * .62, p.r, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255, 255, 255, .5)"; ctx.beginPath(); ctx.ellipse(-p.r * .15, -p.r * .3, p.r * .18, p.r * .35, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+    function frame(now) {
+      fx.raf = requestAnimationFrame(frame);
+      const dt = Math.min(.05, (now - fx.last) / 1000); fx.last = now;
+      if (document.hidden) return;
+      const t = now / 1000;
+      ctx.clearRect(0, 0, fx.w, fx.h);
+      for (let i = 0; i < fx.parts.length; i++) {
+        const p = fx.parts[i];
+        if (kind === "summer") {   // lucioles : montent doucement, s'allument et s'éteignent
+          p.x += (p.vx + Math.sin(t * .8 + p.ph) * 10) * dt; p.y += p.vy * dt;
+          const glow = Math.max(0, Math.sin(t * 1.3 + p.ph)) ** 2;
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 6);
+          const c = light() ? "242, 159, 5" : "255, 214, 90";
+          g.addColorStop(0, `rgba(${c}, ${.9 * glow})`); g.addColorStop(1, `rgba(${c}, 0)`);
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 6, 0, Math.PI * 2); ctx.fill();
+          if (p.y < -20) fx.parts[i] = make(false);
+          continue;
+        }
+        const sway = Math.sin(t * (kind === "winter" ? .9 : 1.4) + p.ph) * (kind === "winter" ? 12 : 30);
+        p.x += (p.vx + sway) * dt; p.y += p.vy * dt; p.a += p.va * dt;
+        if (kind === "winter") {
+          ctx.globalAlpha = p.al; ctx.fillStyle = light() ? "#8fb3d6" : "#ffffff";
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+        } else if (kind === "autumn") leaf(p, t); else petal(p, t);
+        if (p.y > fx.h + 30 || p.x < -60 || p.x > fx.w + 60) fx.parts[i] = make(false);
+      }
+    }
+    fx.raf = requestAnimationFrame(frame);
   }
 
   // ================================================================ aquarium : bulles qui éclatent (et leur « blop »)
@@ -983,8 +1076,9 @@
     const cacheLine = cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—";
     const sections = {
       look: () => `
-        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["ocean", "Aquarium (grand bleu, poissons, bulles qui éclatent)"], ["stars", "Nuit étoilée (bleu nuit qui respire, étoiles filantes)"], ["riso", "Fanzine (papier, deux encres risographie, scotch, tampons)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
+        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["ocean", "Aquarium (grand bleu, poissons, bulles qui éclatent)"], ["stars", "Nuit étoilée (bleu nuit qui respire, étoiles filantes)"], ["riso", "Fanzine (papier, deux encres risographie, scotch, tampons)"], ["seasons", "Quatre saisons (suit la date : pétales, lucioles, feuilles mortes, neige)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
         ${field("Thème", sel("p", "theme", [["dark", "Sombre"], ["light", "Clair"], ["auto", "Comme l'appareil"]], p.theme))}
+        ${p.skin === "seasons" ? field("Saison", sel("p", "season", [["auto", `Selon la date (en ce moment : ${SEASON_LABEL[currentSeason()]})`], ["spring", "Printemps (pétales)"], ["summer", "Été (lucioles)"], ["autumn", "Automne (feuilles mortes)"], ["winter", "Hiver (neige)"]], p.season || "auto"), "Habillage Quatre saisons : couleurs et ce qui flotte dans l'air changent avec la saison.") : ""}
         ${field("Réglages : présentation", sel("p", "settings_layout", [["tabs", "Signets (une rubrique à la fois)"], ["bricks", "Briques (tout sur une page)"]], p.settings_layout), "Cette page.")}
         ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
         ${field("Taille des vignettes", sel("p", "thumb_size", [["s", "Petites"], ["m", "Moyennes"], ["l", "Grandes"], ["xl", "Très grandes"]], p.thumb_size))}
@@ -1140,7 +1234,7 @@
     if (el.type === "number" || el.type === "range" || (el.tagName === "SELECT" && /^-?\d+(\.\d+)?$/.test(val))) val = Number(val);
     if (el.dataset.scope === "g") saveSettings(null, { [el.dataset.key]: val });
     else saveSettings({ [el.dataset.key]: val }, null);
-    if (el.dataset.key === "settings_layout") route();
+    if (el.dataset.key === "settings_layout" || el.dataset.key === "skin") route();
     if (el.dataset.key === "hd_min_px" || el.dataset.key === "quality_auto") { renderQualitySwitch(); setTimeout(pollQuality, 1200); }
   });
 
@@ -1295,7 +1389,7 @@
     const parent = it.breadcrumb.length ? it.breadcrumb[it.breadcrumb.length - 1] : null;
     modal.innerHTML = `<div class="backdrop"><div class="sheet" role="dialog" aria-modal="true" aria-label="Fiche de l'album">
       <button class="iconbtn close" type="button" data-close title="Fermer">${ICON.close}</button>
-      ${coverHtml(it, "", 220)}
+      <div class="sheet-left">${coverHtml(it, "", 220)}<div class="sheet-listsel" id="sheet-listsel" data-id="${it.id}"></div></div>
       <div>
         <h3>${esc(it.name)}</h3>
         <div class="path">${esc(folder || "Racine")}</div>
@@ -1397,10 +1491,14 @@
     const favList = lists.find(l => l.kind === "favorites");
     const isFav = favList && membership.includes(favList.id);
     const others = lists.filter(l => l.kind !== "favorites");
-    container.innerHTML = `<button class="btn ${isFav ? "fav-on" : ""}" type="button" data-fav="${nodeId}">${isFav ? "★ Favori" : "☆ Favori"}</button>
-      <select data-listsel="${nodeId}" aria-label="Ajouter à une liste"><option value="">Ajouter à une liste…</option>
+    const fav = `<button class="btn ${isFav ? "fav-on" : ""}" type="button" data-fav="${nodeId}">${isFav ? "★ Favori" : "☆ Favori"}</button>`;
+    const select = `<select data-listsel="${nodeId}" aria-label="Ajouter à une liste"><option value="">Ajouter à une liste…</option>
         ${others.map(l => `<option value="${l.id}">${membership.includes(l.id) ? "✓ " : ""}${esc(l.name)}${membership.includes(l.id) ? " (retirer)" : ""}</option>`).join("")}
         <option value="new">+ Nouvelle liste…</option></select>`;
+    // fiche d'un album : la liste se choisit sous la pochette, le favori reste avec les boutons
+    const under = $("#sheet-listsel");
+    if (under && +under.dataset.id === +nodeId && container.id === "sheet-lists") { container.innerHTML = fav; under.innerHTML = select; }
+    else container.innerHTML = fav + select;
   }
   async function toggleFav(nodeId, btn) {
     try {

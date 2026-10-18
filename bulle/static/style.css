@@ -316,6 +316,8 @@ body:has(.letters.rail.left.size-normal) main { padding-left: 48px; }
   grid-template-columns: 200px 1fr; gap: 18px; padding: 18px; position: relative;
 }
 .sheet .cover { align-self: start; }
+.sheet .sheet-left { align-self: start; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sheet .sheet-listsel select { width: 100%; }
 .sheet h3 { margin: 4px 0 6px; font-size: 19px; line-height: 1.25; padding-right: 36px; }
 .sheet .path { font-size: 12.5px; color: var(--muted); word-break: break-all; }
 .sheet dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 14px 0; font-size: 14px; }
@@ -336,7 +338,8 @@ body:has(.letters.rail.left.size-normal) main { padding-left: 48px; }
 .pbar i { display: block; height: 100%; background: var(--accent); }
 @media (max-width: 560px) {
   .sheet { grid-template-columns: 1fr; padding: 14px; }
-  .sheet .cover { width: 46%; margin: 0 auto; }
+  .sheet .sheet-left { width: 60%; margin: 0 auto; }
+  .sheet .sheet-left .cover { width: 78%; margin: 0 auto; }
 }
 
 /* profils et code d'accès */
@@ -1238,3 +1241,79 @@ img.pavatar { object-fit: cover; padding: 0; }
 .sheet .sheet-actions .sa-minor .btn { opacity: .85; }
 .sheet .sheet-actions .sa-minor .btn:hover { opacity: 1; }
 .sheet .sheet-actions .sa-row:empty { display: none; }
+
+/* ======================================================================
+   habillage Quatre saisons : suit la date (printemps, été, automne, hiver).
+   Couleurs de la saison, et ce qui flotte dans l'air derrière le contenu :
+   pétales au printemps, lucioles en été, feuilles mortes en automne, neige en hiver.
+   ====================================================================== */
+:root[data-skin="seasons"] { --round: ui-rounded, "SF Pro Rounded", "Varela Round", "Nunito", "Trebuchet MS", system-ui, sans-serif; --radius: 14px; color-scheme: dark;
+  --cover-shadow: 0 10px 24px rgba(0, 0, 0, .45); --shadow: 0 12px 30px rgba(0, 0, 0, .4); }
+:root[data-skin="seasons"][data-theme="light"] { color-scheme: light; --cover-shadow: 0 10px 22px rgba(60, 40, 20, .2); --shadow: 0 12px 28px rgba(60, 40, 20, .16); }
+/* printemps : vert tendre et fleurs de cerisier */
+:root[data-skin="seasons"][data-season="spring"] { --bg: #0f1f19; --bg-2: #142a21; --card: #173026; --card-2: #1e3b2f; --line: #2c5141; --text: #f1fbf4; --muted: #a2c7b2; --s1: #ff9ec4; --s2: #8fd694; --accent: #ff9ec4; --accent-ink: #3a0d20; --blue: #8fd694; --ok: #8fd694; --warn: #ff8a8a; --sky1: rgba(255, 158, 196, .16); --sky2: rgba(143, 214, 148, .14); }
+:root[data-skin="seasons"][data-season="spring"][data-theme="light"] { --bg: #f3fbf2; --bg-2: #fbfefa; --card: #e7f5e5; --card-2: #d8eed5; --line: #b7dbb3; --text: #1f3a2a; --muted: #5d7f69; --s1: #e5679a; --s2: #4fa85a; --accent: #e5679a; --accent-ink: #fff; --blue: #4fa85a; --sky1: rgba(229, 103, 154, .14); --sky2: rgba(79, 168, 90, .12); }
+/* été : soleil et mer du soir */
+:root[data-skin="seasons"][data-season="summer"] { --bg: #102330; --bg-2: #142b3b; --card: #183447; --card-2: #1f4157; --line: #2f5670; --text: #fff7ea; --muted: #bccbd2; --s1: #ffc23d; --s2: #3fc1c9; --accent: #ffc23d; --accent-ink: #2b1b00; --blue: #3fc1c9; --ok: #7fe0a0; --warn: #ff8a6a; --sky1: rgba(255, 194, 61, .2); --sky2: rgba(63, 193, 201, .14); }
+:root[data-skin="seasons"][data-season="summer"][data-theme="light"] { --bg: #fff8e8; --bg-2: #fffdf6; --card: #fff0cc; --card-2: #ffe6ad; --line: #efd394; --text: #3a2a10; --muted: #806a45; --s1: #f29f05; --s2: #1a9fb0; --accent: #f29f05; --accent-ink: #fff; --blue: #1a9fb0; --sky1: rgba(242, 159, 5, .18); --sky2: rgba(26, 159, 176, .1); }
+/* automne : roux, brique et or */
+:root[data-skin="seasons"][data-season="autumn"] { --bg: #1e140e; --bg-2: #261910; --card: #2e1e14; --card-2: #3a2619; --line: #573a25; --text: #fff1e6; --muted: #d6b69e; --s1: #e8772e; --s2: #c9a03a; --accent: #e8913a; --accent-ink: #2a1500; --blue: #c9a03a; --ok: #a9c46a; --warn: #e85a3a; --sky1: rgba(232, 119, 46, .18); --sky2: rgba(184, 64, 42, .14); }
+:root[data-skin="seasons"][data-season="autumn"][data-theme="light"] { --bg: #fbf1e4; --bg-2: #fffaf3; --card: #f5e2c9; --card-2: #eed2ad; --line: #e0bd90; --text: #3d2414; --muted: #85614a; --s1: #c8541f; --s2: #a87a14; --accent: #c8541f; --accent-ink: #fff; --blue: #a87a14; --sky1: rgba(200, 84, 31, .14); --sky2: rgba(168, 122, 20, .12); }
+/* hiver : bleu glacier et blanc */
+:root[data-skin="seasons"][data-season="winter"] { --bg: #0e1a26; --bg-2: #122131; --card: #16283c; --card-2: #1d3249; --line: #2c4865; --text: #f2f8ff; --muted: #a9bed5; --s1: #bfe3ff; --s2: #7fb2e5; --accent: #9fd3ff; --accent-ink: #06203a; --blue: #7fb2e5; --ok: #9fe3c8; --warn: #ff8f9a; --sky1: rgba(191, 227, 255, .14); --sky2: rgba(127, 178, 229, .12); }
+:root[data-skin="seasons"][data-season="winter"][data-theme="light"] { --bg: #f2f7fc; --bg-2: #fbfdff; --card: #e3edf7; --card-2: #d3e3f2; --line: #b9cfe4; --text: #1a2c40; --muted: #5d738a; --s1: #3b82c4; --s2: #7fa9d4; --accent: #3b82c4; --accent-ink: #fff; --blue: #3b82c4; --sky1: rgba(59, 130, 196, .12); --sky2: rgba(127, 169, 212, .14); }
+:root[data-skin="seasons"] body { font-family: var(--round); font-size: 15px; background: radial-gradient(90% 60% at 85% -10%, var(--sky1), transparent 70%), radial-gradient(80% 60% at 0% 110%, var(--sky2), transparent 70%), var(--bg) fixed; }
+#seasonfx { position: fixed; inset: 0; z-index: 0; pointer-events: none; width: 100vw; height: 100vh; }
+:root[data-skin="seasons"] .topbar { background: color-mix(in srgb, var(--bg-2) 88%, transparent); border-bottom: 0; box-shadow: 0 1px 0 var(--line), 0 4px 0 -2px color-mix(in srgb, var(--s1) 45%, transparent); }
+:root[data-skin="seasons"] .brand b, :root[data-skin="seasons"] h1, :root[data-skin="seasons"] .listhead h1, :root[data-skin="seasons"] .sheet h3 { font-family: var(--round); font-weight: 800; letter-spacing: .01em; color: var(--text); -webkit-text-stroke: 0; text-shadow: none; }
+:root[data-skin="seasons"] .brand b { color: var(--s1); }
+:root[data-skin="seasons"] .brand span { color: var(--s2); }
+:root[data-skin="seasons"] h1 { font-size: 28px; }
+:root[data-skin="seasons"] h1 .h1sub { font-weight: 400; color: var(--muted); }
+/* titres de section : l'emblème de la saison, puis un petit trait aux deux couleurs */
+:root[data-skin="seasons"] h2 { font-family: var(--round); font-weight: 800; font-size: 17px; letter-spacing: .02em; color: var(--s1); padding-bottom: 8px; margin: 30px 0 16px; border: 0; background: linear-gradient(90deg, var(--s1), var(--s2) 40%, transparent 85%) 0 100% / 100% 2px no-repeat; }
+:root[data-skin="seasons"] h2::before { content: var(--emblem, "✿"); margin-right: 10px; display: inline-block; animation: sway 4s ease-in-out infinite; }
+:root[data-skin="seasons"][data-season="spring"] { --emblem: "🌸"; }
+:root[data-skin="seasons"][data-season="summer"] { --emblem: "☀️"; }
+:root[data-skin="seasons"][data-season="autumn"] { --emblem: "🍂"; }
+:root[data-skin="seasons"][data-season="winter"] { --emblem: "❄️"; }
+@keyframes sway { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg) translateY(-1px); } }
+:root[data-skin="seasons"] h2 small { color: var(--muted); font-weight: 400; }
+:root[data-skin="seasons"] .crumbs { font-family: var(--round); }
+:root[data-skin="seasons"] .sidebar { border-right: 0; background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 92%, transparent), color-mix(in srgb, var(--bg) 70%, transparent)); box-shadow: 1px 0 0 var(--line); }
+:root[data-skin="seasons"] .sidebar a { border-radius: 999px; font-family: var(--round); font-weight: 700; color: var(--text); }
+:root[data-skin="seasons"] .sidebar a:hover { background: color-mix(in srgb, var(--s1) 14%, transparent); }
+:root[data-skin="seasons"] .sidebar a.on { background: linear-gradient(135deg, var(--s1), color-mix(in srgb, var(--s1) 60%, var(--s2))); color: var(--accent-ink); border-color: transparent; box-shadow: 0 6px 18px -6px var(--s1); }
+:root[data-skin="seasons"] .sidebar a.on svg { color: var(--accent-ink); }
+:root[data-skin="seasons"] .sidebar a.on .cnt { background: rgba(255, 255, 255, .55); color: var(--accent-ink); border-color: transparent; }
+:root[data-skin="seasons"] .sidebar .sep { height: 2px; background: linear-gradient(90deg, transparent, var(--s1), var(--s2), transparent); opacity: .6; }
+:root[data-skin="seasons"][data-tabs="left"] .sidebar .ono { font-family: var(--round); font-weight: 800; font-size: 18px; color: var(--s1) !important; -webkit-text-stroke: 0; text-shadow: 0 2px 0 rgba(0, 0, 0, .2); animation: sway 5s ease-in-out infinite; }
+:root[data-skin="seasons"][data-tabs="left"] .sidebar .ono:nth-of-type(2n) { color: var(--s2) !important; }
+:root[data-skin="seasons"][data-tabs="left"] .sidebar .ono::before { content: var(--emblem); font-size: 12px; margin-right: 4px; }
+:root[data-skin="seasons"] .btn, :root[data-skin="seasons"] .pager .pg, :root[data-skin="seasons"] .tabs .tab, :root[data-skin="seasons"] .stabs .tab { border-radius: 999px; font-family: var(--round); font-weight: 700; border: 1px solid var(--line); background: color-mix(in srgb, var(--card) 85%, transparent); color: var(--text); box-shadow: none; text-transform: none; }
+:root[data-skin="seasons"] .btn:hover, :root[data-skin="seasons"] .pager .pg:hover:not(:disabled) { border-color: var(--s1); background: color-mix(in srgb, var(--s1) 16%, var(--card)); }
+:root[data-skin="seasons"] .btn.primary, :root[data-skin="seasons"] .pager .pg.on, :root[data-skin="seasons"] .tabs .tab.on, :root[data-skin="seasons"] .stabs .tab.on, :root[data-skin="seasons"] .btn.fav-on { background: linear-gradient(135deg, color-mix(in srgb, var(--s1) 70%, #fff), var(--s1)); color: var(--accent-ink); border-color: transparent; }
+:root[data-skin="seasons"] .iconbtn, :root[data-skin="seasons"] .search input { border-radius: 999px; border-color: var(--line); background: color-mix(in srgb, var(--card) 85%, transparent); color: var(--text); }
+:root[data-skin="seasons"] .search input:focus { border-color: var(--s1); box-shadow: 0 0 0 3px color-mix(in srgb, var(--s1) 30%, transparent); }
+:root[data-skin="seasons"] .card .cover, :root[data-skin="seasons"] .sheet .cover { border-radius: 10px; border: 0; box-shadow: var(--cover-shadow), 0 0 0 1px color-mix(in srgb, var(--s1) 35%, transparent); }
+:root[data-skin="seasons"][data-covers="book"] .card.album .cover, :root[data-skin="seasons"][data-covers="book"] .card.folder .cover { border-radius: 3px 10px 10px 3px; box-shadow: 3px 0 0 -1px color-mix(in srgb, var(--s1) 50%, #fff), 5px 0 0 -2px var(--s1), 7px 0 0 -3px var(--card-2), var(--cover-shadow); }
+@media (hover: hover) { :root[data-skin="seasons"] .card:hover .cover { box-shadow: var(--cover-shadow), 0 0 0 2px var(--s1), 0 0 24px -4px var(--s1); } }
+:root[data-skin="seasons"] .card .title { font-family: var(--round); font-weight: 700; }
+:root[data-skin="seasons"] .card .fav { background: linear-gradient(135deg, color-mix(in srgb, var(--s1) 60%, #fff), var(--s1)); }
+:root[data-skin="seasons"] .badge { border-radius: 999px; background: color-mix(in srgb, var(--bg) 88%, transparent); color: var(--text); border: 1px solid color-mix(in srgb, var(--s1) 55%, transparent); }
+:root[data-skin="seasons"] .badge.ok { background: var(--ok); color: #0b2414; border-color: transparent; }
+:root[data-skin="seasons"] .bar i, :root[data-skin="seasons"] .pbar i, :root[data-skin="seasons"] .bars .bar i { background: linear-gradient(90deg, var(--s2), var(--s1)); }
+:root[data-skin="seasons"] .bdt-panel, :root[data-skin="seasons"] .settings section, :root[data-skin="seasons"] .stabs, :root[data-skin="seasons"] .sheet, :root[data-skin="seasons"] .listcard, :root[data-skin="seasons"] .letters.rail, :root[data-skin="seasons"] .coltable, :root[data-skin="seasons"] .adult-gate, :root[data-skin="seasons"] .stile { border: 1px solid var(--line); border-radius: 18px; background-color: color-mix(in srgb, var(--card) 88%, transparent); box-shadow: var(--shadow); }
+:root[data-skin="seasons"] .stile b { color: var(--s1); }
+:root[data-skin="seasons"] .field select, :root[data-skin="seasons"] .field input[type=number], :root[data-skin="seasons"] .field input[type=text], :root[data-skin="seasons"] .sheet.pin input, :root[data-skin="seasons"] .pin-inline input { border-radius: 999px; border: 1px solid var(--line); }
+:root[data-skin="seasons"] .switch input:checked + i { background: var(--s1); }
+:root[data-skin="seasons"] .letters.rail button.on:hover, :root[data-skin="seasons"] .letters button.on:hover { background: var(--s1); color: var(--accent-ink); }
+:root[data-skin="seasons"] .toast { border: 1px solid var(--s1); border-radius: 20px; font-family: var(--round); box-shadow: 0 0 0 4px color-mix(in srgb, var(--s1) 15%, transparent), var(--shadow); }
+:root[data-skin="seasons"] .toast::before { content: var(--emblem); margin-right: 6px; }
+:root[data-skin="seasons"] .pavatar { background: var(--s1); color: var(--accent-ink); border: 0; }
+:root[data-skin="seasons"] .pow { clip-path: none; border-radius: 999px; padding: 14px 26px; font-family: var(--round); font-weight: 900; font-size: 22px; color: var(--accent-ink); background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--s1) 50%, #fff), var(--s1)); text-shadow: none; -webkit-text-stroke: 0; filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .3)); }
+:root[data-skin="seasons"] .topbar .ver { border-radius: 999px; border-color: var(--s1); color: var(--s1); }
+:root[data-skin="seasons"] .sidebar .grow .sc { border: 2px solid var(--s1); border-radius: 10px; }
+:root[data-skin="seasons"] .qtag.hd { background: var(--s2); color: var(--bg); }
+@media (prefers-reduced-motion: reduce) { :root[data-skin="seasons"] h2::before, :root[data-skin="seasons"] .sidebar .ono { animation: none !important; } }
+:root[data-skin="seasons"] .sheet, :root[data-skin="seasons"] .sumpop { background-color: var(--bg-2); }
