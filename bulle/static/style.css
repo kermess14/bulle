@@ -1166,3 +1166,23 @@ body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, trans
 :root[data-skin="riso"][data-covers="book"] .card.album .cover, :root[data-skin="riso"][data-covers="book"] .card.folder .cover { border-radius: 0; box-shadow: 3px 0 0 -1px var(--bg-2), 4px 0 0 -1px var(--text), 7px 6px 0 -1px var(--rblue); }
 :root[data-skin="riso"][data-covers="book"] .card:nth-child(2n) .cover { box-shadow: 3px 0 0 -1px var(--bg-2), 4px 0 0 -1px var(--text), 7px 6px 0 -1px var(--pink); }
 :root[data-skin="stars"] #mosaic .mz { filter: saturate(.6) brightness(.5) hue-rotate(-12deg); }
+
+/* ---- qualité HD / SD : sélecteur du menu et pastille sur les couvertures */
+.sidebar .qual { display: flex; align-items: center; gap: 2px; margin: 2px 6px 6px; padding: 3px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); flex: none; }
+.sidebar .qual .qlbl { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 0 6px 0 5px; }
+.sidebar .qual button { flex: 1; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 700; padding: 4px 0; border-radius: 7px; cursor: pointer; min-width: 0; }
+.sidebar .qual button:hover { color: var(--text); }
+.sidebar .qual button.on { background: var(--accent); color: var(--accent-ink, #231a05); }
+@media (min-width: 701px) and (max-width: 1000px) {
+  :root[data-tabs="left"] .sidebar .qual { flex-direction: column; margin: 2px 0 6px; }
+  :root[data-tabs="left"] .sidebar .qual .qlbl { display: none; }
+  :root[data-tabs="left"] .sidebar .qual button { width: 100%; font-size: 11px; }
+}
+:root[data-tabs="top"] .sidebar .qual { margin: 0 4px; border-radius: 999px; }
+:root[data-tabs="top"] .sidebar .qual .qlbl { display: none; }
+:root[data-tabs="top"] .sidebar .qual button { padding: 3px 9px; border-radius: 999px; }
+.qtag { position: absolute; right: 7px; bottom: 11px; z-index: 2; padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 800; letter-spacing: .03em; line-height: 16px; pointer-events: none;
+  background: rgba(15, 17, 21, .78); color: #fff; border: 1px solid rgba(255, 255, 255, .35); backdrop-filter: blur(4px); }
+.qtag.hd { background: #1f6feb; border-color: rgba(255, 255, 255, .55); }
+.qtag.hd.part { background: rgba(31, 111, 235, .72); font-weight: 700; }
+:root[data-skin="bd"] .qtag { border: 2px solid var(--ink); border-radius: 3px; box-shadow: 2px 2px 0 var(--ink); }
