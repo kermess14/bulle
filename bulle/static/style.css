@@ -548,6 +548,8 @@ body.mode-scroll #stage .wrap, body.mode-double #stage .wrap { display: none; }
 body.mode-panels #stage { overflow: hidden; }
 body.mode-panels #stage img { transform-origin: 0 0; will-change: transform; transition: transform .55s cubic-bezier(.22, .75, .25, 1); }
 body.mode-panels #stage img.nofx { transition: none; }
+body.mode-panels:not(.zoomed) #stage { cursor: grab; }
+body.mode-panels:not(.zoomed) #stage:active { cursor: grabbing; }
 body.mode-panels .rbtn#panels, body.mode-panels #panels { color: var(--accent); }
 /* pas de barre de défilement visible dans le lecteur : molette, touches et doigt suffisent */
 #stage { scrollbar-width: none; }
