@@ -264,52 +264,176 @@
   }
 
   // ================================================================ quatre saisons : ce qui flotte dans l'air
-  /* Une seule toile (canvas) derrière le contenu, animée image par image : pétales de cerisier au printemps,
-     lucioles en été, feuilles mortes qui tournoient en automne, flocons en hiver. Arrêtée quand l'onglet est caché,
-     absente si l'appareil demande moins d'animations. */
+  /* Une seule toile (canvas) derrière le contenu, animée image par image. Les motifs sont dessinés une fois pour
+     toutes dans de petites images (« sprites ») puis recopiés à chaque image, pour rester fluide même avec beaucoup
+     d'éléments : printemps, pétales de toutes les couleurs et petites fleurs ; été, lucioles, aigrettes de pissenlit
+     et papillons ; automne, feuilles d'érable, de chêne et de bouleau qui tournoient ; hiver, vrais flocons à six
+     branches et neige fine. Le nombre s'adapte à la taille de l'écran ; tout s'arrête quand l'onglet est caché, et
+     rien n'est animé si l'appareil demande moins d'animations. */
   let seasonFx = null;
   function setupSeasonFx() {
     const root = document.documentElement, want = root.dataset.skin === "seasons" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
     const kind = want ? root.dataset.season : null;
-    if (seasonFx && seasonFx.kind === kind) return;
-    if (seasonFx) { cancelAnimationFrame(seasonFx.raf); seasonFx.canvas.remove(); seasonFx = null; }
+    const theme = root.dataset.theme;
+    if (seasonFx && seasonFx.kind === kind && seasonFx.theme === theme) return;
+    if (seasonFx) { cancelAnimationFrame(seasonFx.raf); window.removeEventListener("resize", seasonFx.resize); seasonFx.canvas.remove(); seasonFx = null; }
     if (!kind) return;
     const canvas = document.createElement("canvas"); canvas.id = "seasonfx"; canvas.setAttribute("aria-hidden", "true");
     document.body.prepend(canvas);
     const ctx = canvas.getContext("2d");
-    const fx = seasonFx = { kind, canvas, raf: 0, parts: [], w: 0, h: 0, last: performance.now() };
-    const resize = () => { const dpr = Math.min(2, window.devicePixelRatio || 1); fx.w = innerWidth; fx.h = innerHeight; canvas.width = fx.w * dpr; canvas.height = fx.h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
-    resize(); window.addEventListener("resize", resize);
-    const light = () => root.dataset.theme === "light";
-    const R = (a, b) => a + Math.random() * (b - a);
-    const COUNT = { spring: 28, summer: 26, autumn: 24, winter: 80 }[kind];
-    const LEAF = ["#c8541f", "#e0841e", "#a8361a", "#d9a83a", "#b5651d", "#8f2d17"];
-    const PETAL = ["#ffc4d8", "#ffb0cb", "#ffd9e6", "#f7a6c2"];
-    function make(initial) {
-      const p = { x: R(0, fx.w), y: initial ? R(-fx.h, fx.h) : R(-80, -20), r: 0, vx: 0, vy: 0, a: R(0, Math.PI * 2), va: 0, ph: R(0, 6.3) };
-      if (kind === "winter") { p.r = R(1.4, 4.2); p.vy = R(18, 46) * (p.r / 2.4); p.vx = R(-8, 8); p.al = R(.45, .95); }
-      else if (kind === "autumn") { p.r = R(9, 17); p.vy = R(28, 52); p.vx = R(-12, 12); p.va = R(-1.6, 1.6); p.c = LEAF[Math.floor(Math.random() * LEAF.length)]; p.flip = R(0, 6.3); }
-      else if (kind === "spring") { p.r = R(5, 9); p.vy = R(20, 38); p.vx = R(6, 22); p.va = R(-2, 2); p.c = PETAL[Math.floor(Math.random() * PETAL.length)]; p.flip = R(0, 6.3); }
-      else { p.y = initial ? R(0, fx.h) : fx.h + 10; p.r = R(1.4, 2.8); p.vy = -R(6, 16); p.vx = R(-6, 6); p.al = 0; }
-      return p;
+    const fx = seasonFx = { kind, theme, canvas, raf: 0, parts: [], w: 0, h: 0, last: performance.now(), resize: null };
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    fx.resize = () => { fx.w = innerWidth; fx.h = innerHeight; canvas.width = fx.w * dpr; canvas.height = fx.h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
+    fx.resize(); window.addEventListener("resize", fx.resize);
+    const light = theme === "light";
+    const R = (a, b) => a + Math.random() * (b - a), pick = a => a[Math.floor(Math.random() * a.length)];
+    const area = Math.max(.45, Math.min(1.4, (fx.w * fx.h) / (1400 * 900)));
+
+    // -------- petites images préparées une fois (taille S × S, centrées)
+    function sprite(S, draw) {
+      const c = document.createElement("canvas"); c.width = c.height = Math.ceil(S * dpr);
+      const g = c.getContext("2d"); g.scale(dpr, dpr); g.translate(S / 2, S / 2); draw(g, S / 2); return { c, S };
     }
-    for (let i = 0; i < COUNT; i++) fx.parts.push(make(true));
-    function leaf(p, t) {
-      const sx = Math.cos(t * 1.7 + p.flip);   // la feuille se retourne en tombant
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.a); ctx.scale(Math.max(.25, Math.abs(sx)), 1);
-      ctx.fillStyle = p.c; ctx.globalAlpha = .85;
-      ctx.beginPath(); ctx.moveTo(0, -p.r);
-      ctx.bezierCurveTo(p.r * .9, -p.r * .55, p.r * .75, p.r * .5, 0, p.r);
-      ctx.bezierCurveTo(-p.r * .75, p.r * .5, -p.r * .9, -p.r * .55, 0, -p.r); ctx.fill();
-      ctx.strokeStyle = "rgba(60, 25, 10, .45)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, -p.r * .9); ctx.lineTo(0, p.r * 1.25); ctx.stroke();
+    // flocon à six branches, chaque branche avec ses petites ramifications (comme ❄️), un peu différent à chaque fois
+    function flake(g, r) {
+      const col = light ? "#6f9ccc" : "#ffffff";
+      g.strokeStyle = col; g.lineCap = "round"; g.lineJoin = "round";
+      g.shadowColor = light ? "rgba(80, 130, 190, .5)" : "rgba(190, 230, 255, .9)"; g.shadowBlur = r * .35;
+      const L = r * .82, b1 = R(.32, .45), b2 = R(.58, .7), l1 = R(.22, .32), l2 = R(.14, .22), tip = Math.random() < .5;
+      g.lineWidth = Math.max(1, r * .1);
+      for (let k = 0; k < 6; k++) {
+        g.save(); g.rotate(k * Math.PI / 3);
+        g.beginPath(); g.moveTo(0, 0); g.lineTo(0, -L);
+        for (const [at, len] of [[b1, l1], [b2, l2]]) {
+          g.moveTo(0, -L * at); g.lineTo(-L * len, -L * at - L * len * .9);
+          g.moveTo(0, -L * at); g.lineTo(L * len, -L * at - L * len * .9);
+        }
+        if (tip) { g.moveTo(0, -L * .88); g.lineTo(-L * .08, -L * .96); g.moveTo(0, -L * .88); g.lineTo(L * .08, -L * .96); }
+        g.stroke(); g.restore();
+      }
+      g.lineWidth = Math.max(1, r * .08); g.beginPath();
+      for (let k = 0; k <= 6; k++) { const a = k * Math.PI / 3 + Math.PI / 6, x = Math.cos(a) * r * .2, y = Math.sin(a) * r * .2; k ? g.lineTo(x, y) : g.moveTo(x, y); }
+      g.stroke();
+    }
+    // pétale de cerisier : goutte arrondie avec la petite encoche au bout, dégradé du cœur vers le bord
+    function petalPath(g, r) {
+      g.beginPath(); g.moveTo(0, r);
+      g.bezierCurveTo(r * .95, r * .45, r * .78, -r * .72, r * .3, -r * .95);
+      g.quadraticCurveTo(r * .12, -r * .98, 0, -r * .74);
+      g.quadraticCurveTo(-r * .12, -r * .98, -r * .3, -r * .95);
+      g.bezierCurveTo(-r * .78, -r * .72, -r * .95, r * .45, 0, r); g.closePath();
+    }
+    const PETAL_COLORS = [["#ff8fb8", "#ffd6e6"], ["#ffb7d0", "#fff0f6"], ["#ffffff", "#ffe3ee"], ["#d4b4ff", "#f1e6ff"], ["#ffc49a", "#ffecdc"], ["#fff1a0", "#fffbe0"], ["#ff9e9e", "#ffe0e0"], ["#f7a6e0", "#ffe6f7"], ["#b9e3ff", "#eef8ff"]];
+    function petal(g, r, [deep, pale]) {
+      const gr = g.createLinearGradient(0, r, 0, -r); gr.addColorStop(0, deep); gr.addColorStop(1, pale);
+      g.fillStyle = gr; g.shadowColor = "rgba(0, 0, 0, .18)"; g.shadowBlur = r * .3; petalPath(g, r); g.fill();
+      g.shadowBlur = 0; g.strokeStyle = "rgba(255, 255, 255, .55)"; g.lineWidth = Math.max(.6, r * .06);
+      g.beginPath(); g.moveTo(0, r * .8); g.quadraticCurveTo(r * .08, 0, 0, -r * .6); g.stroke();
+    }
+    function blossom(g, r, colors) {
+      for (let k = 0; k < 5; k++) { g.save(); g.rotate(k * Math.PI * 2 / 5); g.translate(0, -r * .5); petal(g, r * .5, colors); g.restore(); }
+      g.fillStyle = "#ffd84a"; g.beginPath(); g.arc(0, 0, r * .17, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "#e89a1a"; for (let k = 0; k < 7; k++) { const a = k * Math.PI * 2 / 7; g.beginPath(); g.arc(Math.cos(a) * r * .24, Math.sin(a) * r * .24, r * .04, 0, Math.PI * 2); g.fill(); }
+    }
+    // feuilles d'automne : érable, chêne, bouleau, en dégradé de deux couleurs de saison, avec leurs nervures
+    const LEAF_COLORS = [["#e8641b", "#f7b23b"], ["#b7311b", "#e5682a"], ["#d9a21f", "#f3d35a"], ["#a8521d", "#d98b3a"], ["#c1271b", "#f0773a"], ["#8f5b1a", "#c99a3e"], ["#e07a1f", "#c23b1c"]];
+    const MAPLE = [[0, -1], [.14, -.62], [.4, -.8], [.33, -.46], [.82, -.58], [.62, -.24], [.98, -.06], [.56, .1], [.66, .38], [.26, .26], [.1, .52]];
+    function leafFill(g, r, [a, b]) { const gr = g.createLinearGradient(-r, -r, r, r); gr.addColorStop(0, a); gr.addColorStop(1, b); g.fillStyle = gr; g.shadowColor = "rgba(40, 15, 0, .3)"; g.shadowBlur = r * .25; }
+    function maple(g, r, cols) {
+      leafFill(g, r, cols); g.beginPath();
+      MAPLE.forEach(([x, y], i) => i ? g.lineTo(x * r, y * r) : g.moveTo(x * r, y * r));
+      for (let i = MAPLE.length - 1; i >= 0; i--) g.lineTo(-MAPLE[i][0] * r, MAPLE[i][1] * r);
+      g.closePath(); g.fill(); g.shadowBlur = 0;
+      g.strokeStyle = "rgba(70, 25, 5, .45)"; g.lineWidth = Math.max(.8, r * .05); g.beginPath();
+      for (const [x, y] of [[0, -1], [.82, -.58], [-.82, -.58], [.98, -.06], [-.98, -.06]]) { g.moveTo(0, r * .5); g.lineTo(x * r * .9, y * r * .9); }
+      g.moveTo(0, r * .5); g.lineTo(0, r * 1.05); g.stroke();
+    }
+    function oak(g, r, cols) {
+      leafFill(g, r, cols); g.beginPath();
+      const N = 40, side = s => { for (let i = 0; i <= N; i++) { const t = i / N, y = -r + t * 1.8 * r, w = r * .42 * Math.sin(Math.PI * t) * (1 + .38 * Math.sin(t * Math.PI * 9)); s === 1 ? g.lineTo(w, y) : g.lineTo(-w, -r + (1 - t) * 1.8 * r); } };
+      g.moveTo(0, -r); side(1); side(-1); g.closePath(); g.fill(); g.shadowBlur = 0;
+      g.strokeStyle = "rgba(70, 25, 5, .45)"; g.lineWidth = Math.max(.8, r * .05); g.beginPath(); g.moveTo(0, -r * .9); g.lineTo(0, r); g.stroke();
+    }
+    function birch(g, r, cols) {
+      leafFill(g, r, cols); g.beginPath(); g.moveTo(0, -r);
+      g.bezierCurveTo(r * .75, -r * .45, r * .62, r * .5, 0, r * .8); g.bezierCurveTo(-r * .62, r * .5, -r * .75, -r * .45, 0, -r);
+      g.fill(); g.shadowBlur = 0; g.strokeStyle = "rgba(70, 25, 5, .4)"; g.lineWidth = Math.max(.7, r * .045); g.beginPath();
+      g.moveTo(0, -r * .85); g.lineTo(0, r);
+      for (let k = 1; k <= 4; k++) { const y = -r * .55 + k * r * .25; g.moveTo(0, y); g.lineTo(r * .4, y - r * .22); g.moveTo(0, y); g.lineTo(-r * .4, y - r * .22); }
+      g.stroke();
+    }
+    function glow(g, r, c) { const gr = g.createRadialGradient(0, 0, 0, 0, 0, r); gr.addColorStop(0, `rgba(${c}, 1)`); gr.addColorStop(.25, `rgba(${c}, .55)`); gr.addColorStop(1, `rgba(${c}, 0)`); g.fillStyle = gr; g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill(); }
+    function seed(g, r) {   // aigrette de pissenlit : une petite tige et une ombrelle de fils
+      g.strokeStyle = light ? "rgba(120, 100, 70, .8)" : "rgba(255, 255, 255, .85)"; g.lineWidth = .8;
+      g.beginPath(); g.moveTo(0, r * .9); g.lineTo(0, -r * .1); g.stroke();
+      g.lineWidth = .6; g.beginPath();
+      for (let k = 0; k < 14; k++) { const a = -Math.PI + k * Math.PI / 13; g.moveTo(0, -r * .1); g.lineTo(Math.cos(a) * r * .8, -r * .1 + Math.sin(a) * r * .7); }
+      g.stroke();
+    }
+
+    const sprites = { flakes: [], dots: [], petals: [], flowers: [], leaves: [], fly: null, seeds: [] };
+    if (kind === "winter") {
+      for (let i = 0; i < 8; i++) sprites.flakes.push(sprite(40, (g, r) => flake(g, r)));
+      sprites.dots.push(sprite(10, (g, r) => glow(g, r, light ? "130, 165, 205" : "255, 255, 255")));
+    } else if (kind === "spring") {
+      for (const c of PETAL_COLORS) { sprites.petals.push(sprite(28, (g, r) => petal(g, r * .8, c))); sprites.petals.push(sprite(28, (g, r) => petal(g, r * .8, c))); }
+      for (const c of PETAL_COLORS.slice(0, 6)) sprites.flowers.push(sprite(46, (g, r) => blossom(g, r * .9, c)));
+    } else if (kind === "autumn") {
+      for (const c of LEAF_COLORS) { sprites.leaves.push(sprite(48, (g, r) => maple(g, r * .85, c))); sprites.leaves.push(sprite(48, (g, r) => oak(g, r * .85, c))); sprites.leaves.push(sprite(40, (g, r) => birch(g, r * .85, c))); }
+    } else {
+      sprites.fly = sprite(36, (g, r) => glow(g, r, light ? "242, 159, 5" : "255, 214, 90"));
+      for (let i = 0; i < 3; i++) sprites.seeds.push(sprite(30, (g, r) => seed(g, r)));
+    }
+
+    // -------- les éléments
+    const BUTTERFLY = [["#ffb347", "#ff7a1a"], ["#7fc8ff", "#2f7fd6"], ["#ffe066", "#f2a900"], ["#ff8fc6", "#e64c9a"], ["#b6f08a", "#4fae3a"]];
+    function make(initial, type) {
+      const y0 = initial ? R(-fx.h * .1, fx.h) : R(-90, -30);
+      if (kind === "winter") {
+        if (type === "dot") return { t: "dot", x: R(0, fx.w), y: y0, s: R(3, 9), vy: R(20, 45), vx: R(-6, 6), al: R(.35, .8), ph: R(0, 6.3) };
+        const s = R(10, 30);
+        return { t: "flake", sp: pick(sprites.flakes), x: R(0, fx.w), y: y0, s, vy: R(14, 30) + s * .8, vx: R(-8, 8), a: R(0, 6.3), va: R(-.7, .7), al: R(.6, 1), ph: R(0, 6.3) };
+      }
+      if (kind === "spring") {
+        if (type === "flower") { const s = R(26, 42); return { t: "petal", sp: pick(sprites.flowers), x: R(0, fx.w), y: y0, s, vy: R(18, 34), vx: R(4, 18), a: R(0, 6.3), va: R(-1, 1), flip: R(0, 6.3), fs: R(.6, 1.2), al: .95, ph: R(0, 6.3) }; }
+        const s = R(15, 28);
+        return { t: "petal", sp: pick(sprites.petals), x: R(-fx.w * .2, fx.w), y: y0, s, vy: R(22, 44), vx: R(10, 34), a: R(0, 6.3), va: R(-2.4, 2.4), flip: R(0, 6.3), fs: R(1.5, 3), al: R(.8, 1), ph: R(0, 6.3) };
+      }
+      if (kind === "autumn") {
+        const s = R(20, 42);
+        return { t: "leaf", sp: pick(sprites.leaves), x: R(0, fx.w), y: y0, s, vy: R(30, 62), vx: R(-14, 22), a: R(0, 6.3), va: R(-1.8, 1.8), flip: R(0, 6.3), fs: R(1, 2.2), al: R(.85, 1), ph: R(0, 6.3) };
+      }
+      // été
+      if (type === "seed") return { t: "seed", sp: pick(sprites.seeds), x: R(-50, fx.w), y: initial ? R(0, fx.h) : fx.h + 20, s: R(18, 30), vy: -R(8, 18), vx: R(10, 26), a: R(-.4, .4), va: R(-.3, .3), al: R(.6, .9), ph: R(0, 6.3) };
+      if (type === "butterfly") { const c = pick(BUTTERFLY); return { t: "bfly", c, x: R(0, fx.w), y: R(fx.h * .15, fx.h * .85), s: R(12, 20), vx: R(-30, 30) || 12, vy: R(-12, 12), ph: R(0, 6.3), turn: R(2, 6) }; }
+      return { t: "fly", x: R(0, fx.w), y: initial ? R(0, fx.h) : fx.h + 10, s: R(10, 22), vy: -R(5, 15), vx: R(-6, 6), ph: R(0, 6.3), sp2: R(.8, 1.8) };
+    }
+    const plan = {
+      winter: [["flake", 70], ["dot", 110]],
+      spring: [["petal", 85], ["flower", 12]],
+      autumn: [["leaf", 70]],
+      summer: [["fly", 65], ["seed", 20], ["butterfly", 9]],
+    }[kind];
+    for (const [type, n] of plan) for (let i = 0; i < Math.round(n * area); i++) { const p = make(true, type); p.kindType = type; fx.parts.push(p); }
+
+    function drawSprite(p, t) {
+      const sx = p.flip !== undefined ? Math.cos(t * p.fs + p.flip) : 1;   // pétales et feuilles se retournent en tombant
+      ctx.save(); ctx.globalAlpha = p.al; ctx.translate(p.x, p.y); ctx.rotate(p.a || 0);
+      ctx.scale(Math.max(.18, Math.abs(sx)), 1);
+      ctx.drawImage(p.sp.c, -p.s / 2, -p.s / 2, p.s, p.s);
       ctx.restore();
     }
-    function petal(p, t) {
-      const sx = Math.cos(t * 2.2 + p.flip);
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.a); ctx.scale(Math.max(.3, Math.abs(sx)), 1);
-      ctx.fillStyle = p.c; ctx.globalAlpha = .9;
-      ctx.beginPath(); ctx.ellipse(0, 0, p.r * .62, p.r, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "rgba(255, 255, 255, .5)"; ctx.beginPath(); ctx.ellipse(-p.r * .15, -p.r * .3, p.r * .18, p.r * .35, 0, 0, Math.PI * 2); ctx.fill();
+    function butterfly(p, t) {
+      const flap = Math.abs(Math.sin(t * 9 + p.ph)) * .85 + .15, [a, b] = p.c, s = p.s;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.atan2(p.vy, p.vx) + Math.PI / 2); ctx.globalAlpha = .9;
+      for (const side of [-1, 1]) {
+        ctx.save(); ctx.scale(side * flap, 1);
+        const gr = ctx.createLinearGradient(0, -s, s, s); gr.addColorStop(0, a); gr.addColorStop(1, b); ctx.fillStyle = gr;
+        ctx.beginPath(); ctx.ellipse(s * .55, -s * .35, s * .55, s * .45, -.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(s * .42, s * .35, s * .38, s * .32, .5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      ctx.fillStyle = light ? "#3a2a10" : "#2a1d10"; ctx.beginPath(); ctx.ellipse(0, 0, s * .1, s * .55, 0, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
     function frame(now) {
@@ -320,23 +444,36 @@
       ctx.clearRect(0, 0, fx.w, fx.h);
       for (let i = 0; i < fx.parts.length; i++) {
         const p = fx.parts[i];
-        if (kind === "summer") {   // lucioles : montent doucement, s'allument et s'éteignent
-          p.x += (p.vx + Math.sin(t * .8 + p.ph) * 10) * dt; p.y += p.vy * dt;
-          const glow = Math.max(0, Math.sin(t * 1.3 + p.ph)) ** 2;
-          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 6);
-          const c = light() ? "242, 159, 5" : "255, 214, 90";
-          g.addColorStop(0, `rgba(${c}, ${.9 * glow})`); g.addColorStop(1, `rgba(${c}, 0)`);
-          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 6, 0, Math.PI * 2); ctx.fill();
-          if (p.y < -20) fx.parts[i] = make(false);
+        if (p.t === "fly") {   // lucioles : montent doucement, s'allument et s'éteignent
+          p.x += (p.vx + Math.sin(t * .8 + p.ph) * 12) * dt; p.y += p.vy * dt;
+          const on = Math.max(0, Math.sin(t * p.sp2 + p.ph)) ** 2;
+          if (on > .02) { ctx.globalAlpha = on; ctx.drawImage(sprites.fly.c, p.x - p.s, p.y - p.s, p.s * 2, p.s * 2); ctx.globalAlpha = 1; }
+          if (p.y < -30) { fx.parts[i] = make(false, "fly"); }
           continue;
         }
-        const sway = Math.sin(t * (kind === "winter" ? .9 : 1.4) + p.ph) * (kind === "winter" ? 12 : 30);
+        if (p.t === "bfly") {   // papillons : vol en zigzag qui change de cap de temps en temps
+          p.turn -= dt;
+          if (p.turn <= 0) { p.turn = R(1.5, 5); p.vx = R(-40, 40); p.vy = R(-22, 22); }
+          p.x += (p.vx + Math.sin(t * 3 + p.ph) * 18) * dt; p.y += (p.vy + Math.cos(t * 2.4 + p.ph) * 14) * dt;
+          if (p.x < -40) p.x = fx.w + 30; if (p.x > fx.w + 40) p.x = -30; if (p.y < 20) p.vy = Math.abs(p.vy); if (p.y > fx.h - 20) p.vy = -Math.abs(p.vy);
+          butterfly(p, t); continue;
+        }
+        if (p.t === "dot") {
+          p.x += (p.vx + Math.sin(t * .7 + p.ph) * 8) * dt; p.y += p.vy * dt;
+          ctx.globalAlpha = p.al; ctx.drawImage(sprites.dots[0].c, p.x - p.s / 2, p.y - p.s / 2, p.s, p.s); ctx.globalAlpha = 1;
+          if (p.y > fx.h + 10) fx.parts[i] = make(false, "dot");
+          continue;
+        }
+        if (p.t === "seed") {
+          p.x += (p.vx + Math.sin(t * .6 + p.ph) * 14) * dt; p.y += (p.vy + Math.cos(t * .9 + p.ph) * 6) * dt; p.a += p.va * dt;
+          drawSprite(p, t);
+          if (p.y < -40 || p.x > fx.w + 40) fx.parts[i] = make(false, "seed");
+          continue;
+        }
+        const sway = Math.sin(t * (p.t === "flake" ? .8 : 1.3) + p.ph) * (p.t === "flake" ? 14 : 34);
         p.x += (p.vx + sway) * dt; p.y += p.vy * dt; p.a += p.va * dt;
-        if (kind === "winter") {
-          ctx.globalAlpha = p.al; ctx.fillStyle = light() ? "#8fb3d6" : "#ffffff";
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
-        } else if (kind === "autumn") leaf(p, t); else petal(p, t);
-        if (p.y > fx.h + 30 || p.x < -60 || p.x > fx.w + 60) fx.parts[i] = make(false);
+        drawSprite(p, t);
+        if (p.y > fx.h + 50 || p.x < -80 || p.x > fx.w + 80) fx.parts[i] = make(false, p.kindType === "flower" ? "flower" : p.t);
       }
     }
     fx.raf = requestAnimationFrame(frame);
