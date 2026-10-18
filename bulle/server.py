@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import logging
+import glob
 import os
 import secrets
 import threading
@@ -25,7 +26,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.14.2"
+VERSION = "0.14.3"
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
 
@@ -519,6 +520,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/item/<int:node_id>")
     def api_item(node_id: int):
         node = ensure_pages(heal(get_node(node_id, "album")))
+        if node.get("page_count") and comics.has_fallback_cover(node["id"]):
+            # couverture de secours (la vraie page était illisible) : on retente, elle l'est peut-être devenue
+            try:
+                comics.inspect(node, lib.abs_path(node["path"]), make_cover=True, force=True)
+                if not comics.has_fallback_cover(node["id"]):
+                    lib.set_color(node["id"], comics.cover_color(node, lib.abs_path(node["path"])))
+                    log.info("Vraie couverture retrouvée pour %s", node["path"])
+            except AlbumError:
+                pass
         prev_, next_ = lib.siblings(node)
         j = album_json(node, with_progress=False)
         j["progress"] = progress_json(lib.progress(node_id, current_profile()))
@@ -1521,6 +1531,16 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     def preload() -> None:
         preload_albums(lib.albums_without("page_count IS NULL AND error IS NULL"), "Couvertures")
+        # couvertures de secours (vraie page illisible la dernière fois) : on retente à chaque scan
+        ids = set()
+        for f in glob.glob(os.path.join(comics.covers_dir, "*.fallback")):
+            try:
+                ids.add(int(os.path.basename(f).split(".")[0]))
+            except ValueError:
+                pass
+        todo = [n for n in (lib.node(i) for i in ids) if n and n["kind"] == "album"]
+        if todo and not lib.stop_requested.is_set():
+            preload_albums(todo, "Couvertures de secours", force=True)
 
     def preload_thorough() -> None:
         """Scan minutieux : chaque album est rouvert (pages recomptées, erreurs réessayées) et sa couverture refaite."""

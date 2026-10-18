@@ -436,7 +436,15 @@ def flatten(img: Image.Image) -> Image.Image:
 
 def encode_jpeg(img: Image.Image, quality: int = JPEG_QUALITY, subsampling: int = 0) -> bytes:
     out = io.BytesIO()
-    flatten(img).save(out, "JPEG", quality=quality, subsampling=subsampling, progressive=True, optimize=False)
+    img = flatten(img)
+    # sans les métadonnées de l'image d'origine : un commentaire JPEG géant (ou des données XMP/EXIF farfelues
+    # glissées par un logiciel) fait échouer l'écriture (« broken data stream when writing image file »)
+    img.info = {}
+    try:
+        img.save(out, "JPEG", quality=quality, subsampling=subsampling, progressive=True, optimize=False)
+    except OSError:
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "JPEG", quality=quality, subsampling=subsampling)
     return out.getvalue()
 
 
@@ -758,7 +766,7 @@ class Comics:
     def invalidate(self, node_ids) -> None:
         for nid in node_ids:
             for p in glob.glob(os.path.join(self.covers_dir, f"{nid}-*.jpg")) + \
-                    [os.path.join(self.covers_dir, f"{nid}.jpg")]:
+                    [os.path.join(self.covers_dir, f"{nid}.jpg"), self.fallback_marker(nid)]:
                 try:
                     os.unlink(p)
                 except OSError:
@@ -805,8 +813,11 @@ class Comics:
                     if force:
                         self.clear_cover(node["id"])
                     first = self.cover_index(node, n)
+                    marker = self.fallback_marker(node["id"])
                     try:
                         data = self._render(album, first, self.cover_width)
+                        if os.path.exists(marker):
+                            os.unlink(marker)
                     except AlbumError as e:
                         # page de couverture illisible (format inconnu, image abîmée) : l'album reste lisible, la
                         # couverture est prise sur la page lisible suivante
@@ -815,6 +826,8 @@ class Comics:
                             try:
                                 data = self._render(album, i, self.cover_width)
                                 log.warning("Couverture de %s prise page %d : %s", abs_path, i + 1, e)
+                                with open(marker, "w") as fh:   # couverture de secours : à refaire dès que possible
+                                    fh.write(str(e))
                                 break
                             except AlbumError:
                                 continue
@@ -822,6 +835,13 @@ class Comics:
                             raise
                     self._write_atomic(self.cover_path(node), data)
                 return n
+
+    def fallback_marker(self, node_id: int) -> str:
+        return os.path.join(self.covers_dir, f"{node_id}.fallback")
+
+    def has_fallback_cover(self, node_id: int) -> bool:
+        """La couverture a été prise sur une autre page parce que la bonne était illisible à ce moment-là."""
+        return os.path.exists(self.fallback_marker(node_id))
 
     @staticmethod
     def cover_index(node, page_count: int) -> int:
