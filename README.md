@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.20.0)
+# Bulle — lecteur de BD maison (v0.20.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -140,7 +140,7 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 ## Utilisation
 
 - Habillages : Bande dessinée, Sobre, Bling-bling, Girly, Aquarium (bulles qui gonflent et éclatent au hasard, avec un
-  petit « blop » synthétisé ; bouton haut-parleur pour couper le son, mémorisé sur l'appareil), Nuit étoilée (bleu nuit
+  petit « blop » grave et étouffé, synthétisé ; bouton haut-parleur pour couper le son, mémorisé sur l'appareil), Nuit étoilée (bleu nuit
   qui passe lentement du clair au foncé), Fanzine (papier, deux encres risographie, surligneur, scotch, tampons).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
 - Un bouton « ‹ » devant le fil d'Ariane ramène en arrière (série → accueil, réglages → page d'avant), pratique sur
