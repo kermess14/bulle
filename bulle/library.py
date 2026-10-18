@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS profiles(
   name       TEXT NOT NULL,
   pin_hash   TEXT,
   avatar     TEXT,
+  role       TEXT NOT NULL DEFAULT 'reader',
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS progress(
@@ -139,7 +140,7 @@ CREATE TABLE IF NOT EXISTS panels(
   PRIMARY KEY(node_id, page)
 );
 """
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 DEFAULT_PROFILE = 1
 
 
@@ -232,8 +233,10 @@ class Library:
         with self._write_lock:
             self._migrate()
             self.conn.executescript(SCHEMA)
-            self.conn.execute("INSERT OR IGNORE INTO profiles(id, name, created_at) VALUES(?, 'Moi', ?)",
+            self.conn.execute("INSERT OR IGNORE INTO profiles(id, name, role, created_at) VALUES(?, 'Moi', 'admin', ?)",
                               (DEFAULT_PROFILE, time.time()))
+            if not self.conn.execute("SELECT 1 FROM profiles WHERE role='admin'").fetchone():
+                self.conn.execute("UPDATE profiles SET role='admin' WHERE id=?", (DEFAULT_PROFILE,))   # jamais sans administrateur
             self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
                               (str(SCHEMA_VERSION),))
             self.conn.commit()
@@ -252,6 +255,12 @@ class Library:
             # taille réelle des pages (mesurée sur deux pages de l'album) : sert à classer HD / SD ; 0 = pas mesurable
             conn.execute("ALTER TABLE nodes ADD COLUMN res_w INTEGER")
             conn.execute("ALTER TABLE nodes ADD COLUMN res_h INTEGER")
+            conn.commit()
+        prof_cols = [r["name"] for r in conn.execute("PRAGMA table_info(profiles)")]
+        if prof_cols and "role" not in prof_cols:
+            # comptes : le premier profil devient administrateur, les autres lecteurs
+            conn.execute("ALTER TABLE profiles ADD COLUMN role TEXT NOT NULL DEFAULT 'reader'")
+            conn.execute("UPDATE profiles SET role='admin' WHERE id=?", (DEFAULT_PROFILE,))
             conn.commit()
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(progress)")]
         if cols and "profile_id" not in cols:
@@ -315,7 +324,7 @@ class Library:
 
     # -- profils ---------------------------------------------------------------
     def profiles(self) -> list[dict]:
-        rows = self.conn.execute("SELECT id, name, avatar, pin_hash IS NOT NULL AS has_pin FROM profiles "
+        rows = self.conn.execute("SELECT id, name, avatar, role, pin_hash IS NOT NULL AS has_pin FROM profiles "
                                  "ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
@@ -323,15 +332,16 @@ class Library:
         r = self.conn.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
         return dict(r) if r else None
 
-    def add_profile(self, name: str, pin_hash: Optional[str] = None, avatar: Optional[str] = None) -> dict:
+    def add_profile(self, name: str, pin_hash: Optional[str] = None, avatar: Optional[str] = None,
+                    role: str = "reader") -> dict:
         with self._write_lock:
-            cur = self.conn.execute("INSERT INTO profiles(name, pin_hash, avatar, created_at) VALUES(?,?,?,?)",
-                                    (name.strip() or "Lecteur", pin_hash, avatar, time.time()))
+            cur = self.conn.execute("INSERT INTO profiles(name, pin_hash, avatar, role, created_at) VALUES(?,?,?,?,?)",
+                                    (name.strip() or "Lecteur", pin_hash, avatar, role, time.time()))
             self.conn.commit()
             return self.profile(cur.lastrowid)
 
     def update_profile(self, profile_id: int, **fields) -> Optional[dict]:
-        allowed = {k: v for k, v in fields.items() if k in ("name", "pin_hash", "avatar")}
+        allowed = {k: v for k, v in fields.items() if k in ("name", "pin_hash", "avatar", "role")}
         if allowed:
             with self._write_lock:
                 sets = ", ".join(f"{k}=?" for k in allowed)
