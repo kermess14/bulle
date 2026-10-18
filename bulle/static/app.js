@@ -479,14 +479,23 @@
   }
   const qf = list => (list || []).filter(qualityOk);
   function resLabel(it) { return it.res ? `${it.res[0]} × ${it.res[1]} px` : ""; }
+  /* Pastille de qualité : en mode « Tout » et « HD », on signale le HD ; en mode « SD », c'est le SD qui compte
+     (une série mélangée y est affichée pour ses albums SD : la pastille dit combien). */
   function qualityBadge(item) {
+    const sdMode = settings.profile.quality === "sd";
     if (item.kind === "album") {
+      if (sdMode) return item.q === "sd" ? `<span class="qtag sd" title="Album SD : pages de ${resLabel(item)}">SD</span>` : "";
       return item.q === "hd" ? `<span class="qtag hd" title="Album HD : pages de ${resLabel(item)}">HD</span>` : "";
     }
-    const hd = item.hd_count || 0, sd = item.sd_count || 0;
+    const hd = item.hd_count || 0, sd = item.sd_count || 0, n = hd + sd;
+    if (sdMode) {
+      if (!sd) return "";
+      return !hd ? `<span class="qtag sd" title="Tous les albums mesurés sont en SD">SD</span>`
+        : `<span class="qtag sd part" title="${sd} albums SD sur ${n} mesurés (les ${hd} autres sont HD) : seuls les SD sont affichés dans la série">SD ${sd}/${n}</span>`;
+    }
     if (!hd) return "";
     return !sd ? `<span class="qtag hd" title="Tous les albums mesurés sont en HD">HD</span>`
-      : `<span class="qtag hd part" title="${hd} albums HD sur ${hd + sd} mesurés">HD ${hd}/${hd + sd}</span>`;
+      : `<span class="qtag hd part" title="${hd} albums HD sur ${n} mesurés${settings.profile.quality === "hd" ? " : seuls les HD sont affichés dans la série" : ""}">HD ${hd}/${n}</span>`;
   }
   function renderQualitySwitch() {
     const box = $("#side-quality");
@@ -599,8 +608,13 @@
       ? `<span class="cur">${esc(c.name)}</span>`
       : `<a href="${i === 0 ? "#/" : "#/f/" + c.id}">${esc(c.name)}</a>`);
     if (tail) parts.push(`<span class="cur">${esc(tail)}</span>`);
-    crumbsEl.innerHTML = parts.join(`<span class="sep">›</span>`);
+    // bouton « retour » devant le fil d'Ariane, dès qu'on n'est pas à l'accueil : sur tablette et téléphone, il n'y a
+    // ni touche Échap ni forcément de bouton « précédent » (Bulle installé sur l'écran d'accueil)
+    const back = list.length > 1 || tail ? `<button class="iconbtn crumb-back" type="button" data-crumb-back title="Retour (Échap)" aria-label="Retour">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>` : "";
+    crumbsEl.innerHTML = back + parts.join(`<span class="sep">›</span>`);
   }
+  crumbsEl.addEventListener("click", e => { if (e.target.closest("[data-crumb-back]")) { e.preventDefault(); escapeBack(); } });
 
   function renderEmpty(scan) {
     setCrumbs([]);
