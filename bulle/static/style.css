@@ -1321,3 +1321,8 @@ img.pavatar { object-fit: cover; padding: 0; }
 :root[data-skin="seasons"] .qtag.hd { background: var(--s2); color: var(--bg); }
 @media (prefers-reduced-motion: reduce) { :root[data-skin="seasons"] h2::before, :root[data-skin="seasons"] .sidebar .ono { animation: none !important; } }
 :root[data-skin="seasons"] .sheet, :root[data-skin="seasons"] .sumpop { background-color: var(--bg-2); }
+/* bouton de saison (habillage Quatre saisons) : il montre la saison affichée, un clic passe à la suivante */
+#season-btn { display: none; font-size: 19px; line-height: 1; }
+:root[data-skin="seasons"] #season-btn { display: inline-flex; }
+#season-btn.turn { animation: season-turn .5s ease; }
+@keyframes season-turn { 0% { transform: rotate(0) scale(1); } 50% { transform: rotate(180deg) scale(.6); } 100% { transform: rotate(360deg) scale(1); } }

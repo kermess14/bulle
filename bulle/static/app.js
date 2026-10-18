@@ -213,6 +213,26 @@
     return md >= 1221 || md < 320 ? "winter" : md < 621 ? "spring" : md < 922 ? "summer" : "autumn";
   }
   const SEASON_LABEL = { spring: "printemps", summer: "été", autumn: "automne", winter: "hiver" };
+  const SEASON_ORDER = ["spring", "summer", "autumn", "winter"], SEASON_EMOJI = { spring: "🌸", summer: "☀️", autumn: "🍂", winter: "❄️" };
+  /* Bouton de saison : il affiche l'emblème de la saison en cours (🍂 en automne…) ; un clic passe à la suivante.
+     En revenant à la saison du calendrier, on repasse en « selon la date ». */
+  function updateSeasonBtn() {
+    const b = $("#season-btn"); if (!b) return;
+    const cur = document.documentElement.dataset.season || currentSeason();
+    const next = SEASON_ORDER[(SEASON_ORDER.indexOf(cur) + 1) % 4];
+    const auto = !["spring", "summer", "autumn", "winter"].includes(settings.profile.season);
+    b.textContent = SEASON_EMOJI[cur];
+    b.title = `Saison : ${SEASON_LABEL[cur]}${auto ? " (selon la date)" : ""} — cliquer pour passer ${next === "autumn" ? "à l'" : next === "summer" ? "à l'" : next === "winter" ? "à l'" : "au "}${SEASON_LABEL[next]}`;
+  }
+  document.addEventListener("click", e => {
+    const b = e.target.closest("#season-btn"); if (!b) return;
+    const cur = document.documentElement.dataset.season || currentSeason();
+    const next = SEASON_ORDER[(SEASON_ORDER.indexOf(cur) + 1) % 4];
+    b.classList.remove("turn"); void b.offsetWidth; b.classList.add("turn");
+    saveSettings({ season: next === currentSeason() ? "auto" : next });
+    toast(`${SEASON_EMOJI[next]} ${SEASON_LABEL[next][0].toUpperCase() + SEASON_LABEL[next].slice(1)}${next === currentSeason() ? " (la saison du calendrier)" : ""}`);
+    if (location.hash.startsWith("#/settings")) route();
+  });
   const HOVER = { none: 1, light: 1.05, strong: 1.12 };
   const settings = { profile: Object.assign({}, PROFILE_DEFAULTS), global: {}, meta: {} };
   try { Object.assign(settings.profile, JSON.parse(localStorage.getItem("bulle:profile") || "{}")); } catch (_) { /* ignore */ }
@@ -240,6 +260,7 @@
     setupSideCovers();
     setupBubbles();
     setupSeasonFx();
+    updateSeasonBtn();
   }
 
   // ================================================================ quatre saisons : ce qui flotte dans l'air
