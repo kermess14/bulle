@@ -17,7 +17,7 @@ import zipfile
 from collections import defaultdict
 from typing import Optional
 
-from PIL import Image, ImageFile, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageFile, ImageFilter, ImageOps, ImageStat
 
 from .library import natural_sort_key
 
@@ -494,11 +494,102 @@ def sniff_image(data: bytes) -> str:
     return "format inconnu"
 
 
+# ----------------------------------------------------------------------------
+# Rognage des marges (affichage seulement : le fichier n'est jamais modifié)
+# ----------------------------------------------------------------------------
+TRIM_SAMPLE = 600        # la recherche des marges se fait sur une miniature (rapide, insensible au bruit fin)
+TRIM_INK = 28            # écart à la couleur du papier au-delà duquel un pixel compte comme « dessiné »
+TRIM_ROW = 0.012         # une ligne ou colonne est « vide » si moins de 1,2 % de ses pixels sont dessinés
+TRIM_KEEP = 0.55         # on garde toujours au moins 55 % de la largeur et de la hauteur
+TRIM_PAD = 0.015         # petite marge rendue autour du dessin (1,5 %), pour ne pas coller au trait
+
+
+def _content_span(profile: list[float], small: float) -> Optional[tuple[int, int]]:
+    """Début et fin du contenu le long d'un profil (taux de pixels dessinés par ligne ou par colonne).
+
+    Les petits îlots isolés près d'un bord (numéro de page, tampon, poussière de scan) sont ignorés : un bloc
+    plus fin que `small` et séparé du reste par du blanc ne retient pas le rognage."""
+    n = len(profile)
+    runs, start = [], None
+    for i, v in enumerate(profile + [0.0]):
+        if v >= TRIM_ROW and start is None:
+            start = i
+        elif v < TRIM_ROW and start is not None:
+            runs.append([start, i]); start = None
+    if not runs:
+        return None
+    gap = max(2, round(n * 0.01))
+    # un îlot n'est ignoré que s'il est fin ET clairsemé (numéro de page, poussière) : un titre ou une ligne de
+    # texte dans la marge est bien plus dense et reste visible
+    sparse = lambda r: r[1] - r[0] < small * n and sum(profile[r[0]:r[1]]) / max(1, r[1] - r[0]) < 0.06
+    while len(runs) > 1 and sparse(runs[0]) and runs[1][0] - runs[0][1] >= gap:
+        runs.pop(0)
+    while len(runs) > 1 and sparse(runs[-1]) and runs[-1][0] - runs[-2][1] >= gap:
+        runs.pop()
+    return runs[0][0], runs[-1][1]
+
+
+def trim_box(img: Image.Image) -> Optional[tuple[float, float, float, float]]:
+    """Cadre utile de la planche, en fractions (gauche, haut, droite, bas), ou None s'il n'y a rien à rogner.
+
+    La couleur du « papier » est prise sur le pourtour (blanc, crème, gris clair de scan) ; s'il n'est pas
+    uniforme ou pas clair, le dessin va jusqu'au bord et on ne touche à rien. Une page blanche n'est pas rognée."""
+    try:
+        im = flatten(img)
+        w, h = im.size
+        if w < 50 or h < 50:
+            return None
+        sc = min(1.0, TRIM_SAMPLE / max(w, h))
+        sm = im.resize((max(20, round(w * sc)), max(20, round(h * sc))), Image.Resampling.BOX) if sc < 1 else im.copy()
+        sw, sh = sm.size
+        e = max(2, round(min(sw, sh) * 0.015))
+        strips = [sm.crop((0, 0, sw, e)), sm.crop((0, sh - e, sw, sh)), sm.crop((0, 0, e, sh)), sm.crop((sw - e, 0, sw, sh))]
+        meds, devs = [], []
+        for st in strips:
+            stat = ImageStat.Stat(st)
+            meds.append(stat.median); devs.append(max(stat.stddev))
+        paper = tuple(sorted(m[c] for m in meds)[1] for c in range(3))   # médiane basse des quatre bords
+        if sorted(devs)[1] > 30:          # au moins trois bords « agités » : le dessin touche le bord
+            return None
+        if min(paper) < 190 or max(paper) - min(paper) > 45:
+            return None                   # pourtour ni blanc ni crème : c'est le dessin (aplat de couleur, ciel…)
+        diff = ImageChops.difference(sm, Image.new("RGB", sm.size, paper))
+        ink = diff.convert("L").point(lambda v: 255 if v > TRIM_INK else 0)
+        rows = [v / 255 for v in ink.resize((1, sh), Image.Resampling.BOX).getdata()]
+        cols = [v / 255 for v in ink.resize((sw, 1), Image.Resampling.BOX).getdata()]
+        ys, xs = _content_span(rows, 0.03), _content_span(cols, 0.03)
+        if not ys or not xs:
+            return None                   # page blanche (ou presque) : rien à rogner
+        pad = TRIM_PAD
+        l, r = max(0.0, xs[0] / sw - pad), min(1.0, xs[1] / sw + pad)
+        t, b = max(0.0, ys[0] / sh - pad), min(1.0, ys[1] / sh + pad)
+        if r - l < TRIM_KEEP or b - t < TRIM_KEEP:
+            return None                   # trop serré pour être une simple marge : on préfère ne rien faire
+        if l < 0.01 and t < 0.01 and r > 0.99 and b > 0.99:
+            return None                   # rien de notable à gagner
+        return (l, t, r, b)
+    except Exception as e:  # noqa: BLE001
+        log.debug("Rognage impossible : %s", e)
+        return None
+
+
+def apply_trim(img: Image.Image) -> Image.Image:
+    box = trim_box(img)
+    if not box:
+        return img
+    im = flatten(img)
+    w, h = im.size
+    return im.crop((round(box[0] * w), round(box[1] * h), round(box[2] * w), round(box[3] * h)))
+
+
 def resize_to_jpeg(data: bytes, width: int, quality: int = JPEG_QUALITY, subsampling: int = 0,
-                   sharpen: bool = True) -> bytes:
-    """Décode, réduit à `width` pixels de large (jamais agrandi) et encode en JPEG."""
+                   sharpen: bool = True, trim: bool = False) -> bytes:
+    """Décode, (rogne les marges,) réduit à `width` pixels de large (jamais agrandi) et encode en JPEG."""
     try:
         img = Image.open(io.BytesIO(data))
+        if trim:
+            img.load()
+            img = apply_trim(img)
         return encode_jpeg(_shrink(img, width, sharpen), quality, subsampling)
     except AlbumError:
         raise
@@ -509,7 +600,9 @@ def resize_to_jpeg(data: bytes, width: int, quality: int = JPEG_QUALITY, subsamp
 
 
 def image_to_jpeg(img: Image.Image, width: int, quality: int = JPEG_QUALITY, subsampling: int = 0,
-                  sharpen: bool = True) -> bytes:
+                  sharpen: bool = True, trim: bool = False) -> bytes:
+    if trim:
+        img = apply_trim(img)
     return encode_jpeg(_shrink(img, width, sharpen), quality, subsampling)
 
 
@@ -656,9 +749,10 @@ class Comics:
         nid = int(node) if isinstance(node, int) else node["id"]
         return os.path.join(self.covers_dir, f"{nid}-{self._ver(node)}-{self.cover_width}-{self.profile_tag}.jpg")
 
-    def page_path(self, node, index: int, width: int) -> str:
+    def page_path(self, node, index: int, width: int, trim: bool = False) -> str:
         nid = int(node) if isinstance(node, int) else node["id"]
-        return os.path.join(self.pages_dir, str(nid), f"{self._ver(node)}-{index}-{width}-{self.profile_tag}.jpg")
+        # version rognée : « 1400t » (jamais confondue avec la page entière, ni reprise par la détection des cases)
+        return os.path.join(self.pages_dir, str(nid), f"{self._ver(node)}-{index}-{width}{'t' if trim else ''}-{self.profile_tag}.jpg")
 
     def cached_page_at_least(self, node, index: int, min_width: int, max_width: int = 1400) -> Optional[str]:
         """Fichier de la page déjà en cache dont la largeur est entre min_width et max_width (la plus petite), ou None."""
@@ -918,24 +1012,26 @@ class Comics:
                 raise AlbumError(f"Couverture illisible : {e}") from e
         return p
 
-    def page(self, node: dict, abs_path: str, index: int, width: int) -> tuple[Optional[str], Optional[bytes], str]:
-        """Page `index` à la largeur `width` (0 = originale).
+    def page(self, node: dict, abs_path: str, index: int, width: int,
+             trim: bool = False) -> tuple[Optional[str], Optional[bytes], str]:
+        """Page `index` à la largeur `width` (0 = originale), marges blanches rognées si `trim`.
 
         Renvoie (chemin_fichier_cache, octets, mimetype) : l'un des deux premiers est rempli.
+        Le rognage ne touche que l'image envoyée : le fichier de l'album n'est jamais modifié.
         """
         width = pick_width(width)
-        if width and self.page_cache:
-            cached = self.page_path(node, index, width)
+        if (width or trim) and self.page_cache:
+            cached = self.page_path(node, index, width, trim)
             if os.path.exists(cached):
                 return cached, None, "image/jpeg"
         with self.lock(node["id"]):
             with self.open(node, abs_path) as album:
-                if width == 0:
+                if width == 0 and not trim:
                     data, ext = album.read(index)
                     return None, data, MIME.get(ext, "application/octet-stream")
-                data = self._render(album, index, width)
+                data = self._render(album, index, width, trim)
                 if self.page_cache:
-                    cached = self.page_path(node, index, width)
+                    cached = self.page_path(node, index, width, trim)
                     try:
                         self._write_atomic(cached, data)
                         return cached, None, "image/jpeg"
@@ -943,13 +1039,15 @@ class Comics:
                         log.warning("Cache pages indisponible : %s", e)
                 return None, data, "image/jpeg"
 
-    def _render(self, album: Album, index: int, width: int) -> bytes:
+    def _render(self, album: Album, index: int, width: int, trim: bool = False) -> bytes:
         quality, subsampling = self.jpeg
+        if width == 0:
+            quality, subsampling = max(quality, 92), 0     # taille d'origine rognée : on garde toute la finesse
         if isinstance(album, PdfAlbum):
-            return image_to_jpeg(album.render(index, width), width, quality, subsampling, self.sharpen)
+            return image_to_jpeg(album.render(index, width or 2400), width, quality, subsampling, self.sharpen, trim)
         data, _ = album.read(index)
         try:
-            return resize_to_jpeg(data, width, quality, subsampling, self.sharpen)
+            return resize_to_jpeg(data, width, quality, subsampling, self.sharpen, trim)
         except AlbumError as e:
             # on dit QUEL fichier de l'archive pose problème (et ce qu'il contient vraiment), pour pouvoir le réparer
             name = album.pages[index] if index < len(album.pages) else "?"

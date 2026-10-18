@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.23.0)
+# Bulle — lecteur de BD maison (v0.24.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -147,10 +147,18 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
+- Rogner les marges blanches (Réglages › Lecteur, ou touche `R` dans le lecteur) : le tour blanc ou crème des
+  pages est coupé à l'affichage, pour une planche plus grande à l'écran, en une page, double page et défilement.
+  Les numéros de page isolés dans la marge sont ignorés, un titre dans la marge est gardé ; une page blanche, un
+  dessin à fond perdu ou un pourtour coloré restent entiers. Rien n'est jamais écrit dans les fichiers : seule
+  l'image envoyée au lecteur est rognée (et gardée en cache à part). Pas en case par case, qui cadre déjà les cases.
 - Case par case fluide : au passage de planche, l'ancienne case reste affichée (avec le petit rond de
   chargement si ça dure) pendant que Bulle prépare la suivante — image décodée et cases repérées — puis tout
-  s'échange d'un seul coup : plus jamais de fond noir ni de planche mal cadrée, même sur un NAS lent. La planche
-  précédente est préchargée aussi (retour arrière immédiat), et les appuis répétés pendant un chargement sont
+  s'échange d'un seul coup : plus jamais de fond noir ni de planche mal cadrée, même sur un NAS lent. Les pages
+  sans cases (garde, page blanche, titre) ne paient plus la détection : si les cases d'une planche jamais vue
+  tardent, la planche s'affiche entière tout de suite puis glisse sur la première case dès qu'elles arrivent.
+  La planche précédente est préchargée aussi (retour arrière immédiat), les préchargements passent en priorité
+  réseau basse (la planche demandée garde la voie libre), et les appuis répétés pendant un chargement sont
   gardés (trois au plus) puis rejoués dans l'ordre.
 - Mode léger : le bouton « planche de BD » à côté du champignon coupe tout ce qui bouge en arrière-plan (mosaïque,
   verre dépoli, couvertures au hasard, bulles de l'aquarium, saisons, petits mots animés, ciel de la Nuit étoilée)
