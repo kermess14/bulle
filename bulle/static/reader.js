@@ -279,13 +279,52 @@
     let s = Math.min(vw * (1 - 2 * pad) / pw, vh * (1 - 2 * pad) / ph);
     s = Math.max(1, Math.min(5, s));
     const tx = vw / 2 - ix - s * (px + pw / 2), ty = vh / 2 - iy - s * (py + ph / 2);
-    img.style.transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px) scale(${s.toFixed(4)})`;
+    // recadrage à la main (glisser) : l'écart est oublié dès qu'on change de case ou de planche
+    if (panelOff.page !== current || panelOff.idx !== panelIdx) Object.assign(panelOff, { x: 0, y: 0, page: current, idx: panelIdx });
+    panelFrame = { tx, ty, s, ix, iy, iw, ih, vw, vh };
     panelScale = s;
-    panelBox = { x0: ix + tx, y0: iy + ty, x1: ix + tx + iw * s, y1: iy + ty + ih * s };   // position finale (après l'animation)
+    placePanel();
     if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
     scheduleRefine();   // une fois cadrée, la case est rechargée plus nette si besoin
   }
   let panelScale = 1, panelBox = null, pendingStep = 0;
+  /* Recadrage à la main en case par case : la case est déplacée du doigt (ou à la souris) quand la détection l'a mal
+     cadrée ou qu'un bout déborde ; on ne peut pas sortir de la planche. La case suivante repart d'un cadrage propre. */
+  let panelFrame = null, panelDrag = null;
+  const panelOff = { x: 0, y: 0, page: -1, idx: -1 };
+  function clampPanelOff() {
+    if (!panelFrame) return;
+    const { tx, ty, s, ix, iy, iw, ih, vw, vh } = panelFrame;
+    const x0 = ix + tx, x1 = x0 + iw * s, y0 = iy + ty, y1 = y0 + ih * s;
+    // planche plus large que l'écran : pas de vide sur les côtés ; plus étroite : pas de déplacement horizontal (idem en hauteur)
+    panelOff.x = x1 - x0 <= vw ? 0 : Math.min(-x0, Math.max(vw - x1, panelOff.x));
+    panelOff.y = y1 - y0 <= vh ? 0 : Math.min(-y0, Math.max(vh - y1, panelOff.y));
+  }
+  function placePanel() {
+    if (!panelFrame) return;
+    clampPanelOff();
+    const { tx, ty, s, ix, iy, iw, ih } = panelFrame;
+    const fx = tx + panelOff.x, fy = ty + panelOff.y;
+    img.style.transform = `translate(${fx.toFixed(1)}px, ${fy.toFixed(1)}px) scale(${s.toFixed(4)})`;
+    panelBox = { x0: ix + fx, y0: iy + fy, x1: ix + fx + iw * s, y1: iy + fy + ih * s };   // position finale (après l'animation)
+    zoomBounds = null;
+  }
+  const canPanelDrag = () => mode === "panels" && panelIdx >= 0 && userZoom === 1 && !!panelFrame;
+  function panelDragStart(x, y) { panelDrag = { x, y, ox: panelOff.x, oy: panelOff.y, moved: false }; }
+  function panelDragMove(x, y) {
+    if (!panelDrag) return;
+    const dx = x - panelDrag.x, dy = y - panelDrag.y;
+    if (!panelDrag.moved && Math.abs(dx) + Math.abs(dy) > 6) { panelDrag.moved = true; img.classList.add("nofx"); }
+    if (!panelDrag.moved) return;
+    panelOff.x = panelDrag.ox + dx; panelOff.y = panelDrag.oy + dy;
+    placePanel();
+  }
+  function panelDragEnd() {
+    const moved = !!(panelDrag && panelDrag.moved);
+    panelDrag = null;
+    if (moved) { dragMoved = true; requestAnimationFrame(() => img.classList.remove("nofx")); }
+    return moved;
+  }
   async function panelStep(dir) {
     const d = panelsCache.get(current);
     const count = d && d.panels instanceof Array ? d.panels.length : 0;
@@ -469,7 +508,7 @@
     mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
     images.clear();
     applyMode(); saveAlbumMemory();
-    flash({ single: "Une page", double: "Deux pages (planches larges et couverture seules)", scroll: "Défilement continu", panels: "Case par case : → case suivante, ← précédente" }[mode]);
+    flash({ single: "Une page", double: "Deux pages (planches larges et couverture seules)", scroll: "Défilement continu", panels: "Case par case : → case suivante, ← précédente ; glissez pour recadrer" }[mode]);
     if (keep >= 0) go(keep, { save: false });
   }
   function togglePanels() {
@@ -477,7 +516,7 @@
     mode = mode === "panels" ? "single" : "panels";
     images.clear();
     applyMode(); saveAlbumMemory();
-    flash(mode === "panels" ? "Case par case : → case suivante, ← précédente" : "Une page");
+    flash(mode === "panels" ? "Case par case : → case suivante, ← précédente ; glissez pour recadrer" : "Une page");
     if (keep >= 0) go(keep, { save: false });
   }
   function applyManga(announce = true) {
@@ -633,18 +672,23 @@
     if (userZoom > 1) { e.preventDefault(); panX -= e.deltaX; panY -= e.deltaY; applyZoom(); }
   }, { passive: false });
   stage.addEventListener("pointerdown", e => {
-    if (e.button !== 0 || userZoom <= 1 || e.pointerType === "touch") return;
+    if (e.button !== 0 || e.pointerType === "touch") return;
+    if (userZoom <= 1) {
+      if (canPanelDrag()) { panelDragStart(e.clientX, e.clientY); dragMoved = false; stage.setPointerCapture(e.pointerId); }
+      return;
+    }
     dragging = { x: e.clientX, y: e.clientY, px: panX, py: panY }; dragMoved = false;
     stage.setPointerCapture(e.pointerId);
   });
   stage.addEventListener("pointermove", e => {
+    if (panelDrag && e.pointerType !== "touch") { panelDragMove(e.clientX, e.clientY); return; }
     if (!dragging) return;
     const dx = e.clientX - dragging.x, dy = e.clientY - dragging.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) dragMoved = true;
     panX = dragging.px + dx; panY = dragging.py + dy; applyZoom();
   });
-  stage.addEventListener("pointerup", () => { dragging = null; });
-  stage.addEventListener("pointercancel", () => { dragging = null; });
+  stage.addEventListener("pointerup", e => { dragging = null; if (e.pointerType !== "touch") panelDragEnd(); });
+  stage.addEventListener("pointercancel", e => { dragging = null; if (e.pointerType !== "touch") panelDragEnd(); });
   stage.addEventListener("dblclick", e => {
     if (mode === "scroll" || e.target.closest(".rmsg")) return;
     e.preventDefault();
@@ -658,6 +702,8 @@
       pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), z: userZoom, cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2 };
     } else if (e.touches.length === 1 && userZoom > 1) {
       pinch = null; dragging = { x: e.touches[0].clientX, y: e.touches[0].clientY, px: panX, py: panY }; dragMoved = false;
+    } else if (e.touches.length === 1 && canPanelDrag()) {
+      pinch = null; panelDragStart(e.touches[0].clientX, e.touches[0].clientY); dragMoved = false;
     }
   }, { passive: true });
   stage.addEventListener("touchmove", e => {
@@ -671,7 +717,10 @@
       if (Math.abs(dx) + Math.abs(dy) > 4) dragMoved = true;
       panX = dragging.px + dx; panY = dragging.py + dy; applyZoom();
       e.preventDefault();
-    }
+    } else if (panelDrag && e.touches.length === 1) {
+      panelDragMove(e.touches[0].clientX, e.touches[0].clientY);
+      if (panelDrag.moved) e.preventDefault();
+    } else if (e.touches.length === 2) { panelDrag = null; }
   }, { passive: false });
   stage.addEventListener("touchend", e => { if (e.touches.length < 2) pinch = null; if (!e.touches.length) dragging = null; }, { passive: true });
 
@@ -744,7 +793,11 @@
     if (!touch || e.changedTouches.length !== 1) return;
     const dx = e.changedTouches[0].clientX - touch.x, dy = e.changedTouches[0].clientY - touch.y, dt = Date.now() - touch.t;
     touch = null;
-    if (userZoom === 1 && mode !== "scroll" && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 600 && (fit !== "original" || mode === "panels")) {
+    const reframed = panelDragEnd();
+    const flick = Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < (reframed ? 350 : 600);
+    if (reframed && !flick) return;   // recadrage à la main : on garde la case où elle est
+    if (userZoom === 1 && mode !== "scroll" && flick && (fit !== "original" || mode === "panels")) {
+      if (reframed) { panelOff.x = panelDrag ? panelOff.x : 0; panelOff.y = 0; }
       dx < 0 ? forward() : backward();  // balayage vers la gauche = avancer (sens occidental)
       e.preventDefault();
     }

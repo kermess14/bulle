@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.16.1)
+# Bulle — lecteur de BD maison (v0.19.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -154,6 +154,16 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   automatique (variable QUALITY_AUTO) et seuil HD réglable (changer le seuil reclasse sans remesurer).
   API : `POST /api/quality/measure` (`{"limit": n}`, `{"ids": [...]}`, `{"remeasure": true}`), `POST /api/quality/stop`,
   `GET /api/quality`.
+- Comptes : chaque profil a un rôle, administrateur (réglages, scans, comptes, rubrique Adulte) ou lecteur (lecture,
+  progression, listes, réglages d'affichage) ; le premier profil est administrateur, il en faut toujours un. Mot de
+  passe facultatif par compte (4 caractères au moins, gardé chiffré) ; sans profil choisi, les droits d'administrateur
+  ne valent que si rien ne protège Bulle. Réglages › Mon compte : vignette (photo réduite à 96 px, ou emoji / initiales),
+  nom, mot de passe, déconnexion ; Réglages › Comptes et accès (administrateur) : rôles, ajout, suppression.
+- Journal de lecture : Bulle note les pages tournées dans son lecteur (par profil, album et jour : pages, temps —
+  écarts entre deux pages plafonnés à 5 min —, albums terminés ; un saut par la barre de progression ne compte pas).
+  « Historique » montre les albums en cours (page atteinte, date) et les terminés ; « Activité » : 30 derniers jours,
+  pages par jour (14 j) et par mois, séries en cours, albums les plus lus, totaux, et pour l'administrateur le résumé
+  de tous les comptes. API : `GET /api/history`, `/api/history/reading`, `/api/activity`.
 - Glissez une vignette (album ou série) sur « À lire », « Favoris » ou une liste de la colonne de gauche
   pour l'y ajouter ; sur « Listes » pour créer une liste. Au survol d'un album dont le résumé est connu,
   une info-bulle le montre.
@@ -161,6 +171,8 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   défiler la page), clic sur les bords de l'image, balayage ou tape sur les bords sur mobile ;
   tape / clic au centre pour afficher ou cacher les barres. Molette = page suivante / précédente
   en mode page entière.
+  En case par case, glissez (doigt ou souris) pour recadrer une case mal détectée ou qui déborde : on ne sort pas de
+  la planche, et la case suivante repart d'un cadrage propre ; un balayage vif tourne toujours la page.
   `D` change l'affichage (1 page, 2 pages, défilement), `F` l'ajustement, `M` le sens manga, `P` le plein
   écran, `Début` / `Fin` première / dernière page, `Échap` revient au dossier.
 - Le lecteur retient l'ajustement choisi et le sens de lecture par album (dans le navigateur),

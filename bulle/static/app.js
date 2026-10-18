@@ -96,9 +96,16 @@
 
   // ================================================================ profils (« qui lit ? »)
   const initial = n => (n || "?").trim()[0].toUpperCase();
+  const isAdmin = () => settings.meta.role === "admin";
+  /* Vignette d'un profil : une petite image choisie par l'utilisateur, sinon un emoji ou l'initiale. */
+  function avatarHtml(p, cls = "") {
+    const a = p && p.avatar;
+    if (a && a.startsWith("data:image/")) return `<img class="pavatar ${cls}" src="${a}" alt="">`;
+    return `<span class="pavatar ${cls}">${esc(a || initial(p ? p.name : "?"))}</span>`;
+  }
   function profileTile(p, current) {
     return `<button type="button" class="ptile ${p.id === current ? "on" : ""}" data-profile="${p.id}" data-haspin="${p.has_pin ? 1 : 0}" data-name="${esc(p.name)}">
-      <span class="pavatar">${esc(p.avatar || initial(p.name))}</span><span class="pname">${esc(p.name)}</span>${p.has_pin ? `<span class="plock" title="Protégé par un code">🔒</span>` : ""}</button>`;
+      ${avatarHtml(p)}<span class="pname">${esc(p.name)}</span>${p.has_pin ? `<span class="plock" title="Protégé par un mot de passe">🔒</span>` : ""}${p.role === "admin" ? `<span class="prole" title="Administrateur">admin</span>` : ""}</button>`;
   }
   async function openProfiles({ locked = false } = {}) {
     let data;
@@ -108,11 +115,18 @@
       ${locked ? "" : `<button class="iconbtn close" type="button" data-close title="Fermer">${ICON.close}</button>`}
       <h3>Qui lit ?</h3>
       <div class="ptiles">${data.profiles.map(p => profileTile(p, data.selected ? data.current : 0)).join("")}
-        <button type="button" class="ptile add" data-profile-add><span class="pavatar">+</span><span class="pname">Nouveau profil</span></button></div>
-      <p class="muted">Chaque profil a sa propre progression de lecture et ses réglages d'affichage.${locked ? "" : ` <a href="#/settings" data-close>Gérer les profils</a>`}</p>
-      <form class="pin-inline" id="profile-pin" hidden><span></span><input type="password" inputmode="numeric" name="pin" placeholder="Code PIN"><button class="btn primary" type="submit">OK</button><p class="error" hidden></p></form>
-      <form class="pin-inline" id="profile-new" hidden><input type="text" name="name" placeholder="Prénom" maxlength="40" required><input type="password" inputmode="numeric" name="pin" placeholder="Code PIN (facultatif)"><button class="btn primary" type="submit">Créer</button></form>
+        ${isAdmin() || data.profiles.length < 2 ? `<button type="button" class="ptile add" data-profile-add><span class="pavatar">+</span><span class="pname">Nouveau profil</span></button>` : ""}</div>
+      <p class="muted">Chaque profil a sa propre progression de lecture et ses réglages d'affichage.${locked ? "" : ` <a href="#/settings/account" data-close>Mon compte</a>${isAdmin() ? ` · <a href="#/settings/access" data-close>Gérer les comptes</a>` : ""}`}</p>
+      <form class="pin-inline" id="profile-pin" hidden><span></span><input type="password" autocomplete="current-password" name="pin" placeholder="Mot de passe"><button class="btn primary" type="submit">OK</button><p class="error" hidden></p></form>
+      <form class="pin-inline" id="profile-new" hidden><input type="text" name="name" placeholder="Prénom" maxlength="40" required><input type="password" autocomplete="new-password" name="pin" placeholder="Mot de passe (facultatif)"><button class="btn primary" type="submit">Créer</button></form>
+      ${data.selected ? `<p class="actions"><button class="btn" type="button" data-logout>Se déconnecter</button></p>` : ""}
     </div></div>`;
+    const lo = $("[data-logout]");
+    if (lo) lo.addEventListener("click", async () => {
+      try { await api("/api/profiles/logout", { method: "POST" }); } catch (_) { /* ignore */ }
+      try { localStorage.removeItem("bulle:profile"); } catch (_) { /* ignore */ }
+      location.reload();
+    });
     const sheet = $(".sheet.profiles");
     sheet.addEventListener("click", e => {
       const t = e.target.closest("[data-profile], [data-profile-add]");
@@ -150,9 +164,10 @@
     if (!btn) return;
     const list = settings.meta.profiles || [];
     const cur = list.find(p => p.id === settings.meta.profile_id);
-    btn.innerHTML = `<span class="pavatar small">${esc(cur ? (cur.avatar || initial(cur.name)) : "?")}</span>`;
-    btn.title = cur ? `Profil : ${cur.name} (changer)` : "Profil";
-    btn.hidden = list.length < 2 && !settings.global.require_profile;
+    btn.innerHTML = avatarHtml(cur || { name: "?" }, "small");
+    btn.title = cur ? `${cur.name}${cur.role === "admin" ? " (administrateur)" : ""} — profil, mon compte, déconnexion` : "Profil";
+    btn.hidden = list.length < 2 && !settings.global.require_profile && !settings.meta.profile_selected;
+    const scan = $("#scan-btn"); if (scan) scan.hidden = !isAdmin();
   }
   document.addEventListener("click", e => { if (e.target.closest("#profile-btn")) openProfiles(); });
   const putJson = (url, body) => api(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -631,9 +646,9 @@
       html += `<h1>${esc(data.folder.name)} <small class="muted h1sub">${[folders ? plural(folders, "dossier", "dossiers") : "", albums ? plural(albums, "album", "albums") : ""].filter(Boolean).join(" · ")}</small>
         <span class="h1tools"><button class="btn ${data.folder.fav ? "fav-on" : ""}" type="button" data-fav="${data.folder.id}" title="Série favorite">${data.folder.fav ? "★ Favori" : "☆ Favori"}</button>
         <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
-        ${settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
-        <button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire cette série sur le disque : fichiers ajoutés ou jetés, format, pages, couvertures">↻ Rescanner</button>
-        <button class="btn" type="button" data-ignore="${data.folder.id}" data-name="${esc(data.folder.name)}" data-folder="1" title="Enlever ce dossier de Bulle (rien n'est supprimé sur le disque)">✕ Retirer</button></span></h1>`;
+        ${!isAdmin() ? "" : settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
+        ${isAdmin() ? `<button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire cette série sur le disque : fichiers ajoutés ou jetés, format, pages, couvertures">↻ Rescanner</button>
+        <button class="btn" type="button" data-ignore="${data.folder.id}" data-name="${esc(data.folder.name)}" data-folder="1" title="Enlever ce dossier de Bulle (rien n'est supprimé sur le disque)">✕ Retirer</button>` : ""}</span></h1>`;
       html += bdtPanelHtml(data);
       const ig = data.ignored_here || [];
       if (ig.length) html += `<div class="ignored-here"><span class="muted">${ig.length > 1 ? `${ig.length} éléments retirés` : "1 élément retiré"} de Bulle ici (toujours sur le disque) :</span>
@@ -848,10 +863,12 @@
   const txt = (scope, key, val, placeholder = "") => `<input type="text" data-scope="${scope}" data-key="${key}" value="${esc(val ?? "")}" placeholder="${esc(placeholder)}" style="width:min(360px,100%)">`;
   const range = (scope, key, val, min, max, unit = "%") => `<span class="rangewrap"><input type="range" data-scope="${scope}" data-key="${key}" value="${val}" min="${min}" max="${max}" step="5" oninput="this.nextElementSibling.textContent=this.value+'${unit}'"><output>${val}${unit}</output></span>`;
 
-  const SETTINGS_GROUPS = [
-    ["look", "Affichage"], ["library", "Bibliothèque"], ["reader", "Lecteur"], ["images", "Images et cache"],
-    ["bdt", "Bédéthèque"], ["access", "Profils et accès"], ["adult", "Adulte"], ["lab", "Laboratoire"], ["about", "À propos"],
+  const ALL_SETTINGS_GROUPS = [
+    ["look", "Affichage"], ["library", "Bibliothèque"], ["reader", "Lecteur"], ["account", "Mon compte"], ["images", "Images et cache"],
+    ["bdt", "Bédéthèque"], ["access", "Comptes et accès"], ["adult", "Adulte"], ["lab", "Laboratoire"], ["about", "À propos"],
   ];
+  const ADMIN_GROUPS = ["images", "bdt", "access", "adult", "lab"];
+  let SETTINGS_GROUPS = ALL_SETTINGS_GROUPS;
   async function viewSettings(group) {
     setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
     document.title = "Réglages — Bulle";
@@ -862,7 +879,10 @@
     try { quality = await api("/api/quality"); } catch (_) { /* ignore */ }
     const p = settings.profile, g = settings.global;
     const tabs = p.settings_layout !== "bricks";
+    const admin = isAdmin();
+    SETTINGS_GROUPS = ALL_SETTINGS_GROUPS.filter(([k]) => admin || !ADMIN_GROUPS.includes(k));
     if (!SETTINGS_GROUPS.some(([k]) => k === group)) group = "look";
+    const me = (settings.meta.profiles || []).find(x => x.id === settings.meta.profile_id) || { id: settings.meta.profile_id, name: "Moi" };
     const cacheLine = cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—";
     const sections = {
       look: () => `
@@ -893,14 +913,28 @@
         ${field("Rouvrir le dernier dossier au démarrage", chk("p", "remember_folder", p.remember_folder))}
         ${field("Afficher les tomes manquants dans les dossiers", chk("p", "bdt_ghosts", p.bdt_ghosts), "Cartes grisées à leur place dans la série (tri naturel), d'après Bédéthèque.")}
         ${field("Noms des albums d'après Bédéthèque", chk("p", "bdt_titles", p.bdt_titles), "« T3 · Titre officiel » au lieu du nom du fichier, quand il est connu. Les fichiers ne sont jamais renommés.")}
-        <div class="field"><div class="flabel"><span>Retirés de Bulle</span><small>Albums et dossiers enlevés avec « ✕ Retirer » : ils restent sur le disque mais les scans les ignorent.</small></div>
-          <div class="plist">${(g.ignored_paths || []).length ? g.ignored_paths.map(p => `<span class="prow"><code>${esc(p)}</code> <button class="btn mini" type="button" data-action="unignore" data-path="${esc(p)}">Remettre</button></span>`).join("") : `<span class="muted">Aucun</span>`}</div></div>
-        <h3 class="setsub">Qualité HD / SD</h3>
+        ${admin ? `<div class="field"><div class="flabel"><span>Retirés de Bulle</span><small>Albums et dossiers enlevés avec « ✕ Retirer » : ils restent sur le disque mais les scans les ignorent.</small></div>
+          <div class="plist">${(g.ignored_paths || []).length ? g.ignored_paths.map(p => `<span class="prow"><code>${esc(p)}</code> <button class="btn mini" type="button" data-action="unignore" data-path="${esc(p)}">Remettre</button></span>`).join("") : `<span class="muted">Aucun</span>`}</div></div>` : ""}
+        ${admin ? `<h3 class="setsub">Qualité HD / SD</h3>
         ${field("Mesurer automatiquement", chk("g", "quality_auto", g.quality_auto !== false), "Après chaque scan, Bulle mesure en arrière-plan la taille des pages des albums nouveaux ou modifiés (deux pages par album, lecture seule : les fichiers ne sont jamais modifiés).")}
         ${field("Seuil HD", num("g", "hd_min_px", g.hd_min_px || 2400, 800, 8000, 100) + ` <span class="muted">px</span>`, "Grand côté des pages à partir duquel un album compte comme HD. Repères : 1920 × 2650 ≈ 2650 px, 2560 × 3450 ≈ 3450 px, 3184 × 4200 = 4200 px. Changer le seuil reclasse tout de suite, sans remesurer.")}
         <div class="field"><div class="flabel"><span>Albums mesurés</span><small>Le filtre « Qualité » du menu ne classe que les albums déjà mesurés.</small></div>
           <div id="quality-box">${qualityBoxHtml(quality)}</div></div>
-        ${field("Album considéré lu", sel("g", "read_threshold", [[1, "À la dernière page"], [0.95, "À partir de 95 %"], [0.9, "À partir de 90 %"], [0.8, "À partir de 80 %"]], g.read_threshold))}`,
+        ${field("Album considéré lu", sel("g", "read_threshold", [[1, "À la dernière page"], [0.95, "À partir de 95 %"], [0.9, "À partir de 90 %"], [0.8, "À partir de 80 %"]], g.read_threshold))}` : ""}`,
+      account: () => `
+        <div class="field"><div class="flabel"><span>Vignette</span><small>Une photo ou une image (réduite à 96 px, gardée dans Bulle), ou un emoji / des initiales.</small></div>
+          <div class="actions avatar-edit">${avatarHtml(me, "big")}
+            <label class="btn">Choisir une image<input type="file" accept="image/*" data-avatar-file="${me.id}" hidden></label>
+            <button class="btn" type="button" data-action="avatar-text" data-id="${me.id}">Emoji ou lettres</button>
+            ${me.avatar ? `<button class="btn" type="button" data-action="avatar-clear" data-id="${me.id}">Retirer</button>` : ""}</div></div>
+        <div class="field"><div class="flabel"><span>Nom</span><small>Affiché sur l'écran « Qui lit ? ».</small></div>
+          <div class="actions"><button class="btn" type="button" data-action="account-name" data-id="${me.id}" data-name="${esc(me.name)}">${esc(me.name)} — changer</button></div></div>
+        <div class="field"><div class="flabel"><span>Mot de passe</span><small>${me.has_pin ? "Demandé pour ouvrir ce profil." : "Aucun : n'importe qui peut ouvrir ce profil."} Il est gardé chiffré (jamais en clair). 4 caractères au moins.</small></div>
+          <div class="actions"><button class="btn" type="button" data-action="account-pin" data-id="${me.id}">${me.has_pin ? "Changer le mot de passe" : "Définir un mot de passe"}</button>${me.has_pin ? `<button class="btn" type="button" data-action="account-pin-clear" data-id="${me.id}">Supprimer</button>` : ""}</div></div>
+        <div class="field"><div class="flabel"><span>Rôle</span><small>${me.role === "admin" ? "Administrateur : réglages, scans, comptes, rubrique Adulte." : "Lecteur : lecture, progression, listes, réglages d'affichage. Les réglages du serveur sont réservés à l'administrateur."}</small></div>
+          <div class="actions"><span class="prole">${me.role === "admin" ? "Administrateur" : "Lecteur"}</span></div></div>
+        <p class="muted">Pour que la déconnexion serve à quelque chose, mettez un mot de passe sur les comptes qui comptent${isAdmin() ? ` et activez « Demander qui lit ? à l'ouverture » (<a href="#/settings/access">Comptes et accès</a>)` : ""} : sans cela, Bulle rouvre directement sur le premier profil.</p>
+        <p class="actions"><button class="btn" type="button" data-action="logout">Se déconnecter</button></p>`,
       reader: () => `
         ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"], ["panels", "Case par case"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
         ${field("Double page : couverture seule", chk("p", "reader_cover_alone", p.reader_cover_alone), "Les planches larges (paysage) sont toujours affichées seules.")}
@@ -941,10 +975,11 @@
         <p class="muted">Rien n'est jamais écrit dans vos fichiers : les informations Bédéthèque restent dans la base de Bulle. <a href="#/collection">Voir la collection</a>.</p>`,
       access: () => `
         ${field("Demander « qui lit ? » à l'ouverture", chk("g", "require_profile", g.require_profile), "Chaque profil a sa progression et ses réglages d'affichage.")}
-        <div class="field"><div class="flabel"><span>Profils</span><small>Un code PIN par profil est facultatif.</small></div>
-          <div class="plist">${(settings.meta.profiles || []).map(pr => `<span class="prow"><span class="pavatar small">${esc(pr.avatar || initial(pr.name))}</span> ${esc(pr.name)}${pr.has_pin ? " 🔒" : ""}
+        <div class="field"><div class="flabel"><span>Comptes</span><small>Un mot de passe par compte est facultatif (4 caractères au moins, gardé chiffré). Administrateur : réglages, scans, comptes, rubrique Adulte ; lecteur : lecture et listes seulement. Il faut garder au moins un administrateur.</small></div>
+          <div class="plist">${(settings.meta.profiles || []).map(pr => `<span class="prow">${avatarHtml(pr, "small")} ${esc(pr.name)}${pr.has_pin ? " 🔒" : ""}
+            <select data-role="${pr.id}" title="Rôle"><option value="reader" ${pr.role !== "admin" ? "selected" : ""}>Lecteur</option><option value="admin" ${pr.role === "admin" ? "selected" : ""}>Administrateur</option></select>
             <button class="btn mini" type="button" data-action="profile-edit" data-id="${pr.id}" data-name="${esc(pr.name)}">Modifier</button>${pr.id === 1 ? "" : `<button class="btn mini" type="button" data-action="profile-delete" data-id="${pr.id}" data-name="${esc(pr.name)}">Supprimer</button>`}</span>`).join("")}
-            <button class="btn mini" type="button" data-action="profile-add">+ Ajouter un profil</button></div></div>
+            <button class="btn mini" type="button" data-action="profile-add">+ Ajouter un compte</button></div></div>
         <div class="field"><div class="flabel"><span>Code d'accès à Bulle</span><small>${g.access_pin_set ? "Un code est demandé à l'ouverture (et pour le flux OPDS : mot de passe = ce code)." : "Aucun code : tout le réseau local peut ouvrir Bulle."}</small></div>
           <div class="actions"><button class="btn" type="button" data-action="access-pin-set">${g.access_pin_set ? "Changer le code" : "Définir un code"}</button>${g.access_pin_set ? `<button class="btn" type="button" data-action="access-pin-clear">Supprimer le code</button>` : ""}</div></div>
         ${field("Flux OPDS pour les applis mobiles", chk("g", "opds_enabled", g.opds_enabled), `Adresse à donner à l'appli (Panels, Chunky, Moon+, Mihon…) : <code>${esc(location.origin)}/opds</code>`)}`,
@@ -979,7 +1014,31 @@
     if (quality && quality.job && quality.job.running) pollQuality();
   }
 
+  /* Image de profil : réduite dans le navigateur (96 × 96, recadrée au centre) avant d'être envoyée, pour rester légère. */
+  async function uploadAvatar(file, pid) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(file);
+    try {
+      const im = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = url; });
+      const S = 96, c = document.createElement("canvas"); c.width = S; c.height = S;
+      const side = Math.min(im.naturalWidth, im.naturalHeight), sx = (im.naturalWidth - side) / 2, sy = (im.naturalHeight - side) / 2;
+      c.getContext("2d").drawImage(im, sx, sy, side, side, 0, 0, S, S);
+      let data = c.toDataURL("image/jpeg", 0.82);
+      if (data.length > 60000) data = c.toDataURL("image/jpeg", 0.6);
+      await putJson(`/api/profiles/${pid}`, { avatar: data });
+      await loadSettings(); updateProfileButton(); route(); toast("Vignette enregistrée");
+    } catch (err) { toast(`${ICON.warn} Image non prise en compte : ${esc(err.message || err)}`); }
+    finally { URL.revokeObjectURL(url); }
+  }
   main.addEventListener("change", e => {
+    const fi = e.target.closest("[data-avatar-file]");
+    if (fi) { uploadAvatar(fi.files && fi.files[0], +fi.dataset.avatarFile); return; }
+    const rs = e.target.closest("select[data-role]");
+    if (rs) {
+      putJson(`/api/profiles/${rs.dataset.role}`, { role: rs.value }).then(async () => { toast("Rôle enregistré"); await loadSettings(); updateProfileButton(); route(); })
+        .catch(err => { toast(`${ICON.warn} ${esc(err.message)}`); route(); });
+      return;
+    }
     const el = e.target.closest("[data-key]");
     if (!el) return;
     let val = el.type === "checkbox" ? el.checked : el.value;
@@ -1037,14 +1096,32 @@
         const r = await fetch("/api/covers/rebuild", { method: "POST" });
         if (r.status === 409) toast("Un scan est déjà en cours, réessayez après.");
         else pollScan(true);
+      } else if (action === "logout") {
+        try { await api("/api/profiles/logout", { method: "POST" }); } catch (_) { /* ignore */ }
+        try { localStorage.removeItem("bulle:profile"); } catch (_) { /* ignore */ }
+        location.href = "/";
+      } else if (action === "account-name") {
+        const name = prompt("Votre nom :", btn.dataset.name); if (!name) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, { name }); await loadSettings(); updateProfileButton(); route();
+      } else if (action === "account-pin") {
+        const pin = prompt("Nouveau mot de passe (4 caractères au moins) :"); if (!pin) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, { pin }); toast("Mot de passe enregistré"); await loadSettings(); route();
+      } else if (action === "account-pin-clear") {
+        if (!confirm("Supprimer le mot de passe de ce profil ?")) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, { pin: "" }); await loadSettings(); route();
+      } else if (action === "avatar-text") {
+        const a = prompt("Un emoji ou quelques lettres (8 maxi) :"); if (a === null) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, { avatar: a.trim().slice(0, 8) }); await loadSettings(); updateProfileButton(); route();
+      } else if (action === "avatar-clear") {
+        await putJson(`/api/profiles/${btn.dataset.id}`, { avatar: "" }); await loadSettings(); updateProfileButton(); route();
       } else if (action === "profile-add") {
         const name = prompt("Prénom du nouveau profil :"); if (!name) return;
-        const pin = prompt("Code PIN (laisser vide pour aucun) :") || "";
+        const pin = prompt("Mot de passe (laisser vide pour aucun, 4 caractères au moins) :") || "";
         await api("/api/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, pin }) });
         await loadSettings(); updateProfileButton(); route();
       } else if (action === "profile-edit") {
         const name = prompt("Nom du profil :", btn.dataset.name); if (name === null) return;
-        const pin = prompt("Nouveau code PIN (vide = aucun code) :"); if (pin === null) return;
+        const pin = prompt("Nouveau mot de passe (vide = aucun, 4 caractères au moins) :"); if (pin === null) return;
         await putJson(`/api/profiles/${btn.dataset.id}`, { name, pin });
         await loadSettings(); updateProfileButton(); route();
       } else if (action === "profile-delete") {
@@ -1153,7 +1230,7 @@
           ${p && !p.completed ? `<button class="btn" type="button" data-unread="${it.id}">Effacer la progression</button>` : ""}
           <a class="btn" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
           <button class="btn" type="button" data-recover="${it.id}" title="Relire ce fichier sur le disque : format, taille, pages, couverture (rattrape un raté du scan)">↻ Rescanner ce fichier</button>
-          <button class="btn" type="button" data-ignore="${it.id}" data-name="${esc(it.name)}" title="Enlever cet album de Bulle (le fichier reste sur le disque)">✕ Retirer de Bulle</button>
+          ${isAdmin() ? `<button class="btn" type="button" data-ignore="${it.id}" data-name="${esc(it.name)}" title="Enlever cet album de Bulle (le fichier reste sur le disque)">✕ Retirer de Bulle</button>` : ""}
           ${parent && parent.id ? `<a class="btn" href="#/f/${parent.id}" data-close>Ouvrir le dossier</a>` : ""}
         </div>
         <div class="lists-row" id="sheet-lists" data-id="${it.id}"></div>
@@ -1293,7 +1370,7 @@
   function markTab() {
     const h = location.hash || "#/";
     let m;
-    const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/adult") ? "adult" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
+    const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/activity") ? "activity" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/adult") ? "adult" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
     for (const a of document.querySelectorAll("#maintabs a")) a.classList.toggle("on", a.dataset.tab === tab);
   }
 
@@ -1402,13 +1479,46 @@
       <div class="listgrid">${lists.map(l => `<a class="listcard" href="#/list/${l.kind === "custom" ? l.id : l.kind}" data-drop="${l.kind === "custom" ? l.id : l.kind}"><span class="lic">${icon(l)}</span><span><b>${esc(l.name)}</b><small>${plural(l.count, "élément", "éléments")}</small></span></a>`).join("")}</div>
       <p class="muted" style="margin-top:16px">Les listes et les favoris sont propres à chaque profil. Ajoutez un album depuis sa fiche (« i »), une série depuis le haut de sa page, ou glissez-déposez une vignette sur une liste de la colonne de gauche.</p>`;
   }
+  const fmtDay = ts => ts ? new Date(ts * 1000).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) : "";
+  const fmtDur = sec => { const m = Math.round((sec || 0) / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`; };
   async function viewHistory() {
     setCrumbs([{ id: 0, name: "Accueil" }], "Historique");
     document.title = "Historique — Bulle";
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-    const items = qf(await api("/api/history"));
-    main.innerHTML = `<h1>Historique <small class="muted h1sub">${plural(items.length, "album lu", "albums lus")}, les plus récents d'abord</small></h1>
-      ${items.length ? `<div class="grid" id="grid">${items.map(it => card(it, { sub: `${it.folder}${it.progress && it.progress.updated_at ? " · " + new Date(it.progress.updated_at * 1000).toLocaleDateString("fr-FR") : ""}` })).join("")}</div>` : `<div class="empty">Aucun album terminé pour l'instant.</div>`}`;
+    const [done, reading] = await Promise.all([api("/api/history"), api("/api/history/reading")]);
+    const items = qf(done), cur = qf(reading);
+    const subOf = it => `${it.folder}${it.progress && it.progress.updated_at ? " · " + fmtDay(it.progress.updated_at) : ""}${it.progress && !it.progress.completed && it.pages ? ` · p. ${it.progress.page + 1}/${it.pages}` : ""}`;
+    main.innerHTML = `<h1>Historique <small class="muted h1sub">${plural(cur.length, "album en cours", "albums en cours")} · ${plural(items.length, "terminé", "terminés")}</small> <span class="h1tools"><a class="btn" href="#/activity">Activité</a></span></h1>
+      ${cur.length ? `<h2>En cours</h2><div class="grid">${cur.map(it => card(it, { sub: subOf(it) })).join("")}</div>` : ""}
+      <h2>Terminés <small class="muted">les plus récents d'abord</small></h2>
+      ${items.length ? `<div class="grid" id="grid">${items.map(it => card(it, { sub: subOf(it) })).join("")}</div>` : `<div class="empty">Aucun album terminé pour l'instant.</div>`}`;
+  }
+  async function viewActivity() {
+    setCrumbs([{ id: 0, name: "Accueil" }], "Activité");
+    document.title = "Activité — Bulle";
+    main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    const a = await api("/api/activity");
+    const tile = (n, label, sub = "") => `<div class="stile"><b>${n}</b><span>${label}</span>${sub ? `<small class="muted">${sub}</small>` : ""}</div>`;
+    const maxM = Math.max(1, ...a.months.map(m => m.pages)), maxD = Math.max(1, ...a.days.map(d => d.pages));
+    const monthLabel = m => { const [y, mo] = m.split("-"); return new Date(+y, +mo - 1, 1).toLocaleDateString("fr-FR", { month: "short", year: "2-digit" }); };
+    const bars = (rows, key, max, label, title) => `<div class="bars">${rows.map(r => `<div class="bar" title="${title(r)}"><i style="height:${Math.max(2, Math.round(r[key] / max * 100))}%"></i><span>${label(r)}</span></div>`).join("")}</div>`;
+    main.innerHTML = `<h1>Activité <small class="muted h1sub">vos lectures, d'après les pages tournées dans Bulle</small> <span class="h1tools"><a class="btn" href="#/history">Historique</a></span></h1>
+      <h2>30 derniers jours</h2>
+      <div class="stiles">${tile(a.last30.finished, "albums terminés")}${tile(a.last30.pages, "pages lues")}${tile(fmtDur(a.last30.seconds), "de lecture")}${tile(a.last30.days, "jours avec lecture")}</div>
+      <h2>Par jour <small class="muted">14 derniers jours, pages lues</small></h2>
+      ${bars(a.days, "pages", maxD, d => d.day.slice(8), d => `${d.day} : ${plural(d.pages, "page", "pages")}, ${fmtDur(d.seconds)}${d.finished ? `, ${plural(d.finished, "album terminé", "albums terminés")}` : ""}`)}
+      ${a.months.length ? `<h2>Par mois <small class="muted">pages lues · albums terminés</small></h2>
+      ${bars(a.months, "pages", maxM, m => `${monthLabel(m.month)}${m.finished ? `<em>${m.finished}</em>` : ""}`, m => `${monthLabel(m.month)} : ${plural(m.pages, "page", "pages")}, ${fmtDur(m.seconds)}, ${plural(m.finished, "album terminé", "albums terminés")}, ${plural(m.days, "jour", "jours")} de lecture`)}` : ""}
+      <div class="acols">
+        <section><h2>Séries en cours</h2>${a.series.length ? `<ul class="alist">${a.series.map(sr => `<li><a href="#/f/${sr.id}">${esc(sr.name)}</a><span class="muted">${sr.done || 0}/${sr.album_count} lus · ${plural(sr.reading, "en cours", "en cours")} · ${fmtDay(sr.last_at)}</span></li>`).join("")}</ul>` : `<p class="muted">Aucune série commencée.</p>`}</section>
+        <section><h2>Les plus lus <small class="muted">30 jours, en temps</small></h2>${a.top.length ? `<ul class="alist">${a.top.map(t => `<li><a href="/read/${t.id}">${esc(t.name)}</a><span class="muted">${fmtDur(t.seconds)} · ${plural(t.pages, "page", "pages")}</span></li>`).join("")}</ul>` : `<p class="muted">Rien encore : tournez des pages !</p>`}</section>
+      </div>
+      <h2>Depuis le début</h2>
+      <div class="stiles">${tile(a.total.finished, "albums terminés")}${tile(a.total.pages, "pages lues")}${tile(fmtDur(a.total.seconds), "de lecture")}${tile(a.total.days, "jours avec lecture")}</div>
+      ${a.profiles ? `<h2>Tous les comptes <small class="muted">30 derniers jours</small></h2>
+      <table class="coltable atable"><thead><tr><th>Compte</th><th>Pages</th><th>Temps</th><th>Terminés</th><th>Dernière lecture</th></tr></thead>
+      <tbody>${a.profiles.map(pr => `<tr><td>${avatarHtml(pr, "small")} ${esc(pr.name)}</td><td>${pr.pages}</td><td>${fmtDur(pr.seconds)}</td><td>${pr.finished}</td><td>${pr.last_at ? fmtDay(pr.last_at) : "—"}</td></tr>`).join("")}</tbody></table>` : ""}
+      <p class="muted">Bulle note les pages tournées dans son lecteur (pas celles lues dans une autre appli) ; le temps compte les écarts entre deux pages, plafonnés à 5 minutes.</p>`;
   }
   async function viewRandom() {
     try {
@@ -1715,6 +1825,8 @@
         await viewLists();
       } else if (h.startsWith("#/history")) {
         await viewHistory();
+      } else if (h.startsWith("#/activity")) {
+        await viewActivity();
       } else if (h.startsWith("#/random")) {
         await viewRandom(); return;
       } else {

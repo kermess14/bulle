@@ -26,7 +26,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.16.1"
+VERSION = "0.19.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -294,6 +294,25 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             except (BadSignature, AttributeError, ValueError, TypeError):
                 pass
         return DEFAULT_PROFILE
+
+    def current_role() -> str:
+        """Rôle de la session. Sans profil choisi (pas de cookie), on retombe sur le premier profil, mais ses droits
+        d'administrateur ne valent que si rien ne protège Bulle : ni « qui lit ? » à l'ouverture, ni mot de passe sur
+        ce profil. Sinon il faut s'identifier pour administrer."""
+        p = lib.profile(current_profile())
+        role = (p or {}).get("role") or "reader"
+        if role == "admin" and not profile_selected() and (settings()["require_profile"] or (p or {}).get("pin_hash")):
+            return "reader"
+        return role
+
+    def is_admin() -> bool:
+        return current_role() == "admin"
+
+    def require_admin() -> None:
+        """Actions réservées à l'administrateur : réglages du serveur, scans, profils des autres, rubrique Adulte…
+        Un lecteur peut lire, noter sa progression, gérer ses listes et son propre compte."""
+        if not is_admin():
+            abort(403, description="admin_required")
 
     def profile_selected() -> bool:
         tok = request.cookies.get("bulle_profile")
@@ -688,7 +707,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if not adult_unlocked():
             g.pop("adult_paths", None)
         g["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
-        return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid,
+        return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid, "role": current_role(),
                         "profile_selected": profile_selected(), "profiles": lib.profiles(), "version": VERSION,
                         "library_root": library_root,
                         "quality_profiles": {k: {"quality": v[0], "chroma": v[1]} for k, v in QUALITY_PROFILES.items()}})
@@ -698,6 +717,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         body = request.get_json(force=True, silent=True) or {}
         pid = current_profile()
         if isinstance(body.get("global"), dict):
+            require_admin()
             g = dict(body["global"])
             if "access_pin" in g:
                 pin = str(g.pop("access_pin") or "").strip()
@@ -766,6 +786,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/adult/folder", methods=["PUT"])
     def api_adult_folder():
         """Marque (ou démarque) un dossier comme faisant partie de la rubrique Adulte."""
+        require_admin()
         if adult_pin_hash() and not adult_unlocked():
             abort(403, description="adult_locked")
         body = request.get_json(force=True, silent=True) or {}
@@ -782,6 +803,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_covers_rebuild_folder(folder_id: int):
         """Rescanne une série sur le disque, en tâche de fond : les fichiers ajoutés (ou remis) apparaissent, ceux
         jetés disparaissent, puis les couvertures (et la couleur) de tous ses albums sont refaites."""
+        require_admin()
         folder = get_node(folder_id, "folder")
         if lib.status["running"]:
             return jsonify(lib.status), 409
@@ -812,6 +834,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_covers_page(node_id: int):
         """Choisit la page qui sert de couverture (depuis le lecteur) ; {"page": null} revient à la première page.
         Rien n'est écrit dans le fichier : le choix est gardé dans la base de Bulle."""
+        require_admin()
         node = get_node(node_id, "album")
         body = request.get_json(force=True, silent=True) or {}
         page = body.get("page")
@@ -836,6 +859,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/covers/retry-errors", methods=["POST"])
     def api_covers_retry_errors():
         """Réessaie tous les albums en échec, en tâche de fond (après une correction, ou un disque réseau revenu)."""
+        require_admin()
         if lib.status["running"]:
             return jsonify(lib.status), 409
         todo = [f for f in (lib.refresh_file(n["id"]) for n in lib.albums_without("error IS NOT NULL")) if f]
@@ -884,17 +908,36 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         return jsonify({"profiles": lib.profiles(), "current": current_profile(), "selected": profile_selected(),
                         "require_profile": bool(settings()["require_profile"])})
 
+    def profile_json(p: dict) -> dict:
+        return {"id": p["id"], "name": p["name"], "avatar": p.get("avatar"), "role": p.get("role") or "reader",
+                "has_pin": bool(p.get("pin_hash"))}
+
+    def clean_avatar(val) -> Optional[str]:
+        """Vignette : quelques caractères (emoji, initiales) ou une petite image (data:image/…, ≤ 60 Ko, réduite côté
+        navigateur)."""
+        v = str(val or "").strip()
+        if not v:
+            return None
+        if v.startswith("data:image/"):
+            if len(v) > 60_000 or ";base64," not in v[:40]:
+                abort(400, description="Image de profil trop lourde")
+            return v
+        return v[:8]
+
     @app.route("/api/profiles", methods=["POST"])
     def api_profile_create():
         body = request.get_json(force=True, silent=True) or {}
+        if len(lib.profiles()) > 1 or settings()["require_profile"]:
+            require_admin()   # la toute première création (profil « Moi » seul, sans mire) reste libre
         name = str(body.get("name") or "").strip()[:40]
         if not name:
             abort(400, description="Il faut un nom")
         if len(lib.profiles()) >= 20:
             abort(400, description="Trop de profils")
         pin = str(body.get("pin") or "").strip()
-        p = lib.add_profile(name, hash_pin(pin) if pin else None, str(body.get("avatar") or "")[:8] or None)
-        return jsonify({"id": p["id"], "name": p["name"], "avatar": p.get("avatar"), "has_pin": bool(p.get("pin_hash"))})
+        role = "admin" if body.get("role") == "admin" and is_admin() else "reader"
+        p = lib.add_profile(name, hash_pin(pin) if pin else None, clean_avatar(body.get("avatar")), role)
+        return jsonify(profile_json(p))
 
     @app.route("/api/profiles/<int:pid>", methods=["PUT"])
     def api_profile_update(pid: int):
@@ -902,19 +945,31 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if not p:
             abort(404, description="Profil inconnu")
         body = request.get_json(force=True, silent=True) or {}
+        if pid != current_profile():
+            require_admin()   # son propre compte : libre ; celui des autres : administrateur
         fields = {}
         if "name" in body:
             fields["name"] = str(body["name"] or "").strip()[:40] or p["name"]
         if "avatar" in body:
-            fields["avatar"] = str(body["avatar"] or "")[:8] or None
+            fields["avatar"] = clean_avatar(body["avatar"])
         if "pin" in body:
             pin = str(body["pin"] or "").strip()
+            if pin and len(pin) < 4:
+                abort(400, description="Mot de passe trop court (4 caractères au moins)")
             fields["pin_hash"] = hash_pin(pin) if pin else None
+        if "role" in body:
+            require_admin()
+            role = "admin" if body["role"] == "admin" else "reader"
+            if role != "admin" and p.get("role") == "admin" and \
+                    not lib.conn.execute("SELECT 1 FROM profiles WHERE role='admin' AND id<>?", (pid,)).fetchone():
+                abort(400, description="Il faut garder au moins un administrateur")
+            fields["role"] = role
         p = lib.update_profile(pid, **fields)
-        return jsonify({"id": p["id"], "name": p["name"], "avatar": p.get("avatar"), "has_pin": bool(p.get("pin_hash"))})
+        return jsonify(profile_json(p))
 
     @app.route("/api/profiles/<int:pid>", methods=["DELETE"])
     def api_profile_delete(pid: int):
+        require_admin()
         if pid == DEFAULT_PROFILE:
             abort(400, description="Le premier profil ne peut pas être supprimé")
         if not lib.delete_profile(pid):
@@ -937,8 +992,16 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if p.get("pin_hash") and not check_pin(p["pin_hash"], str(body.get("pin") or "")):
             time.sleep(0.8)
             abort(403, description="Code PIN incorrect")
-        resp = make_response(jsonify({"current": pid, "name": p["name"]}))
+        resp = make_response(jsonify({"current": pid, "name": p["name"], "role": p.get("role") or "reader"}))
         resp.set_cookie("bulle_profile", signer.dumps({"p": pid}), max_age=10 * 365 * 24 * 3600, samesite="Lax")
+        return resp
+
+    @app.route("/api/profiles/logout", methods=["POST"])
+    def api_profile_logout():
+        """Se déconnecter : on revient à l'écran « qui lit ? » (la rubrique Adulte est reverrouillée aussi)."""
+        resp = make_response(jsonify({"ok": True}))
+        resp.delete_cookie("bulle_profile")
+        resp.delete_cookie("bulle_adult")
         return resp
 
     @app.route("/api/cache", methods=["GET"])
@@ -947,11 +1010,13 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/cache/clear", methods=["POST"])
     def api_cache_clear():
+        require_admin()
         n = comics.clear_pages()
         return jsonify({"cleared": n, "cache": comics.cache_size()})
 
     @app.route("/api/covers/rebuild", methods=["POST"])
     def api_covers_rebuild():
+        require_admin()
         if lib.status["running"]:
             return jsonify(lib.status), 409
         comics.clear_covers()
@@ -1019,6 +1084,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_quality_measure():
         """Mesure la taille des pages : {"ids": [...]} ou {"limit": 500} (premiers albums de la bibliothèque) ;
         "remeasure": true pour refaire ceux déjà mesurés. Lecture seule : les fichiers ne sont jamais modifiés."""
+        require_admin()
         if quality_job["running"]:
             return jsonify({"job": quality_job}), 409
         body = request.get_json(silent=True) or {}
@@ -1032,6 +1098,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/quality/stop", methods=["POST"])
     def api_quality_stop():
+        require_admin()
         if quality_job["running"]:
             quality_job["stop"] = True
         return jsonify({"job": quality_job})
@@ -1051,6 +1118,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/scan", methods=["POST"])
     def api_scan_start():
+        require_admin()
         if lib.status["running"]:
             return jsonify(lib.status), 409
         start_scan_thread()
@@ -1060,6 +1128,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/ignore/<int:node_id>", methods=["POST"])
     def api_ignore(node_id: int):
         """Retire un album ou un dossier de Bulle (le fichier reste sur le disque, les scans l'ignorent)."""
+        require_admin()
         node = get_node(node_id)
         if not node.get("path"):
             abort(400, description="La bibliothèque entière ne peut pas être retirée")
@@ -1077,6 +1146,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/ignored", methods=["DELETE"])
     def api_unignore():
         """Remet un chemin retiré ; un scan est lancé pour le faire réapparaître."""
+        require_admin()
         body = request.get_json(force=True, silent=True) or {}
         path = str(body.get("path") or "").strip("/")
         paths = lib.unignore_path(path)
@@ -1090,6 +1160,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_scan_stop():
         """Arrête le scan (la base reste comme avant) ou la génération des couvertures en cours (celles déjà faites
         restent, les autres seront faites à l'ouverture des albums ou au prochain scan)."""
+        require_admin()
         if lib.status["running"]:
             lib.stop_requested.set()
         return jsonify(lib.status)
@@ -1113,6 +1184,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             desc = getattr(e, "description", str(e))
             if desc == "adult_locked":
                 return jsonify({"error": "Rubrique Adulte verrouillée : entrez le code", "adult_locked": True}), 403
+            if desc == "admin_required":
+                return jsonify({"error": "Réservé à l'administrateur de Bulle", "admin_required": True}), 403
             return jsonify({"error": desc}), e.code
         if request.path.startswith("/static/") or request.path.startswith("/opds"):
             return e
@@ -1223,6 +1296,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/history")
     def api_history():
         return jsonify(with_folder(lib.history(current_profile(), limit=request.args.get("n", 60, type=int))))
+
+    @app.route("/api/history/reading")
+    def api_history_reading():
+        return jsonify(with_folder(lib.reading_now(current_profile(), limit=request.args.get("n", 60, type=int))))
+
+    @app.route("/api/activity")
+    def api_activity():
+        """Chiffres de lecture du profil courant ; l'administrateur voit aussi le résumé de tous les comptes."""
+        out = lib.activity(current_profile())
+        if is_admin():
+            out["profiles"] = lib.activity_by_profile(30)
+        return jsonify(out)
 
     @app.route("/api/covers/sample")
     def api_covers_sample():
@@ -1438,6 +1523,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/bdt/analyze/<int:folder_id>", methods=["POST"])
     def api_bdt_analyze(folder_id: int):
+        require_admin()
         bdt_check_enabled()
         folder = get_node(folder_id, "folder")
         body = request.get_json(force=True, silent=True) or {}
@@ -1459,6 +1545,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/bdt/series/<int:folder_id>", methods=["DELETE"])
     def api_bdt_series_delete(folder_id: int):
+        require_admin()
         get_node(folder_id, "folder")
         lib.bdt_series_delete(folder_id)
         return jsonify(None)
@@ -1556,11 +1643,13 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/bdt/batch", methods=["DELETE"])
     def api_bdt_batch_stop():
+        require_admin()
         bdt_job["stop"] = True
         return jsonify(bdt_job)
 
     @app.route("/api/bdt/batch", methods=["POST"])
     def api_bdt_batch_start():
+        require_admin()
         bdt_check_enabled()
         if bdt_job["running"]:
             return jsonify(bdt_job), 409
