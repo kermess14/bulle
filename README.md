@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.16.1)
+# Bulle — lecteur de BD maison (v0.17.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -161,6 +161,8 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   défiler la page), clic sur les bords de l'image, balayage ou tape sur les bords sur mobile ;
   tape / clic au centre pour afficher ou cacher les barres. Molette = page suivante / précédente
   en mode page entière.
+  En case par case, glissez (doigt ou souris) pour recadrer une case mal détectée ou qui déborde : on ne sort pas de
+  la planche, et la case suivante repart d'un cadrage propre ; un balayage vif tourne toujours la page.
   `D` change l'affichage (1 page, 2 pages, défilement), `F` l'ajustement, `M` le sens manga, `P` le plein
   écran, `Début` / `Fin` première / dernière page, `Échap` revient au dossier.
 - Le lecteur retient l'ajustement choisi et le sens de lecture par album (dans le navigateur),
