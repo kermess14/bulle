@@ -1186,3 +1186,8 @@ body:has(#mosaic) .sidebar { background: color-mix(in srgb, var(--bg) 72%, trans
 .qtag.hd { background: #1f6feb; border-color: rgba(255, 255, 255, .55); }
 .qtag.hd.part { background: rgba(31, 111, 235, .72); font-weight: 700; }
 :root[data-skin="bd"] .qtag { border: 2px solid var(--ink); border-radius: 3px; box-shadow: 2px 2px 0 var(--ink); }
+.setsub { margin: 22px 0 6px; font-size: 15px; }
+.qtag.static { position: static; display: inline-block; vertical-align: 1px; }
+.qstats { font-size: 14px; margin-bottom: 6px; }
+.qrun { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13.5px; }
+.qrun .pbar { flex-basis: 100%; }
