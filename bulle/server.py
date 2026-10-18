@@ -26,7 +26,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.23.1"
+VERSION = "0.24.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -628,14 +628,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_page(node_id: int, index: int):
         node = get_node(node_id, "album")
         width = pick_width(request.args.get("w", 1200, type=int))
+        trim = request.args.get("trim") == "1"   # marges blanches rognées (réglage du lecteur), à l'affichage seulement
         try:
-            path, data, mime = comics.page(node, lib.abs_path(node["path"]), index, width)
+            path, data, mime = comics.page(node, lib.abs_path(node["path"]), index, width, trim)
         except AlbumError as e:
             fresh = heal(node)   # fichier renommé ou déplacé pendant la lecture : on le retrouve et on réessaie
             if fresh["path"] == node["path"]:
                 abort(415, description=str(e))
             try:
-                path, data, mime = comics.page(fresh, lib.abs_path(fresh["path"]), index, width)
+                path, data, mime = comics.page(fresh, lib.abs_path(fresh["path"]), index, width, trim)
             except AlbumError as e2:
                 abort(415, description=str(e2))
         resp = send_file(path, mimetype=mime, conditional=True) if path else Response(data, mimetype=mime)
