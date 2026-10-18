@@ -101,6 +101,7 @@
   }
 
   // ---------------------------------------------------------------- largeur d'image demandée au serveur
+  const stepW = w => Math.min(3840, Math.ceil(w / 160) * 160);   // paliers de 160 px : URLs stables, caches réutilisés
   function wantedWidth(n) {
     if (prefs.reader_quality === "original" || (mode === "single" && fit === "original")) return 0;
     const dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -111,29 +112,30 @@
     else if (mode === "double") css = Math.min(vw / 2, vh * asp);
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
     const factor = mode === "panels" ? 2 : prefs.reader_quality === "high" ? 1.5 : 1;   // cases : nettes dès la première image, sans recharger
-    return Math.ceil(css * dpr * factor);
+    return stepW(css * dpr * factor);
   }
   let imgTag = "";
   const pageUrl = n => `/api/page/${id}/${n}?w=${wantedWidth(n)}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
 
   const lowImages = new Map();   // n -> Image à la largeur « page entière » (affichée en attendant la version nette)
-  function loadImageAt(n, w) {
+  function loadImageAt(n, w, lazy) {
     const url = `/api/page/${id}/${n}?w=${w}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
     const cached = lowImages.get(n);
     if (cached && cached.src.endsWith(url)) return cached.decoded;
-    const im = new Image(); im.src = url; im.decoded = waitFor(im, n); lowImages.set(n, im);
+    const im = new Image(); im.fetchPriority = lazy ? "low" : "high"; im.src = url; im.decoded = waitFor(im, n); lowImages.set(n, im);
     return im.decoded;
   }
   function baseWidth(n) {
     const dpr = Math.min(3, window.devicePixelRatio || 1);
     const vw = stage.clientWidth || window.innerWidth, vh = stage.clientHeight || window.innerHeight;
-    return Math.ceil(Math.min(vw, vh * (aspects[n] || 0.7)) * dpr);
+    return stepW(Math.min(vw, vh * (aspects[n] || 0.7)) * dpr);
   }
-  function loadImage(n) {
+  function loadImage(n, lazy) {
     const url = pageUrl(n);
     const cached = images.get(n);
     if (cached && cached.src.endsWith(url)) return cached.decoded || (cached.decoded = waitFor(cached, n));
     const im = new Image();
+    im.fetchPriority = lazy ? "low" : "high";
     im.src = url;
     images.set(n, im);
     im.decoded = waitFor(im, n);
@@ -177,6 +179,7 @@
     hideEnd();
     if (mode === "scroll") { scrollToPage(n, save); return; }
     const token = ++loadToken;
+    clearTimeout(refineTimer);   // l'affinage prévu pour l'ancienne planche ne doit pas écraser la nouvelle
     zoomBounds = null;
     navBusy = true; navSince = Date.now();
     const done = () => { if (token === loadToken) navBusy = false; };
@@ -203,7 +206,13 @@
       const hi = images.get(n);
       const ready = hi && hi.complete && hi.naturalWidth && hi.src.endsWith(pageUrl(n));
       const imageP = ready ? loadImage(n) : loadImageAt(n, baseWidth(n));
-      const [a, data] = await Promise.all([imageP, getPanels(n)]);
+      const panelsP = getPanels(n);
+      const a = await imageP;
+      if (token !== loadToken) return;
+      // les cases arrivent en général avec l'image ; sinon (page jamais vue, NAS chargé) on n'attend que
+      // 350 ms de plus : la planche s'affiche entière, puis glisse sur la première case dès qu'elles arrivent.
+      // Une page sans cases (garde, page blanche, titre) ne paie ainsi jamais la détection.
+      const data = await Promise.race([panelsP, new Promise(res => setTimeout(() => res(null), 350))]);
       if (token !== loadToken) return;
       single.hidden = false; spread.hidden = true;
       img.classList.add("nofx");
@@ -213,9 +222,16 @@
       current = n; shown = list;
       fitImages();
       stage.scrollTop = 0; stage.scrollLeft = 0;
-      const count = data.panels.length;
+      const count = data ? data.panels.length : 0;
       panelIdx = panel === "keep" ? Math.min(panelIdx, count - 1) : panel === "last" ? count - 1 : (prefs.reader_panels_full_first || !count ? -1 : 0);
       applyPanel(false);
+      if (!data) panelsP.then(d => {        // cases arrivées après coup : on glisse sur la bonne case
+        if (token !== loadToken || current !== n) return;
+        const c2 = d.panels.length;
+        if (c2 && panelIdx < 0 && !prefs.reader_panels_full_first) { panelIdx = panel === "last" ? c2 - 1 : 0; applyPanel(true); }
+        updateCounter();
+        drainStep();
+      });
       if (!ready && a) loadImage(n).then(full => { if (token === loadToken && current === n && full && full.src !== img.src) img.src = full.src; });
       updateCounter();
       done();
@@ -249,16 +265,16 @@
     let extra = "";
     if (mode === "panels") {
       const d = panelsCache.get(current);
-      if (d && d.panels.length) extra = panelIdx < 0 ? ` · ${d.panels.length} cases` : ` · case ${panelIdx + 1}/${d.panels.length}`;
+      if (d && d.panels instanceof Array && d.panels.length) extra = panelIdx < 0 ? ` · ${d.panels.length} cases` : ` · case ${panelIdx + 1}/${d.panels.length}`;
     }
     countEl.textContent = `${label} / ${pages}${extra}`;
     slider.value = current + 1;
   }
 
   // ---------------------------------------------------------------- case par case
-  async function getPanels(n) {
+  async function getPanels(n, lazy) {
     if (panelsCache.has(n)) return panelsCache.get(n);
-    const p = fetch(`/api/panels/${id}/${n}`).then(r => r.ok ? r.json() : { panels: [], rtl: [] }).catch(() => ({ panels: [], rtl: [] }));
+    const p = fetch(`/api/panels/${id}/${n}`, { priority: lazy ? "low" : "high" }).then(r => r.ok ? r.json() : { panels: [], rtl: [] }).catch(() => ({ panels: [], rtl: [] }));
     panelsCache.set(n, p);
     const d = await p;
     panelsCache.set(n, d);
@@ -347,6 +363,7 @@
   }
   async function panelStep(dir) {
     const d = panelsCache.get(current);
+    if (d && typeof d.then === "function") { queueStep(dir); return; }   // cases pas encore connues : pas gardé
     const count = d && d.panels instanceof Array ? d.panels.length : 0;
     if (dir > 0) {
       if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); drainStep(); return; }
@@ -360,15 +377,18 @@
   }
   function preloadAround(n) {
     const count = Math.max(0, Math.min(10, +prefs.reader_preload || 0));
-    for (let k = 1; k <= count; k++) if (n + k < pages) loadImage(n + k);
-    if (n - 1 >= 0) loadImage(n - 1);
     for (const k of [...images.keys()]) if (Math.abs(k - n) > count + 4) images.delete(k);
     for (const k of [...lowImages.keys()]) if (Math.abs(k - n) > count + 4) lowImages.delete(k);
+    // tout le spéculatif est en priorité réseau basse : le navigateur n'a que 6 connexions par hôte,
+    // la planche qu'on demande vraiment garde la voie libre
     if (mode === "panels") {
-      for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) { const m = n + k; loadImageAt(m, baseWidth(m)).then(() => getPanels(m)); }
-      if (n - 1 >= 0) { const m = n - 1; loadImageAt(m, baseWidth(m)).then(() => getPanels(m)); }
-      if (n + 1 < pages) loadImage(n + 1);   // version nette de la planche suivante, pour un échange sans rechargement
+      for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) { const m = n + k; loadImageAt(m, baseWidth(m), true); getPanels(m, true); }
+      if (n - 1 >= 0) { const m = n - 1; loadImageAt(m, baseWidth(m), true); getPanels(m, true); }
+      if (n + 1 < pages) loadImage(n + 1, true);   // la version nette de la suivante seulement : le plein format ×2 est lourd
+      return;
     }
+    for (let k = 1; k <= count; k++) if (n + k < pages) loadImage(n + k, true);
+    if (n - 1 >= 0) loadImage(n - 1, true);
   }
   async function next() {
     if (mode === "scroll") { scrollStep(1); return; }
@@ -661,6 +681,7 @@
   function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, mode === "panels" && userZoom === 1 ? 700 : 320); }
   async function refineZoom() {
     if (refining) { refineAgain = true; return; }
+    if (navBusy) { scheduleRefine(); return; }   // une planche arrive : on affinera celle-là, plus tard
     const effective = userZoom * (mode === "panels" && panelIdx >= 0 ? panelScale : 1);
     if (effective <= 1.15 || mode === "scroll" || prefs.reader_quality === "original") return;
     const token = loadToken;
@@ -676,7 +697,7 @@
         const w = ladder.find(x => x >= want) || ladder[ladder.length - 1];
         if (el.naturalWidth >= w) continue;
         const better = await loadImageAt(n, w);
-        if (token !== loadToken || !better) return;
+        if (token !== loadToken || !better || !shown.includes(n)) return;   // la page a changé entre-temps
         if (better.naturalWidth > el.naturalWidth) { el.src = better.src; zoomBounds = null; }
       }
     } finally {
