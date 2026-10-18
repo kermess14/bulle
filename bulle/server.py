@@ -26,7 +26,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.18.0"
+VERSION = "0.19.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -1296,6 +1296,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/history")
     def api_history():
         return jsonify(with_folder(lib.history(current_profile(), limit=request.args.get("n", 60, type=int))))
+
+    @app.route("/api/history/reading")
+    def api_history_reading():
+        return jsonify(with_folder(lib.reading_now(current_profile(), limit=request.args.get("n", 60, type=int))))
+
+    @app.route("/api/activity")
+    def api_activity():
+        """Chiffres de lecture du profil courant ; l'administrateur voit aussi le résumé de tous les comptes."""
+        out = lib.activity(current_profile())
+        if is_admin():
+            out["profiles"] = lib.activity_by_profile(30)
+        return jsonify(out)
 
     @app.route("/api/covers/sample")
     def api_covers_sample():

@@ -139,8 +139,20 @@ CREATE TABLE IF NOT EXISTS panels(
   data    TEXT NOT NULL,
   PRIMARY KEY(node_id, page)
 );
+CREATE TABLE IF NOT EXISTS reading_log(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  node_id    INTEGER NOT NULL,
+  day        TEXT NOT NULL,
+  pages      INTEGER NOT NULL DEFAULT 0,
+  seconds    INTEGER NOT NULL DEFAULT 0,
+  finished   INTEGER NOT NULL DEFAULT 0,
+  first_at   REAL NOT NULL,
+  last_at    REAL NOT NULL,
+  PRIMARY KEY(profile_id, node_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_rlog_profile_day ON reading_log(profile_id, day);
 """
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 DEFAULT_PROFILE = 1
 
 
@@ -737,14 +749,87 @@ class Library:
             page = min(page, page_count - 1)
         if completed is None:
             completed = self.is_complete(page, page_count, threshold)
+        before = self.progress(node_id, profile_id)
+        now = time.time()
         with self._write_lock:
             self.conn.execute(
                 "INSERT INTO progress(profile_id, node_id, page, page_count, completed, updated_at) "
                 "VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id, node_id) DO UPDATE SET page=excluded.page, "
                 "page_count=excluded.page_count, completed=excluded.completed, updated_at=excluded.updated_at",
-                (profile_id, node_id, page, page_count, 1 if completed else 0, time.time()))
+                (profile_id, node_id, page, page_count, 1 if completed else 0, now))
+            self._log_reading(profile_id, node_id, before, page, completed, now)
             self.conn.commit()
         return self.progress(node_id, profile_id)
+
+    # -- journal de lecture (pour l'historique et la page Activité) -----------------
+    LOG_GAP = 300   # au-delà de 5 minutes sans tourner de page, on considère que la lecture s'était arrêtée
+
+    def _log_reading(self, profile_id: int, node_id: int, before: Optional[dict], page: int, completed: bool,
+                     now: float) -> None:
+        """Une ligne par profil, album et jour : pages tournées, temps passé (somme des écarts entre deux pages, chacun
+        plafonné à 5 min), et si l'album a été terminé ce jour-là. Un saut (barre de progression, reprise) ne compte pas
+        comme des pages lues."""
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        delta = 0 if before is None else abs(page - int(before["page"]))
+        pages = delta if 0 < delta <= 5 else 0
+        last = float(before["updated_at"]) if before else 0
+        seconds = int(min(self.LOG_GAP, now - last)) if last and pages else 0
+        finished = 1 if completed and not (before and before["completed"]) else 0
+        self.conn.execute(
+            "INSERT INTO reading_log(profile_id, node_id, day, pages, seconds, finished, first_at, last_at) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(profile_id, node_id, day) DO UPDATE SET pages=pages+excluded.pages, "
+            "seconds=seconds+excluded.seconds, finished=MAX(finished, excluded.finished), last_at=excluded.last_at",
+            (profile_id, node_id, day, pages, seconds, finished, now, now))
+
+    def reading_now(self, profile_id: int, limit: int = 60) -> list[dict]:
+        """Albums en cours (progression sans être terminés), les plus récents d'abord."""
+        rows = self.conn.execute(
+            self._ALBUM_WITH_PROGRESS + "WHERE p.completed=0 ORDER BY p.updated_at DESC LIMIT ?",
+            (profile_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def activity(self, profile_id: int, months: int = 12) -> dict:
+        """Chiffres de la page Activité pour un profil : totaux, par mois, 14 derniers jours, séries en cours."""
+        c = self.conn
+        tot = c.execute("SELECT COALESCE(SUM(pages),0) AS pages, COALESCE(SUM(seconds),0) AS seconds, "
+                        "COALESCE(SUM(finished),0) AS finished, COUNT(DISTINCT day) AS days FROM reading_log WHERE profile_id=?",
+                        (profile_id,)).fetchone()
+        since30 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 30 * 86400))
+        last30 = c.execute("SELECT COALESCE(SUM(pages),0) AS pages, COALESCE(SUM(seconds),0) AS seconds, "
+                           "COALESCE(SUM(finished),0) AS finished, COUNT(DISTINCT day) AS days FROM reading_log "
+                           "WHERE profile_id=? AND day>=?", (profile_id, since30)).fetchone()
+        by_month = [dict(r) for r in c.execute(
+            "SELECT substr(day,1,7) AS month, SUM(pages) AS pages, SUM(seconds) AS seconds, SUM(finished) AS finished, "
+            "COUNT(DISTINCT day) AS days FROM reading_log WHERE profile_id=? GROUP BY month ORDER BY month DESC LIMIT ?",
+            (profile_id, months))][::-1]
+        since14 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 13 * 86400))
+        by_day = {r["day"]: dict(r) for r in c.execute(
+            "SELECT day, SUM(pages) AS pages, SUM(seconds) AS seconds, SUM(finished) AS finished FROM reading_log "
+            "WHERE profile_id=? AND day>=? GROUP BY day", (profile_id, since14))}
+        days = []
+        for i in range(13, -1, -1):
+            d = time.strftime("%Y-%m-%d", time.localtime(time.time() - i * 86400))
+            days.append(dict(by_day.get(d) or {"day": d, "pages": 0, "seconds": 0, "finished": 0}))
+        # séries en cours : dossier parent des albums commencés mais pas terminés
+        series = [dict(r) for r in c.execute(
+            "SELECT f.id, f.name, f.album_count, COUNT(*) AS reading, MAX(p.updated_at) AS last_at, "
+            "SUM(CASE WHEN q.completed=1 THEN 1 ELSE 0 END) AS done "
+            "FROM progress p JOIN nodes n ON n.id=p.node_id JOIN nodes f ON f.id=n.parent_id "
+            "LEFT JOIN progress q ON q.profile_id=p.profile_id AND q.node_id IN (SELECT id FROM nodes WHERE parent_id=f.id) "
+            "WHERE p.profile_id=? AND p.completed=0 AND f.path<>'' GROUP BY f.id ORDER BY last_at DESC LIMIT 12",
+            (profile_id,))]
+        # albums les plus lus (temps) sur 30 jours
+        top = [dict(r) for r in c.execute(
+            "SELECT n.id, n.name, SUM(l.seconds) AS seconds, SUM(l.pages) AS pages FROM reading_log l JOIN nodes n ON n.id=l.node_id "
+            "WHERE l.profile_id=? AND l.day>=? GROUP BY n.id ORDER BY seconds DESC LIMIT 5", (profile_id, since30))]
+        return {"total": dict(tot), "last30": dict(last30), "months": by_month, "days": days, "series": series, "top": top}
+
+    def activity_by_profile(self, days: int = 30) -> list[dict]:
+        since = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
+        return [dict(r) for r in self.conn.execute(
+            "SELECT pr.id, pr.name, pr.avatar, COALESCE(SUM(l.pages),0) AS pages, COALESCE(SUM(l.seconds),0) AS seconds, "
+            "COALESCE(SUM(l.finished),0) AS finished, MAX(l.last_at) AS last_at FROM profiles pr "
+            "LEFT JOIN reading_log l ON l.profile_id=pr.id AND l.day>=? GROUP BY pr.id ORDER BY pr.id", (since,))]
 
     def clear_progress(self, node_id: int, profile_id: int = DEFAULT_PROFILE) -> None:
         with self._write_lock:
