@@ -180,7 +180,7 @@
     remember_folder: false,
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
-    reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
+    reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false, reader_trim: false,
     bdt_ghosts: true, bdt_titles: false, quality: "all",
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
@@ -1306,6 +1306,7 @@
         ${field("Affichage par défaut", sel("p", "reader_mode", [["single", "Une page"], ["double", "Deux pages (double page)"], ["scroll", "Défilement continu"], ["panels", "Case par case"]], p.reader_mode), "Touche D dans le lecteur pour changer.")}
         ${field("Double page : couverture seule", chk("p", "reader_cover_alone", p.reader_cover_alone), "Les planches larges (paysage) sont toujours affichées seules.")}
         ${field("Case par case : montrer la page entière avant les cases", chk("p", "reader_panels_full_first", p.reader_panels_full_first), "Désactivé : après la dernière case, on enchaîne directement sur la première case de la planche suivante. Touche C dans le lecteur ; une planche sans cases reconnues s'affiche entière.")}
+        ${field("Rogner les marges blanches", chk("p", "reader_trim", p.reader_trim), "Le tour blanc des pages est coupé à l'affichage, pour une planche plus grande à l'écran (une page, double page, défilement). Les fichiers ne sont jamais modifiés ; une page blanche ou un dessin à fond perdu restent entiers. Touche R dans le lecteur.")}
         ${field("Défilement continu : largeur", sel("p", "reader_scroll_width", [[100, "Toute la largeur"], [80, "80 %"], [60, "60 %"], [45, "45 %"]], p.reader_scroll_width))}
         ${field("Ajustement par défaut (une page)", sel("p", "reader_fit", [["page", "Page entière"], ["width", "Pleine largeur"], ["original", "Taille d'origine"]], p.reader_fit))}
         ${field("Sens manga par défaut", chk("p", "reader_manga", p.reader_manga), "Lecture de droite à gauche.")}

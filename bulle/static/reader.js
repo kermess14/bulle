@@ -19,6 +19,7 @@
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
+    reader_trim: false,
   };
   const prefs = Object.assign({}, DEFAULTS);
   function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
@@ -115,11 +116,13 @@
     return stepW(css * dpr * factor);
   }
   let imgTag = "";
-  const pageUrl = n => `/api/page/${id}/${n}?w=${wantedWidth(n)}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
+  // marges blanches rognées (réglage) : pas en case par case, où les cases sont repérées sur la page entière
+  const trimQ = () => (prefs.reader_trim && mode !== "panels" ? "&trim=1" : "");
+  const pageUrl = n => `/api/page/${id}/${n}?w=${wantedWidth(n)}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}${trimQ()}`;
 
   const lowImages = new Map();   // n -> Image à la largeur « page entière » (affichée en attendant la version nette)
   function loadImageAt(n, w, lazy) {
-    const url = `/api/page/${id}/${n}?w=${w}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
+    const url = `/api/page/${id}/${n}?w=${w}&v=${item.mtime}&t=${encodeURIComponent(imgTag)}${trimQ()}`;
     const cached = lowImages.get(n);
     if (cached && cached.src.endsWith(url)) return cached.decoded;
     const im = new Image(); im.fetchPriority = lazy ? "low" : "high"; im.src = url; im.decoded = waitFor(im, n); lowImages.set(n, im);
@@ -569,6 +572,17 @@
     spread.classList.toggle("rtl", manga);
     if (announce) flash(manga ? "Sens manga : lecture de droite à gauche" : "Sens occidental : lecture de gauche à droite");
   }
+  // R : rogner (ou non) les marges blanches ; mémorisé dans le profil, comme la case des réglages
+  function toggleTrim() {
+    prefs.reader_trim = !prefs.reader_trim;
+    flash((prefs.reader_trim ? "Marges blanches rognées" : "Pages entières (marges gardées)") + (mode === "panels" ? " — s'applique hors case par case" : ""));
+    fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: { reader_trim: prefs.reader_trim } }) }).catch(() => {});
+    try { const p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); p.reader_trim = prefs.reader_trim; localStorage.setItem("bulle:profile", JSON.stringify(p)); } catch (_) { /* ignore */ }
+    images.clear(); lowImages.clear();
+    if (mode === "scroll") {
+      for (const im of scrollEl.querySelectorAll("img[src]")) im.src = pageUrl(+im.dataset.n);
+    } else if (mode !== "panels") go(current, { save: false });
+  }
   function toggleManga() { manga = !manga; applyManga(); saveAlbumMemory(); if (mode === "panels") applyPanel(true); }
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -908,6 +922,7 @@
       case "d": case "D": cycleMode(); break;
       case "c": case "C": togglePanels(); break;
       case "m": case "M": toggleManga(); break;
+      case "r": case "R": toggleTrim(); break;
       case "p": case "P": toggleFullscreen(); break;
       case "Escape": if (!strip.hidden) closeStrip(); else if (userZoom > 1) resetZoom(); else if (!endEl.hidden) hideEnd(); else if (document.fullscreenElement) document.exitFullscreen(); else location.href = folderHref; break;
       case "+": case "=": setZoom(userZoom * 1.25); break;
