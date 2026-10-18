@@ -608,8 +608,13 @@
       ? `<span class="cur">${esc(c.name)}</span>`
       : `<a href="${i === 0 ? "#/" : "#/f/" + c.id}">${esc(c.name)}</a>`);
     if (tail) parts.push(`<span class="cur">${esc(tail)}</span>`);
-    crumbsEl.innerHTML = parts.join(`<span class="sep">›</span>`);
+    // bouton « retour » devant le fil d'Ariane, dès qu'on n'est pas à l'accueil : sur tablette et téléphone, il n'y a
+    // ni touche Échap ni forcément de bouton « précédent » (Bulle installé sur l'écran d'accueil)
+    const back = list.length > 1 || tail ? `<button class="iconbtn crumb-back" type="button" data-crumb-back title="Retour (Échap)" aria-label="Retour">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>` : "";
+    crumbsEl.innerHTML = back + parts.join(`<span class="sep">›</span>`);
   }
+  crumbsEl.addEventListener("click", e => { if (e.target.closest("[data-crumb-back]")) { e.preventDefault(); escapeBack(); } });
 
   function renderEmpty(scan) {
     setCrumbs([]);
