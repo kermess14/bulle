@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.29.2)
+# Bulle — lecteur de BD maison (v0.29.3)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,22 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Télécharger des séries** : clic droit sur une série ou un album ›
+  « Ajouter aux téléchargements » : un « +1 » s'envole et le compteur du bouton de téléchargement, en haut, augmente.
+  Ce bouton ouvre le panier (liste, taille totale, « retirer ») ; « Tout télécharger » donne **un seul .zip**, chaque série
+  dans son dossier, les fichiers tels quels (rien n'est recompressé ni modifié ; le .zip se fabrique au fil du
+  téléchargement, sans fichier temporaire sur le serveur). Le même menu propose « Télécharger la série (.zip) » tout de
+  suite. Le panier est gardé dans le navigateur ; un élément disparu depuis (renommé, supprimé) est simplement ignoré.
+- **Zoom −** : boutons loupe − / + dans la barre du lecteur (et touches `-` / `+`). En dessous de 100 %, on dézoome
+  jusqu'à voir la page entière, centrée (pratique en mode « Largeur ») ; un cran s'arrête à 100 % en passant. En case
+  par case, le zoom − s'arrête à la case entière. Dans la bibliothèque, « Pochettes − / + » au-dessus de chaque grille
+  change la taille des couvertures (même réglage que dans Réglages).
+- **Pochette au survol** des propositions Bédéthèque (choix de la série, recherche album par album) : on voit la
+  couverture avant de choisir. Bulle ne télécharge pas l'image : il donne son adresse au navigateur, qui l'affiche
+  comme sur le site ; pour une série, la page de la série est lue une fois (au rythme prudent, puis gardée en cache).
+- Scan : un nouveau dossier n'est plus compté comme un album ajouté (« 3 nouveaux albums (1 nouvelle série) » au lieu de
+  « 4 nouveaux »), et les albums retirés ne comptent plus les dossiers disparus. Le panneau Bédéthèque d'un dossier
+  pas encore analysé tient de nouveau sur une ligne.
 - Habillages : Bande dessinée, Sobre, Bling-bling, Girly, Aquarium (bulles qui gonflent et éclatent au hasard, avec un
   petit « blop » grave et étouffé, synthétisé ; bouton haut-parleur pour couper le son, mémorisé sur l'appareil), Nuit étoilée (bleu nuit
   qui passe lentement du clair au foncé), Fanzine (papier, deux encres risographie, surligneur, scotch, tampons).
