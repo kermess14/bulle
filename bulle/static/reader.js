@@ -19,7 +19,7 @@
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
-    reader_trim: false, reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 0,
+    reader_trim: false, reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 100,
   };
   const prefs = Object.assign({}, DEFAULTS);
   function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
@@ -34,7 +34,7 @@
     body.classList.add("bg-" + (prefs.reader_bg || "black"));
     body.style.setProperty("--night", String((+prefs.reader_night || 0) / 100));
     body.classList.toggle("night", (+prefs.reader_night || 0) > 0);
-    body.style.setProperty("--dim", String(Math.max(0, Math.min(90, +prefs.reader_panels_dim || 0)) / 100));
+    body.style.setProperty("--dim", String(Math.max(0, Math.min(100, +prefs.reader_panels_dim || 0)) / 100));
     body.style.setProperty("--scroll-w", String(Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100))) + "%");
   }
   function loadAlbumMemory() {
@@ -357,8 +357,11 @@
   const dimEl = $("#dim");
   function placeDim(x0, y0, w, h) {
     if (!(+prefs.reader_panels_dim > 0)) { dimEl.hidden = true; return; }
+    // recadrage à la main (case mal détectée) : le masque s'efface, on voit la planche autour
+    dimEl.classList.toggle("loose", !!(panelOff.x || panelOff.y));
     const f = v => v.toFixed(1) + "px";
-    dimEl.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, ${f(x0)} ${f(y0)}, ${f(x0 + w)} ${f(y0)}, ${f(x0 + w)} ${f(y0 + h)}, ${f(x0)} ${f(y0 + h)})`;
+    // contour extérieur, puis aller-retour par le même segment jusqu'au trou : pas de pointe parasite entre les deux
+    dimEl.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${f(x0)} ${f(y0)}, ${f(x0)} ${f(y0 + h)}, ${f(x0 + w)} ${f(y0 + h)}, ${f(x0 + w)} ${f(y0)}, ${f(x0)} ${f(y0)})`;
     dimEl.hidden = false;
   }
   const fxOff = on => { img.classList.toggle("nofx", on); dimEl.classList.toggle("nofx", on); };
@@ -408,9 +411,12 @@
     if (!panelFrame) return;
     const { tx, ty, s, ix, iy, iw, ih, vw, vh } = panelFrame;
     const x0 = ix + tx, x1 = x0 + iw * s, y0 = iy + ty, y1 = y0 + ih * s;
-    // planche plus large que l'écran : pas de vide sur les côtés ; plus étroite : pas de déplacement horizontal (idem en hauteur)
-    panelOff.x = x1 - x0 <= vw ? 0 : Math.min(-x0, Math.max(vw - x1, panelOff.x));
-    panelOff.y = y1 - y0 <= vh ? 0 : Math.min(-y0, Math.max(vh - y1, panelOff.y));
+    // La case est toujours centrée, même au bord de la planche (avant, la planche était recalée contre le bord de l'écran :
+    // la première case d'une rangée n'était pas centrée et ses voisines restaient à l'écran). Recadrage à la main : on peut
+    // aller voir plus de planche, pas faire apparaître plus de vide qu'au départ (idem en hauteur).
+    const range = (lo, hi, view, off) => (hi - lo <= view ? 0 : Math.max(Math.min(0, view - hi), Math.min(Math.max(0, -lo), off)));
+    panelOff.x = range(x0, x1, vw, panelOff.x);
+    panelOff.y = range(y0, y1, vh, panelOff.y);
   }
   function placePanel() {
     if (!panelFrame) return;

@@ -11,6 +11,16 @@ Deux détecteurs complémentaires, sans réseau de neurones ni dépendance :
 
 Le résultat du premier est affiné par le second. Une pleine page, un fond sans gouttière ni cadre ou
 une mise en page très libre donnent « pas de case » : le lecteur montre alors la page entière.
+
+Version 6, mise au point sur 74 planches réelles de 52 albums de styles variés (franco-belge, manga, roman graphique,
+comics, noir et blanc, aquarelle) :
+- gouttière « barrée » par une bulle ou un cartouche à cheval sur deux cases : acceptée si ses bords sont ceux de cases
+  (rectilignes, du dessin juste au-dessus et juste au-dessous) et si ce qui la barre est petit et au milieu (une grande
+  case sur deux rangées qui la traverse n'est pas une bulle) ;
+- cases « posées » sur le fond (bords nets avec le blanc sur les quatre côtés) : trouvées même quand une case voisine
+  déborde jusqu'au bord de la page ; elles sont alors effacées et le reste est redécoupé, ce qui fait apparaître la
+  grande image de fond (avec cases incrustées) comme une case à part entière ;
+- une légende sous une case ou une ligne de crédits (bande mince et surtout claire) n'est pas une case.
 """
 from __future__ import annotations
 
@@ -19,10 +29,14 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-PANELS_VERSION = 5        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 6        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
+PARTIAL_GUTTER = 0.55     # gouttière « barrée » (bulle, cartouche ou décor qui déborde dessus) : lignes candidates…
+PARTIAL_MIN = 0.6         # … part de fond minimale sur toute l'épaisseur…
+PARTIAL_MAX = 0.05        # … épaisseur maximale (fraction de la longueur coupée)…
+EDGE_ALIGN = 0.8          # … et part de ses colonnes de fond bordées de dessin des deux côtés (bords de cases rectilignes)
 BG_TOLERANCE = 46         # écart de gris toléré autour de la couleur de fond
 MIN_GUTTER = 0.003        # largeur minimale d'une gouttière (fraction du grand côté, au moins 2 px)
 MIN_PANEL = 0.055         # côté minimal d'une case (fraction de la dimension de la page)
@@ -105,12 +119,112 @@ def _trim(mask: Image.Image, box: tuple) -> Optional[tuple]:
     return (x0 + left, box[1], x0 + right, box[3])
 
 
+def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, blockers: bool = False):
+    """Bande [a, b) d'une zone (axis=0 : lignes) : part des colonnes entièrement « fond » dans la bande, et parmi elles,
+    part de celles qui ont du dessin juste avant et juste après la bande (à 4 px près). Une vraie gouttière est bordée
+    par les bords des cases sur toute sa longueur ; un blanc à l'intérieur d'une case (ciel, intérieur d'un cartouche)
+    ne l'est pas."""
+    region = mask.crop(box)
+    if axis == 1:
+        region = region.transpose(Image.Transpose.TRANSPOSE)
+    w, h = region.size
+    if w == 0 or b <= a:
+        return 0.0, 0.0, 0.0
+    data = region.tobytes()
+    band = [255] * w
+    for y in range(a, b):
+        row = data[y * w:(y + 1) * w]
+        band = [min(p, q) for p, q in zip(band, row)]
+    def content(rows: range) -> list[bool]:
+        out = [False] * w
+        for y in rows:
+            if 0 <= y < h:
+                row = data[y * w:(y + 1) * w]
+                out = [o or v == 0 for o, v in zip(out, row)]
+        return out
+    above, below = content(range(a - 4, a)), content(range(b, b + 4))
+    cols = [i for i in range(w) if band[i] == 255]
+    if not cols:
+        return (0.0, 0.0, 0.0, False) if blockers else (0.0, 0.0, 0.0)
+    ratios = (len(cols) / w, sum(above[i] for i in cols) / len(cols), sum(below[i] for i in cols) / len(cols))
+    if not blockers:
+        return ratios
+    # ce qui barre la gouttière doit être une bulle ou un cartouche : au milieu, et court. Un obstacle qui touche un bout
+    # de la bande est une case qui la traverse (grande case sur deux rangées) : alors ce n'est pas une gouttière.
+    end = max(2, round(0.03 * w))
+    ok, i = True, 0
+    big = 0
+    while i < w:
+        if band[i] != 255:
+            j = i
+            while j < w and band[j] != 255:
+                j += 1
+            at_end = i < end or j > w - end
+            big += (j - i) > 0.1 * w
+            if j - i > (0.12 if at_end else 0.25) * w or big > 1:   # deux gros obstacles : des cases qui traversent
+                ok = False
+                break
+            i = j
+        else:
+            i += 1
+    return ratios + (ok,)
+
+
+def _text_strip(mask: Image.Image, box: tuple, axis: int, a: int, b: int, length: int) -> bool:
+    """La bande de part ou d'autre d'une gouttière barrée est-elle une ligne de texte (légende sous une case, crédits) ?
+    Mince et surtout claire : alors ce n'est pas une case, on ne coupe pas."""
+    from PIL import ImageStat
+    x0, y0, x1, y1 = box
+    thin = max(6, round(0.12 * length))
+    for lo, hi in ((max(0, a - thin), a), (b, min(length, b + thin))):
+        side = (x0, y0 + lo, x1, y0 + hi) if axis == 0 else (x0 + lo, y0, x0 + hi, y1)
+        whole = (lo == 0 or hi == length)
+        if whole and ImageStat.Stat(mask.crop(side)).mean[0] >= 0.55 * 255:
+            return True
+    return False
+
+
 def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: int) -> list[tuple]:
-    """Découpe la zone selon les gouttières traversantes (axis=0 : coupes horizontales)."""
+    """Découpe la zone selon les gouttières traversantes (axis=0 : coupes horizontales). Une gouttière peut être
+    « barrée » par une bulle ou un cartouche à cheval sur deux cases, si ses bords sont ceux de cases (rectilignes) ;
+    une bande blanche bordée de blanc d'un côté (ciel) n'est pas une gouttière."""
     x0, y0, x1, y1 = box
     prof = _profile(mask, box, axis)
     length = len(prof)
-    cuts = [(a, b) for a, b in _runs(prof) if b - a >= min_gutter and a > 0 and b < length]
+    cuts = []
+    runs, start = [], None
+    for i, v in enumerate(prof + [0.0]):
+        if v >= PARTIAL_GUTTER:
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append((start, i)); start = None
+    for a, b in runs:
+        if b - a < min_gutter or a == 0 or b >= length:
+            continue
+        # la plus longue suite de lignes franches (≥ 96,5 % de fond) dans la bande
+        sa = sb = None
+        i = a
+        while i < b:
+            if prof[i] >= GUTTER_FRACTION:
+                j = i
+                while j < b and prof[j] >= GUTTER_FRACTION:
+                    j += 1
+                if sa is None or j - i > sb - sa:
+                    sa, sb = i, j
+                i = j
+            else:
+                i += 1
+        if sa is not None and sb - sa >= min_gutter:
+            cuts.append((sa, sb))
+            continue
+        if b - a > max(min_gutter, PARTIAL_MAX * length):
+            continue
+        frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, a, b, blockers=True)
+        if frac >= PARTIAL_MIN and up >= EDGE_ALIGN and down >= EDGE_ALIGN and blocked_ok:
+            if _text_strip(mask, box, axis, a, b, length):
+                continue
+            cuts.append((a, b))
     if not cuts:
         return [box]
     parts, pos = [], 0
@@ -379,6 +493,22 @@ def detect_frames(gray: Image.Image, bg_mask: Optional[Image.Image] = None) -> l
     return _rects_from_edges(hl, hl, vl, vl, w, h)
 
 
+def detect_boxes(mask: Image.Image) -> list[tuple]:
+    """Cases « posées » sur le fond : rectangles de dessin dont les quatre côtés sont des bords nets avec le fond (blanc ou
+    noir). Contrairement aux gouttières, ça ne demande pas que la séparation traverse toute la planche : une case bien
+    entourée de blanc est trouvée même si sa voisine déborde jusqu'au bord de la page ou chevauche une autre case."""
+    content = mask.point([255 if i < 128 else 0 for i in range(256)], "L")
+    w, h = content.size
+    top, bottom = _edges(content)
+    left, right = _edges(content.transpose(Image.Transpose.TRANSPOSE))
+    min_h, min_v = max(8, int(FRAME_MIN_LEN * w)), max(8, int(FRAME_MIN_LEN * h * 0.7))
+    rects = _rects_from_edges(_edge_segments(top, w, h, min_h), _edge_segments(bottom, w, h, min_h),
+                              _edge_segments(left, h, w, min_v), _edge_segments(right, h, w, min_v), w, h)
+    # une case est surtout du dessin ; un cartouche ou une bulle (intérieur clair, couleur du fond) n'en est pas une
+    from PIL import ImageStat
+    return [r for r in rects if ImageStat.Stat(mask.crop(r)).mean[0] <= 0.45 * 255]
+
+
 # ----------------------------------------------------------------------------
 # 3. Combinaison
 # ----------------------------------------------------------------------------
@@ -412,9 +542,13 @@ def _reading_order(rects: list[tuple], rtl: bool) -> list[tuple]:
     return out
 
 
-def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool) -> list[tuple]:
-    """Une zone issue des gouttières, redécoupée d'après les cadres qu'elle contient (cases incrustées).
-    `frames` : liste de cadres, ou fonction qui la calcule (appelée seulement pour une grande zone)."""
+def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[Image.Image] = None,
+                 min_gutter: int = 2, min_side: int = 6) -> list[tuple]:
+    """Une zone issue des gouttières, redécoupée d'après les cadres qu'elle contient (cases incrustées, cases bien
+    entourées de fond dans une mise en page sans gouttière traversante). Quand les cadres sont sûrs, ils sont « effacés »
+    et le reste de la zone est redécoupé par les gouttières : la grande case qui déborde jusqu'au bord de la page devient
+    une case à part entière. `frames` : liste de cadres, ou fonction qui la calcule (appelée seulement pour une grande
+    zone)."""
     la = _area(leaf)
     if la < 0.3 * w * h:
         return [leaf]   # une case ordinaire : un rectangle dessiné dedans (tableau, fenêtre) n'est pas une case
@@ -426,6 +560,26 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool) -> list[tuple]:
     # cadre unique couvrant presque toute la zone = la zone elle-même
     if len(inside) == 1 and _area(inside[0]) >= 0.7 * la:
         return [leaf]
+    if mask is not None:
+        # cadres sûrs : assez grands, surtout du dessin (pas un cartouche ni une bulle), pas l'un dans l'autre
+        from PIL import ImageStat
+        sure = sorted((f for f in inside if _area(f) >= 0.025 * w * h and ImageStat.Stat(mask.crop(f)).mean[0] <= 0.7 * 255),
+                      key=_area, reverse=True)
+        outer: list[tuple] = []
+        for f in sure:
+            if not any(_inter(f, o) >= 0.6 * _area(f) for o in outer):
+                outer.append(f)
+        if outer and not (len(outer) == 1 and _area(outer[0]) >= 0.7 * la):
+            rest_mask = mask.copy()
+            for f in outer:
+                rest_mask.paste(255, f)
+            rest = [r for r in _split(rest_mask, leaf, 0, 0, min_gutter, min_side, rtl)
+                    if _area(r) >= MIN_AREA * w * h and (r[2] - r[0]) >= MIN_PANEL * w and (r[3] - r[1]) >= MIN_PANEL * h]
+            # le reste ne vaut que s'il se découpe en morceaux propres, à côté des cadres ; un morceau qui les englobe
+            # (le reste n'est pas séparable) : on revient au découpage simple ci-dessous
+            if all(sum(_inter(r, f) for f in outer) <= 0.25 * _area(r) and not any(_inter(r, f) >= 0.8 * _area(f) for f in outer)
+                   for r in rest):
+                return _reading_order(outer + rest, rtl)
     ordered = _reading_order(inside, rtl)
     bx0, by0 = min(f[0] for f in inside), min(f[1] for f in inside)
     bx1, by1 = max(f[2] for f in inside), max(f[3] for f in inside)
@@ -462,10 +616,17 @@ def detect_panels(img: Image.Image) -> dict:
         """Cadres dessinés : calcul coûteux, fait une seule fois et seulement si une grande zone (planche sans gouttières,
         grande image avec des cases incrustées) en a besoin ; une planche classique n'en a pas besoin."""
         if not frames_cache:
+            found: list[tuple] = []
             try:
-                frames_cache.append(detect_frames(gray, mask if (bg >= 200 or bg <= 55) else None))
+                found = detect_frames(gray, mask if (bg >= 200 or bg <= 55) else None)
             except Exception:  # noqa: BLE001
-                frames_cache.append([])
+                pass
+            if bg >= 200 or bg <= 55:
+                try:
+                    found = found + [b for b in detect_boxes(mask) if not any(_inter(b, f) >= 0.8 * max(_area(b), _area(f)) for f in found)]
+                except Exception:  # noqa: BLE001
+                    pass
+            frames_cache.append(found)
         return frames_cache[0]
 
     def leaves(rtl: bool) -> list[tuple]:
@@ -473,8 +634,8 @@ def detect_panels(img: Image.Image) -> dict:
         res = (_split(mask, full, 0, 0, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [full]) or [full]
         out: list[tuple] = []
         for leaf in res:
-            out.extend(_refine_leaf(leaf, frames, w, h, rtl))
-        return [b for b in out if _area(b) >= MIN_AREA * page_area]
+            out.extend(_refine_leaf(leaf, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None, min_gutter, min_side))
+        return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 
     ltr = leaves(False)
     empty = {"panels": [], "rtl": [], "v": PANELS_VERSION}

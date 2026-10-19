@@ -201,7 +201,7 @@
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false, reader_trim: false,
-    reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 0,
+    reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 100,
     bdt_ghosts: true, bdt_titles: false, quality: "all",
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
@@ -1455,7 +1455,7 @@
         ${field("Case par case : montrer la page entière avant les cases", chk("p", "reader_panels_full_first", p.reader_panels_full_first), "Désactivé : après la dernière case, on enchaîne directement sur la première case de la planche suivante. Touche C dans le lecteur ; une planche sans cases reconnues s'affiche entière.")}
         ${field("Case par case : cases larges (bandeaux)", sel("p", "reader_panels_wide", [["split", "Lues en deux ou trois temps quand elles restent petites"], ["fit", "Toujours entières, réduites pour tenir dans l'écran"]], p.reader_panels_wide), "Une case qui fait toute la largeur de la planche ne peut pas être agrandie sur un écran étroit (téléphone) : elle est alors lue par morceaux, de gauche à droite (l'inverse en manga), chaque morceau grossi comme une case normale. Le compteur indique « case 3/7 (1/2) ».")}
         ${field("Case par case : marge autour de la case", sel("p", "reader_panels_margin", [[0, "Aucune : la case touche les bords"], [3, "Fine"], [8, "Large"]], p.reader_panels_margin))}
-        ${field("Case par case : assombrir le reste de la planche", sel("p", "reader_panels_dim", [[0, "Non"], [40, "Un peu"], [70, "Beaucoup"]], p.reader_panels_dim), "Un voile sombre autour de la case en cours : l'œil ne va que sur elle. Il suit la case quand on passe à la suivante.")}
+        ${field("Case par case : autour de la case", sel("p", "reader_panels_dim", [[100, "Masquer : seule la case est visible"], [70, "Assombrir beaucoup"], [40, "Assombrir un peu"], [0, "Laisser la planche visible"]], p.reader_panels_dim), "Sur un écran large, une case haute et étroite ne peut pas remplir l'écran : ses voisines apparaissent à côté. Masquée, seule la case en cours est visible ; le masque la suit quand on passe à la suivante, et s'efface quand on glisse pour recadrer.")}
         ${field("Rogner les marges blanches", chk("p", "reader_trim", p.reader_trim), "Le tour blanc des pages est coupé à l'affichage, pour une planche plus grande à l'écran (une page, double page, défilement). Les fichiers ne sont jamais modifiés ; une page blanche ou un dessin à fond perdu restent entiers. Touche R dans le lecteur.")}
         ${field("Défilement continu : largeur", sel("p", "reader_scroll_width", [[100, "Toute la largeur"], [80, "80 %"], [60, "60 %"], [45, "45 %"]], p.reader_scroll_width))}
         ${field("Ajustement par défaut (une page)", sel("p", "reader_fit", [["page", "Page entière"], ["width", "Pleine largeur"], ["original", "Taille d'origine"]], p.reader_fit))}
