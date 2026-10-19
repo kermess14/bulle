@@ -1150,18 +1150,31 @@ class Library:
             "FROM bdt_series s JOIN nodes n ON n.id=s.folder_id ORDER BY n.sort_key").fetchall()
         return [dict(r) for r in rows]
 
+    KEEP_ALBUM_FIELDS = ("summary", "summary_at")   # lus à part, album par album : gardés tant que l'album ne change pas
+
     def bdt_albums_set(self, folder_id: int, matches: list[dict]) -> None:
-        """matches : [{id, how, album}] ; remplace les métadonnées des albums du dossier."""
+        """matches : [{id, how, album}] ; remplace les métadonnées des albums du dossier (le résumé déjà lu d'un album
+        resté lié à la même fiche est conservé)."""
+        old = {r["node_id"]: (r["url"], json.loads(r["data"])) for r in
+               self.conn.execute("SELECT node_id, url, data FROM bdt_albums WHERE folder_id=?", (folder_id,)).fetchall()}
         with self._write_lock:
             self.conn.execute("DELETE FROM bdt_albums WHERE folder_id=?", (folder_id,))
             now = time.time()
             for m in matches:
-                a = m["album"]
+                a = dict(m["album"])
+                prev = old.get(m["id"])
+                if prev and prev[0] == a.get("url"):
+                    a.update({k: prev[1][k] for k in self.KEEP_ALBUM_FIELDS if k in prev[1] and k not in a})
                 self.conn.execute(
                     "INSERT OR REPLACE INTO bdt_albums(node_id, folder_id, url, number, kind, title, year, data, how, "
                     "updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (m["id"], folder_id, a.get("url"), a.get("number"), a.get("kind"), a.get("title"), a.get("year"),
                      json.dumps(a, ensure_ascii=False), m.get("how"), now))
+            self.conn.commit()
+
+    def bdt_series_counts(self, folder_id: int, present: int, total: int) -> None:
+        with self._write_lock:
+            self.conn.execute("UPDATE bdt_series SET present=?, total=? WHERE folder_id=?", (present, total, folder_id))
             self.conn.commit()
 
     def bdt_albums_for_folder(self, folder_id: int) -> dict[int, dict]:

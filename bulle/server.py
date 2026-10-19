@@ -32,7 +32,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.29.3"
+VERSION = "0.29.4"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -548,11 +548,27 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 "summary_at": a.get("summary_at"), "oneshot": m.get("how") == "oneshot",
                 "series_title": a.get("series_title"), "series_url": a.get("series_url"), "genre": a.get("series_genre")}
 
+    def resync_series(folder: dict, link: dict, children: list[dict]) -> None:
+        """Refait la correspondance fichiers ↔ tomes sur la fiche de série déjà enregistrée, sans aucune requête : un
+        album ajouté, renommé ou mieux compris (« 01 Résurrection ») est lié tout de suite, sans « Mettre à jour »."""
+        files = [{"id": c["id"], "name": c["name"]} for c in children if c["kind"] == "album"]
+        cmp_ = compare(link["data"], files)
+        want = {m["id"]: m["album"].get("url") for m in cmp_["matches"]}
+        have = {k: v.get("url") for k, v in lib.bdt_albums_for_folder(folder["id"]).items()}
+        if want != have:
+            lib.bdt_albums_set(folder["id"], cmp_["matches"])
+        if (link.get("present"), link.get("total")) != (cmp_["present"], cmp_["total"]):
+            lib.bdt_series_counts(folder["id"], cmp_["present"], cmp_["total"])
+
     def folder_payload(folder: dict, profile_id: int) -> dict:
         children = visible(lib.children(folder["id"]))
         adult_set = set(adult_paths())
         prog = lib.all_progress(profile_id)
         by_id = {p["node_id"]: p for p in prog}
+        if folder_mode(folder) != "oneshots":
+            link = lib.bdt_series_get(folder["id"])
+            if link:
+                resync_series(folder, link, lib.children(folder["id"]))
         metas = lib.bdt_albums_for_folder(folder["id"])
         links = lib.bdt_series_for([c["id"] for c in children if c["kind"] == "folder"])
         favs = lib.favorites_ids(profile_id)
