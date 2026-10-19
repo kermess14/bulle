@@ -119,6 +119,21 @@ CREATE TABLE IF NOT EXISTS bdt_index(
 );
 CREATE INDEX IF NOT EXISTS idx_bdt_index_letter ON bdt_index(letter);
 CREATE TABLE IF NOT EXISTS bdt_index_letters(letter TEXT PRIMARY KEY, fetched_at REAL NOT NULL, count INTEGER NOT NULL);
+-- Bédéthèque, dossiers de one shots : chaque album est cherché comme sa propre série
+CREATE TABLE IF NOT EXISTS bdt_folder_mode(folder_id INTEGER PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE, mode TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS bdt_oneshots(
+  node_id      INTEGER PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+  folder_id    INTEGER NOT NULL,
+  status       TEXT NOT NULL,
+  query        TEXT,
+  score        REAL,
+  manual       INTEGER NOT NULL DEFAULT 0,
+  series_url   TEXT,
+  series_title TEXT,
+  candidates   TEXT,
+  updated_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bdt_oneshots_folder ON bdt_oneshots(folder_id);
 -- Listes par profil : favoris, à lire, listes personnalisées
 CREATE TABLE IF NOT EXISTS lists(
   id         INTEGER PRIMARY KEY,
@@ -1192,6 +1207,70 @@ class Library:
         d = dict(r)
         d["data"] = json.loads(d["data"])
         return d
+
+    # -- Bédéthèque : dossiers de one shots ------------------------------------------
+    def bdt_folder_mode(self, folder_id: int) -> Optional[str]:
+        r = self.conn.execute("SELECT mode FROM bdt_folder_mode WHERE folder_id=?", (folder_id,)).fetchone()
+        return r["mode"] if r else None
+
+    def bdt_folder_mode_set(self, folder_id: int, mode: Optional[str]) -> None:
+        with self._write_lock:
+            if mode:
+                self.conn.execute("INSERT OR REPLACE INTO bdt_folder_mode(folder_id, mode) VALUES(?,?)", (folder_id, mode))
+            else:
+                self.conn.execute("DELETE FROM bdt_folder_mode WHERE folder_id=?", (folder_id,))
+            self.conn.commit()
+
+    def bdt_folder_modes(self) -> dict[int, str]:
+        return {r["folder_id"]: r["mode"] for r in self.conn.execute("SELECT folder_id, mode FROM bdt_folder_mode")}
+
+    def bdt_oneshot_set(self, node_id: int, folder_id: int, status: str, query: Optional[str] = None,
+                        score: Optional[float] = None, manual: bool = False, series: Optional[dict] = None,
+                        candidates: Optional[list] = None, album: Optional[dict] = None) -> None:
+        """Résultat de la recherche d'un one shot ; `album` (données Bédéthèque de l'album) va dans bdt_albums."""
+        now = time.time()
+        with self._write_lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO bdt_oneshots(node_id, folder_id, status, query, score, manual, series_url, "
+                "series_title, candidates, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (node_id, folder_id, status, query, score, 1 if manual else 0, (series or {}).get("url"),
+                 (series or {}).get("title"), json.dumps(candidates or [], ensure_ascii=False), now))
+            self.conn.execute("DELETE FROM bdt_albums WHERE node_id=?", (node_id,))
+            if album is not None:
+                self.conn.execute(
+                    "INSERT INTO bdt_albums(node_id, folder_id, url, number, kind, title, year, data, how, updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (node_id, folder_id, album.get("url"), album.get("number"), album.get("kind"), album.get("title"),
+                     album.get("year"), json.dumps(album, ensure_ascii=False), "oneshot", now))
+            self.conn.commit()
+
+    def bdt_oneshot_delete(self, node_id: int) -> None:
+        with self._write_lock:
+            self.conn.execute("DELETE FROM bdt_oneshots WHERE node_id=?", (node_id,))
+            self.conn.execute("DELETE FROM bdt_albums WHERE node_id=?", (node_id,))
+            self.conn.commit()
+
+    def bdt_oneshots_clear(self, folder_id: int) -> None:
+        with self._write_lock:
+            self.conn.execute("DELETE FROM bdt_oneshots WHERE folder_id=?", (folder_id,))
+            self.conn.execute("DELETE FROM bdt_albums WHERE folder_id=?", (folder_id,))
+            self.conn.commit()
+
+    def bdt_oneshots_for(self, folder_id: int) -> dict[int, dict]:
+        out = {}
+        for r in self.conn.execute("SELECT * FROM bdt_oneshots WHERE folder_id=?", (folder_id,)):
+            d = dict(r)
+            d["candidates"] = json.loads(d["candidates"] or "[]")
+            out[d["node_id"]] = d
+        return out
+
+    def bdt_oneshot_counts(self) -> dict[int, dict]:
+        """Par dossier de one shots : nombre d'albums trouvés / à choisir / introuvables."""
+        out: dict[int, dict] = {}
+        for r in self.conn.execute("SELECT o.folder_id, o.status, COUNT(*) AS n FROM bdt_oneshots o "
+                                   "JOIN nodes a ON a.id=o.node_id AND a.parent_id=o.folder_id GROUP BY o.folder_id, o.status"):
+            out.setdefault(r["folder_id"], {"ok": 0, "ambiguous": 0, "not_found": 0})[r["status"]] = r["n"]
+        return out
 
     def bdt_index_age(self, letter: str) -> Optional[float]:
         r = self.conn.execute("SELECT fetched_at FROM bdt_index_letters WHERE letter=?", (letter,)).fetchone()

@@ -469,6 +469,19 @@ body:has(.letters.rail.right) .toast { right: 72px; }   /* à gauche de la barre
 .bdt-search { display: flex; gap: 8px; }
 .bdt-search input { flex: 1; height: 36px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 0 12px; font: inherit; min-width: 0; }
 .bdt-results .error { color: var(--warn); }
+/* dossier de one shots */
+.os-sec { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.os-sec summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.os-item { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.os-item:last-child { border-bottom: 0; }
+.os-name { flex: 0 1 260px; min-width: 0; font-size: 13.5px; }
+.os-cands { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; flex: 1 1 300px; }
+.os-cands .chip { cursor: pointer; }
+.os-nfs { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; }
+.os-nf { display: inline-flex; gap: 4px; align-items: center; }
+.os-ok { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; columns: 2 320px; }
+.os-ok li { break-inside: avoid; margin-bottom: 3px; }
+.linkbtn { border: 0; background: none; color: var(--muted); text-decoration: underline; cursor: pointer; font: inherit; font-size: 12px; padding: 0; }
 .card .sub.bdt { position: relative; padding-bottom: 6px; }
 .card .sub.bdt i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); border-radius: 2px; }
 .card .sub.bdt.full { color: var(--ok); }
@@ -555,6 +568,10 @@ body.mode-scroll #stage .wrap, body.mode-double #stage .wrap { display: none; }
 body.mode-panels #stage { overflow: hidden; }
 body.mode-panels #stage img { transform-origin: 0 0; will-change: transform; transition: transform .55s cubic-bezier(.22, .75, .25, 1); }
 body.mode-panels #stage img.nofx { transition: none; }
+/* voile autour de la case (réglage « assombrir le reste de la planche ») : troué à la case, le trou suit l'image */
+#stage .dim { position: absolute; inset: 0; z-index: 2; pointer-events: none; background: rgba(0, 0, 0, var(--dim, 0)); transition: clip-path .55s cubic-bezier(.22, .75, .25, 1); }
+#stage .dim.nofx { transition: none; }
+body:not(.mode-panels) #stage .dim, body.zoomed #stage .dim { display: none; }
 body.mode-panels:not(.zoomed) #stage { cursor: grab; }
 body.mode-panels:not(.zoomed) #stage:active { cursor: grabbing; }
 body.mode-panels .rbtn#panels, body.mode-panels #panels { color: var(--accent); }

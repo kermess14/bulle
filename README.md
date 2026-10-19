@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.26.0)
+# Bulle — lecteur de BD maison (v0.28.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -147,6 +147,21 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
+- Dossiers de **one shots** et Bédéthèque : un dossier fourre-tout (nommé « One shots », « 0 - ONE SHOTS »,
+  « Oneshot »…, ou désigné à la main avec le bouton « Ce sont des one shots ») n'est plus pris pour une seule série :
+  chaque album est cherché comme sa propre série (titre nettoyé : « Blast (Manu Larcenet) » → « Blast »,
+  « Le photographe (2010) » → « Le photographe »), en tâche de fond, au même rythme prudent, une requête par album
+  trouvé. Le dossier affiche les albums trouvés (avec « à vérifier » si le nom n'est pas identique), ceux « à
+  choisir » entre plusieurs séries (un clic) et les introuvables (« Chercher… » sous un autre titre) ; chaque fiche
+  d'album montre sa série, son genre et son lien Bédéthèque. Les albums ajoutés ensuite sont cherchés à la
+  prochaine analyse, sans refaire les autres. La page Collection a une rubrique One shots. Un ancien lien erroné
+  (le dossier entier rattaché à une série au nom proche) est oublié automatiquement.
+- Case par case, mieux voir les cases (Réglages › Lecteur) : une **case large** (bandeau sur toute la largeur de la
+  planche) ne peut pas être agrandie sur un écran étroit, elle restait minuscule sur un téléphone ; elle est
+  maintenant lue **en deux ou trois temps** (gauche → droite, l'inverse en manga), chaque morceau grossi comme une
+  case normale, le compteur indiquant « case 1/5 (2/3) » — seulement quand elle resterait petite, donc rarement
+  sur PC ; réglage « Cases larges » pour la garder entière. Deux autres réglages : **marge autour de la case**
+  (aucune, fine, large) et **assombrir le reste de la planche** autour de la case en cours (voile qui suit la case).
 - Présentation téléphone, **dans l'appli Android seulement** (écran de 700 px ou moins ; dans un navigateur, même sur
   téléphone, rien ne change) : barre
   d'onglets en bas à portée du pouce (Bibliothèque, À lire, Recherche, Favoris — ou Hors ligne dans l'appli —,
