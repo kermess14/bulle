@@ -360,6 +360,10 @@ class Library:
                                  "ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
+    def profiles_full(self) -> list[dict]:
+        """Avec les empreintes des mots de passe : pour la connexion seulement, jamais renvoyé au navigateur."""
+        return [dict(r) for r in self.conn.execute("SELECT * FROM profiles ORDER BY id").fetchall()]
+
     def profile(self, profile_id: int) -> Optional[dict]:
         r = self.conn.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
         return dict(r) if r else None

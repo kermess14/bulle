@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import io
+import ipaddress
 import logging
 import glob
 import os
@@ -29,7 +30,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.28.2"
+VERSION = "0.29.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -83,6 +84,7 @@ def global_defaults() -> dict:
         "bdt_pause_minutes": 2.5,     # … de cette durée (± 20 %)
         "bdt_auto_summary": True,     # résumé lu sur la fiche Bédéthèque quand on ouvre la fiche d'un album
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
+        "account_login": False,       # se connecter avec un compte (nom + mot de passe) : pour mettre Bulle sur Internet
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
         "tools_url": "auto",          # BDConverter dans le menu caché (champignon) : adresse, "auto" = même machine, port 3111, "" = masqué
         "adult_paths": [],            # dossiers de la rubrique Adulte (chemins relatifs), cachés tant que le code n'est pas entré
@@ -98,7 +100,7 @@ GLOBAL_TYPES = {
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
-    "require_profile": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
+    "require_profile": (bool,), "account_login": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
     "quality_auto": (bool,), "hd_min_px": (int, 800, 8000),
 }
 
@@ -260,7 +262,114 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             return nodes
         return [n for n in nodes if not is_adult_path(n.get("path", ""))]
 
+    # ---- protection contre les essais de mots de passe en rafale (code d'accès, comptes, OPDS, rubrique Adulte) :
+    # 5 essais ratés depuis une même adresse → bloquée 15 minutes ; 20 ratés sur un même compte → compte bloqué 15 min.
+    SESSION_DAYS = 30
+    BLOCK_SECONDS = 15 * 60
+    fails: dict[str, list] = {}
+    fails_lock = threading.Lock()
+
+    def client_ip() -> str:
+        """Adresse du visiteur ; derrière un proxy de la maison (Nginx Proxy Manager), celle qu'il transmet."""
+        ra = request.remote_addr or ""
+        try:
+            private = ipaddress.ip_address(ra).is_private or ipaddress.ip_address(ra).is_loopback
+        except ValueError:
+            private = False
+        if private:
+            # X-Real-IP : posé par le proxy lui-même ; à défaut, la DERNIÈRE adresse de X-Forwarded-For (celle ajoutée
+            # par le proxy) — les premières peuvent être inventées par le visiteur pour contourner le blocage
+            fwd = request.headers.get("X-Real-IP") or (request.headers.get("X-Forwarded-For") or "").split(",")[-1]
+            if fwd.strip():
+                return fwd.strip()
+        return ra
+
+    def throttle_check(*keys: str) -> None:
+        now = time.time()
+        with fails_lock:
+            for k in keys:
+                f = fails.get(k)
+                if f and f[2] > now:
+                    mins = max(1, round((f[2] - now) / 60))
+                    abort(429, description=f"Trop d'essais ratés : réessayez dans {mins} min.")
+
+    def throttle_fail(*keys: str) -> None:
+        now = time.time()
+        with fails_lock:
+            for k in keys:
+                f = fails.get(k)
+                if not f or now - f[1] > BLOCK_SECONDS:
+                    f = [0, now, 0.0]
+                f[0] += 1
+                limit = 20 if k.startswith("acct:") else 5
+                if f[0] >= limit:
+                    f[2] = now + BLOCK_SECONDS
+                    log.warning("Accès bloqué 15 min pour %s (%d essais ratés)", k, f[0])
+                fails[k] = f
+            if len(fails) > 5000:   # ménage
+                for k in [k for k, f in fails.items() if now - f[1] > BLOCK_SECONDS and f[2] < now]:
+                    fails.pop(k, None)
+        time.sleep(0.8)
+
+    def throttle_ok(*keys: str) -> None:
+        with fails_lock:
+            for k in keys:
+                fails.pop(k, None)
+
+    def secure_request() -> bool:
+        return request.is_secure or (request.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+
+    def account_mode() -> bool:
+        return bool(settings().get("account_login"))
+
+    def profile_by_login(name: str, password: str) -> Optional[dict]:
+        """Compte d'après son nom (sans tenir compte des majuscules) et son mot de passe ; jamais sans mot de passe."""
+        n = (name or "").strip().casefold()
+        for p in lib.profiles_full():
+            if p["name"].strip().casefold() == n and p.get("pin_hash") and check_pin(p["pin_hash"], password):
+                return p
+        return None
+
+    def session_profile() -> Optional[dict]:
+        """Mode « comptes » : le compte connecté (cookie de session signé, 30 jours, invalidé si le mot de passe change
+        ou si le compte est supprimé), ou Basic (OPDS : nom du compte + mot de passe)."""
+        cached = getattr(flask_g, "_session_profile", False)
+        if cached is not False:
+            return cached
+        found = None
+        tok = request.cookies.get("bulle_session")
+        if tok:
+            try:
+                data = signer.loads(tok)
+                p = lib.profile(int(data.get("p", 0)))
+                if p and p.get("pin_hash") and data.get("k") == p["pin_hash"][-16:] and float(data.get("exp", 0)) > time.time():
+                    found = p
+            except (BadSignature, AttributeError, ValueError, TypeError):
+                found = None
+        if found is None:
+            auth = request.authorization
+            if auth and auth.username and auth.password is not None:
+                ip = "ip:" + client_ip()
+                acct = "acct:" + auth.username.strip().casefold()
+                throttle_check(ip, acct)
+                found = profile_by_login(auth.username, auth.password)
+                if found:
+                    throttle_ok(ip, acct)
+                else:
+                    throttle_fail(ip, acct)
+        flask_g._session_profile = found
+        return found
+
+    def set_session(resp: Response, p: dict) -> None:
+        resp.set_cookie("bulle_session", signer.dumps({"p": p["id"], "k": p["pin_hash"][-16:],
+                                                       "exp": time.time() + SESSION_DAYS * 86400}),
+                        max_age=SESSION_DAYS * 86400, samesite="Lax", httponly=True, secure=secure_request())
+        resp.set_cookie("bulle_profile", signer.dumps({"p": p["id"]}), max_age=SESSION_DAYS * 86400, samesite="Lax",
+                        httponly=True, secure=secure_request())
+
     def auth_ok() -> bool:
+        if account_mode():
+            return session_profile() is not None
         stored = access_pin_hash()
         if not stored:
             return True
@@ -271,24 +380,36 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             except BadSignature:
                 return False
         auth = request.authorization  # OPDS : Basic, mot de passe = code d'accès
-        if auth and auth.password is not None and check_pin(stored, auth.password):
-            return True
+        if auth and auth.password is not None:
+            ip = "ip:" + client_ip()
+            throttle_check(ip)
+            if check_pin(stored, auth.password):
+                throttle_ok(ip)
+                return True
+            throttle_fail(ip)
         return False
 
     @app.before_request
     def gate():
         path = request.path
-        if path.startswith("/static/") or path in ("/api/auth/login", "/api/auth/status") or path == "/favicon.ico":
+        if path.startswith("/static/") or path in ("/api/auth/login", "/api/auth/status", "/api/auth/logout") \
+                or path == "/favicon.ico":
             return None
         if auth_ok():
             return None
+        accounts = account_mode()
         if path.startswith("/opds"):
-            return Response("Code d'accès requis", 401, {"WWW-Authenticate": 'Basic realm="Bulle"'})
+            return Response("Connexion requise" if accounts else "Code d'accès requis", 401,
+                            {"WWW-Authenticate": 'Basic realm="Bulle"'})
         if path.startswith("/api/"):
-            return jsonify({"error": "Code d'accès requis", "auth_required": True}), 401
+            return jsonify({"error": "Connexion requise" if accounts else "Code d'accès requis", "auth_required": True,
+                            "mode": "accounts" if accounts else "code"}), 401
         return None  # pages HTML : l'interface affichera l'écran du code
 
     def current_profile() -> int:
+        if account_mode():
+            sp = session_profile()
+            return sp["id"] if sp else DEFAULT_PROFILE
         tok = request.cookies.get("bulle_profile")
         if tok:
             try:
@@ -319,6 +440,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             abort(403, description="admin_required")
 
     def profile_selected() -> bool:
+        if account_mode():
+            return session_profile() is not None
         tok = request.cookies.get("bulle_profile")
         if not tok:
             return False
@@ -756,7 +879,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             g.pop("adult_paths", None)
         g["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
         return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid, "role": current_role(),
-                        "profile_selected": profile_selected(), "profiles": lib.profiles(), "version": VERSION,
+                        "profile_selected": profile_selected(), "profiles": profiles_visible(), "version": VERSION,
                         "library_root": library_root,
                         "quality_profiles": {k: {"quality": v[0], "chroma": v[1]} for k, v in QUALITY_PROFILES.items()}})
 
@@ -777,6 +900,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 lib.set_settings({"adult_pin_hash": hash_pin(pin) if pin else None}, None)
             if ("adult_paths" in g or "adult_hide_tab" in g) and adult_pin_hash() and not adult_unlocked():
                 abort(403, description="adult_locked")
+            if g.get("account_login") is True and not account_mode():
+                me = lib.profile(current_profile())
+                if not me or not me.get("pin_hash"):
+                    abort(400, description="Donnez d'abord un mot de passe à votre compte (Mon compte) : "
+                                           "c'est avec lui que vous vous connecterez.")
+                flask_g._enable_session_for = me
             lib.set_settings(validate_global(g), None)
             apply_settings(settings())
             if "hd_min_px" in g:
@@ -786,6 +915,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if isinstance(body.get("profile"), dict):
             lib.set_settings(validate_profile_settings(body["profile"]), pid)
         resp = make_response(api_settings_get())
+        if getattr(flask_g, "_enable_session_for", None):
+            set_session(resp, flask_g._enable_session_for)   # l'administrateur qui active reste connecté
         if isinstance(body.get("global"), dict) and "adult_pin" in body["global"]:
             stored = adult_pin_hash()
             if stored:
@@ -819,9 +950,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_adult_unlock():
         body = request.get_json(force=True, silent=True) or {}
         stored = adult_pin_hash()
+        ip = "ip:" + client_ip()
+        throttle_check(ip)
         if stored and not check_pin(stored, str(body.get("pin") or "")):
-            time.sleep(0.8)
+            throttle_fail(ip)
             abort(403, description="Code incorrect")
+        throttle_ok(ip)
         resp = make_response(jsonify({"unlocked": True}))
         if stored:
             resp.set_cookie("bulle_adult", signer.dumps({"adult": stored[-16:], "t": time.time()}), max_age=ADULT_TTL, samesite="Lax")
@@ -931,15 +1065,32 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/auth/status")
     def api_auth_status():
-        return jsonify({"required": bool(access_pin_hash()), "ok": auth_ok()})
+        accounts = account_mode()
+        return jsonify({"required": accounts or bool(access_pin_hash()), "ok": auth_ok(),
+                        "mode": "accounts" if accounts else "code"})
 
     @app.route("/api/auth/login", methods=["POST"])
     def api_auth_login():
         body = request.get_json(force=True, silent=True) or {}
+        ip = "ip:" + client_ip()
+        if account_mode():
+            name = str(body.get("name") or "").strip()
+            acct = "acct:" + name.casefold()
+            throttle_check(ip, acct)
+            p = profile_by_login(name, str(body.get("password") or ""))
+            if not p:
+                throttle_fail(ip, acct)
+                abort(403, description="Nom ou mot de passe incorrect")
+            throttle_ok(ip, acct)
+            resp = make_response(jsonify({"ok": True, "name": p["name"]}))
+            set_session(resp, p)
+            return resp
         stored = access_pin_hash()
+        throttle_check(ip)
         if stored and not check_pin(stored, str(body.get("pin") or "")):
-            time.sleep(0.8)  # freine les essais en rafale
+            throttle_fail(ip)
             abort(403, description="Code d'accès incorrect")
+        throttle_ok(ip)
         resp = make_response(jsonify({"ok": True}))
         if stored:
             resp.set_cookie("bulle_auth", signer.dumps({"auth": stored[-16:]}), max_age=10 * 365 * 24 * 3600,
@@ -951,12 +1102,20 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         resp = make_response(jsonify({"ok": True}))
         resp.delete_cookie("bulle_auth")
         resp.delete_cookie("bulle_profile")
+        resp.delete_cookie("bulle_session")
         return resp
 
     @app.route("/api/profiles", methods=["GET"])
     def api_profiles():
-        return jsonify({"profiles": lib.profiles(), "current": current_profile(), "selected": profile_selected(),
-                        "require_profile": bool(settings()["require_profile"])})
+        return jsonify({"profiles": profiles_visible(), "current": current_profile(), "selected": profile_selected(),
+                        "require_profile": bool(settings()["require_profile"]) and not account_mode(),
+                        "account_login": account_mode()})
+
+    def profiles_visible() -> list[dict]:
+        """En mode « comptes », un lecteur ne voit que son propre compte (les noms des autres ne sont pas divulgués)."""
+        if account_mode() and not is_admin():
+            return [p for p in lib.profiles() if p["id"] == current_profile()]
+        return lib.profiles()
 
     def profile_json(p: dict) -> dict:
         return {"id": p["id"], "name": p["name"], "avatar": p.get("avatar"), "role": p.get("role") or "reader",
@@ -982,12 +1141,26 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         name = str(body.get("name") or "").strip()[:40]
         if not name:
             abort(400, description="Il faut un nom")
+        if name_taken(name):
+            abort(400, description=f"Il y a déjà un compte « {name} »")
         if len(lib.profiles()) >= 20:
             abort(400, description="Trop de profils")
         pin = str(body.get("pin") or "").strip()
+        if account_mode() and len(pin) < min_password():
+            abort(400, description=f"Avec la connexion par compte, il faut un mot de passe de {min_password()} caractères au moins")
+        if pin and len(pin) < 4:
+            abort(400, description="Mot de passe trop court (4 caractères au moins)")
         role = "admin" if body.get("role") == "admin" and is_admin() else "reader"
         p = lib.add_profile(name, hash_pin(pin) if pin else None, clean_avatar(body.get("avatar")), role)
         return jsonify(profile_json(p))
+
+    def name_taken(name: str, except_id: Optional[int] = None) -> bool:
+        """Deux comptes ne peuvent pas porter le même nom (on se connecte avec lui)."""
+        n = name.strip().casefold()
+        return any(p["name"].strip().casefold() == n and p["id"] != except_id for p in lib.profiles())
+
+    def min_password() -> int:
+        return 8 if account_mode() else 4
 
     @app.route("/api/profiles/<int:pid>", methods=["PUT"])
     def api_profile_update(pid: int):
@@ -1000,12 +1173,16 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         fields = {}
         if "name" in body:
             fields["name"] = str(body["name"] or "").strip()[:40] or p["name"]
+            if name_taken(fields["name"], pid):
+                abort(400, description=f"Il y a déjà un compte « {fields['name']} »")
         if "avatar" in body:
             fields["avatar"] = clean_avatar(body["avatar"])
         if "pin" in body:
             pin = str(body["pin"] or "").strip()
-            if pin and len(pin) < 4:
-                abort(400, description="Mot de passe trop court (4 caractères au moins)")
+            if pin and len(pin) < min_password():
+                abort(400, description=f"Mot de passe trop court ({min_password()} caractères au moins)")
+            if not pin and account_mode():
+                abort(400, description="Avec la connexion par compte, chaque compte doit garder un mot de passe")
             fields["pin_hash"] = hash_pin(pin) if pin else None
         if "role" in body:
             require_admin()
@@ -1014,8 +1191,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     not lib.conn.execute("SELECT 1 FROM profiles WHERE role='admin' AND id<>?", (pid,)).fetchone():
                 abort(400, description="Il faut garder au moins un administrateur")
             fields["role"] = role
+        me = pid == current_profile()
         p = lib.update_profile(pid, **fields)
-        return jsonify(profile_json(p))
+        resp = make_response(jsonify(profile_json(p)))
+        if account_mode() and me and "pin_hash" in fields:
+            set_session(resp, lib.profile(pid))   # nouveau mot de passe : la session en cours continue
+        return resp
 
     @app.route("/api/profiles/<int:pid>", methods=["DELETE"])
     def api_profile_delete(pid: int):
@@ -1039,9 +1220,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         p = lib.profile(pid)
         if not p:
             abort(404, description="Profil inconnu")
+        if account_mode() and pid != current_profile():
+            abort(403, description="Avec la connexion par compte, déconnectez-vous pour changer de compte")
+        ip, acct = "ip:" + client_ip(), "acct:" + p["name"].strip().casefold()
+        throttle_check(ip, acct)
         if p.get("pin_hash") and not check_pin(p["pin_hash"], str(body.get("pin") or "")):
-            time.sleep(0.8)
+            throttle_fail(ip, acct)
             abort(403, description="Code PIN incorrect")
+        throttle_ok(ip, acct)
         resp = make_response(jsonify({"current": pid, "name": p["name"], "role": p.get("role") or "reader"}))
         resp.set_cookie("bulle_profile", signer.dumps({"p": pid}), max_age=10 * 365 * 24 * 3600, samesite="Lax")
         return resp
@@ -1052,6 +1238,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         resp = make_response(jsonify({"ok": True}))
         resp.delete_cookie("bulle_profile")
         resp.delete_cookie("bulle_adult")
+        resp.delete_cookie("bulle_session")
         return resp
 
     @app.route("/api/cache", methods=["GET"])
