@@ -277,14 +277,20 @@ class BedethequeClient:
         return html
 
     # -- recherche ----------------------------------------------------------
-    def search_site(self, query: str) -> list[dict]:
-        """La recherche du site lui-même (peut renvoyer une page sans résultats aux lecteurs automatiques)."""
+    def search_full(self, query: str, year: Optional[int] = None) -> dict:
+        """La recherche « dans tout le site » de BDGest / Bédéthèque (la même base) : séries et albums (par leur titre),
+        une seule page, gardée 7 jours. {"series": [...], "albums": [...]}."""
         q = query.strip()
         if len(q) < 2:
-            return []
-        url = f"{BASE}/search/tout?qs=1&RechWhere=7&RechTexte={urllib.parse.quote(q)}"
+            return {"series": [], "albums": []}
+        url = f"{BASE}/search/tout?RechWhere=1&RechTexte={urllib.parse.quote(q)}"
         html = self.fetch(url, ttl=SEARCH_TTL)
-        return parse_search(html, q)
+        return {"series": parse_search(html, q), "albums": parse_search_albums(html, q, year)}
+
+    def search_site(self, query: str) -> list[dict]:
+        """Les séries trouvées par la recherche du site. (L'ancienne recherche « dans la Bedetheque », RechWhere=7,
+        ne renvoie plus rien : on passe par la recherche de tout le site.)"""
+        return self.search_full(query)["series"]
 
     def index_letter(self, letter: str, force: bool = False) -> list[dict]:
         """Toutes les séries d'une lettre (page « Séries BD - A » du site) : [{id, name, url}]."""
@@ -456,7 +462,7 @@ def parse_search(html: str, query: str) -> list[dict]:
                 continue
             seen.add(m.group(1))
             name_el = a.select_one(".bdt-liste-l1") or a
-            name = _text(name_el).replace("Correspondance exacte", "").strip()
+            name = re.sub(r"\s+([,.])", r"\1", _text(name_el).replace("Correspondance exacte", "")).strip()
             metas = [_text(x) for x in a.select(".bdt-liste-meta")]
             tomes = None
             genre = None
@@ -468,11 +474,43 @@ def parse_search(html: str, query: str) -> list[dict]:
                     genre = mt
             exact = a.select_one(".bdt-liste-exact") is not None
             score = similarity(query, name)
+            if norm_title(re.sub(r"\([^()]*\)", " ", name)) == norm_title(query):
+                score = max(score, 0.93)   # homonyme : « Là-bas (Fontaine) » pour « Là-bas » (comme dans l'index)
             if exact:
                 score = max(score, 0.95)
             out.append({"id": int(m.group(1)), "url": href if href.startswith("http") else BASE + href,
                         "name": name, "genre": genre, "tomes": tomes, "exact": exact, "score": round(score, 3)})
     out.sort(key=lambda c: (-c["score"], -(c["tomes"] or 0)))
+    return out
+
+
+def parse_search_albums(html: str, query: str, year: Optional[int] = None) -> list[dict]:
+    """Section « N albums trouvés » de la recherche du site : [{url, series, title, number, year, thumb, score}].
+    Un one shot n'a souvent pas de titre propre (c'est celui de la série) ; l'année de parution départage les
+    homonymes (« Là-bas (Fontaine) », 1999, et « Là-bas (Sibran/Tronchet) », 2003)."""
+    soup = BeautifulSoup(html, "html.parser")
+    head = next((h for h in soup.find_all("h2") if re.search(r"albums?\s+trouv", h.get_text(), re.I)), None)
+    if head is None:
+        return []
+    ul = head.parent.find_next_sibling("ul") if head.parent is not None else None
+    if ul is None:
+        return []
+    out = []
+    for a in ul.find_all("a", href=re.compile(r"/BD-[^/]*-\d+\.html")):
+        href = a["href"]
+        url = href if href.startswith("http") else BASE + href
+        series = re.sub(r"\s+([,.])", r"\1", _text(a.select_one(".bdt-liste-l1") or a))
+        title = _text(a.select_one(".bdt-liste-titre")) if a.select_one(".bdt-liste-titre") else ""
+        num_el = a.select_one(".bdt-liste-num")
+        mnum = re.search(r"\d+", _text(num_el)) if num_el is not None else None
+        mdate = re.search(r"((?:19|20)\d\d)", _text(a.select_one(".bdt-liste-meta"))) if a.select_one(".bdt-liste-meta") else None
+        img = a.find("img")
+        base = re.sub(r"\([^()]*\)", " ", series)
+        score = max(similarity(query, title) if title else 0.0, similarity(query, series), similarity(query, base))
+        out.append({"url": url, "series": series, "title": title or series, "number": int(mnum.group()) if mnum else None,
+                    "year": int(mdate.group(1)) if mdate else None, "thumb": img.get("src") if img else None,
+                    "score": round(score, 3)})
+    out.sort(key=lambda r: (-r["score"], 0 if (year and r["year"] == year) else 1))
     return out
 
 

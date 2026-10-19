@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.29.5)
+# Bulle — lecteur de BD maison (v0.30.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,23 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case, texte à cheval sur deux cases** : quand un cartouche ou une bulle passe par-dessus la gouttière,
+  le lire case par case le coupait en deux. Bulle repère maintenant ces passages (un cadre caché sous du papier, avec
+  des lignes de lettres) : si le texte est vraiment partagé entre les deux cases, elles sont montrées **ensemble** ;
+  s'il déborde seulement un peu, la case qui le porte est **élargie** jusqu'au bout de la bulle. Le découpage des cases
+  ne change pas (vérifié : mêmes cases sur les 75 planches d'essai, dont 10 concernées par une bulle à cheval).
+  Réglages › Lecteur › « Case par case : texte à cheval sur deux cases » pour revenir à des cases toujours seules.
+  Les cases déjà calculées sont refaites au fil de la lecture.
+- **Glissement réglable** d'une case à l'autre : Réglages › Lecteur › « Case par case : passage d'une case à
+  l'autre » : instantané, rapide, normal, lent, très lent.
+- **Pages de la bibliothèque** : jusqu'à 20 numéros de page affichés directement en bas (1 2 3 … 18 avant) ; au-delà,
+  20 numéros autour de la page en cours, plus la première et la dernière.
+- **Laboratoire › Recherche BDGest en secours** (désactivée par défaut) : quand l'index de Bédéthèque ne trouve rien de
+  sûr, Bulle cherche aussi « dans tout le site » BDGest. C'est la même base, mais cette recherche trouve aussi les
+  **albums par leur titre** ; l'année du fichier départage les homonymes (« Là-bas (2003) » → Là-bas (Sibran/Tronchet),
+  paru en 2003, lié tout seul). Une requête de plus, au rythme prudent, pour chaque album ou série concerné. La
+  recherche à la main (« Chercher… ») s'en sert toujours et propose aussi les albums trouvés (en choisir un lie
+  directement la bonne fiche). L'ancienne recherche du site utilisée en secours ne renvoyait plus rien : réparée.
 - Bédéthèque, adresse collée à la main : pour une série, on peut maintenant coller l'adresse d'**un de ses albums**
   (…/BD-Zombies-Peru-Cholet-Tome-1-La-Divine-Comedie-111890.html) : Bulle remonte tout seul à la série. Une page de
   **BDGest**, le site jumeau (critique « chronique-42-BD-… », preview…), est aussi acceptée, pour une série comme

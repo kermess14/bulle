@@ -27,9 +27,9 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 6        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 7        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
@@ -598,6 +598,300 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
     return out
 
 
+# ----------------------------------------------------------------------------
+# 4. Texte à cheval sur deux cases
+# ----------------------------------------------------------------------------
+BRIDGE_GAP = 0.08         # écart maximal entre deux cases voisines (fraction de la page)
+BRIDGE_MIN = 0.012        # hauteur minimale de ce qui traverse la gouttière (fraction de la page) : une ligne de texte
+BRIDGE_SIDE = 0.025       # profondeur regardée de chaque côté de la gouttière (fraction de la page)
+BRIDGE_JOIN = 0.2         # le texte entre d'au moins 20 % dans chacune des deux cases : on les réunit ; sinon on élargit
+                          # seulement la case qui porte le texte, pour qu'il ne soit plus coupé
+
+
+def _paper_ink(img: Image.Image, size: tuple) -> tuple[Image.Image, Image.Image, Image.Image]:
+    """Masques à la taille de travail : « papier » (clair et presque sans couleur : fond d'une bulle, d'un cartouche),
+    « encre » (lettres, traits) et « neutre » (sans couleur : papier, encre et leurs gris intermédiaires)."""
+    small = img.convert("RGB").resize(size, Image.Resampling.BOX)
+    r, g, b = small.split()
+    lo = ImageChops.darker(ImageChops.darker(r, g), b)
+    hi = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    chroma = ImageChops.subtract(hi, lo)
+    neutral = chroma.point(lambda v: 255 if v <= 45 else 0)
+    paper = ImageChops.multiply(lo.point(lambda v: 255 if v >= 190 else 0), neutral)
+    ink = ImageOps.grayscale(small).point(lambda v: 255 if v < 110 else 0)
+    # « neutre » : papier, encre et gris d'anticrénelage des lettres (pas de couleur de décor)
+    return paper, ink, ImageChops.lighter(neutral, ink)
+
+
+def _cols(img: Image.Image, box: tuple) -> list[float]:
+    """Part de blanc (255) dans chaque colonne de la zone."""
+    c = img.crop(box)
+    if c.width == 0 or c.height == 0:
+        return []
+    return [v / 255.0 for v in c.resize((c.width, 1), Image.Resampling.BOX).getdata()]
+
+
+def _rows(img: Image.Image, box: tuple) -> list[float]:
+    c = img.crop(box)
+    if c.width == 0 or c.height == 0:
+        return []
+    return [v / 255.0 for v in c.resize((1, c.height), Image.Resampling.BOX).getdata()]
+
+
+def _text_lines(neutral: Image.Image, ink: Image.Image, box: tuple, anchor: int) -> int:
+    """Nombre de lignes de lettres dans la bulle qui passe par la colonne `anchor` (le milieu de la gouttière) : des
+    bandes de pixels où l'encre alterne souvent avec le papier (une lettre après l'autre), séparées par des interlignes
+    de papier. Chaque ligne de pixels n'est lue que sur le morceau de papier continu qui traverse la gouttière (le
+    décor autour est ignoré). Des hachures, de l'herbe ou des traits de vitesse ne laissent pas d'interligne propre."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    if w < 10 or h < 6 or not x0 <= anchor < x1:
+        return 0
+    idata, pdata = ink.crop(box).tobytes(), neutral.crop(box).tobytes()
+    ax = anchor - x0
+    texty, quiet = [], []
+    for y in range(h):
+        row, prow = idata[y * w:(y + 1) * w], pdata[y * w:(y + 1) * w]
+        ok = [bool(row[x] or prow[x]) for x in range(w)]
+        lo = hi = ax
+        miss = 0
+        while lo > 0 and miss <= 3:
+            lo -= 1
+            miss = 0 if ok[lo] else miss + 1
+        lo += miss
+        miss = 0
+        while hi < w - 1 and miss <= 3:
+            hi += 1
+            miss = 0 if ok[hi] else miss + 1
+        hi -= miss
+        seg = hi - lo + 1
+        if seg < 30:
+            texty.append(False); quiet.append(False)
+            continue
+        spans, x = [], lo
+        while x <= hi:
+            if row[x]:
+                e = x
+                while e + 1 <= hi and row[e + 1]:
+                    e += 1
+                spans.append((x, e))
+                x = e + 1
+            else:
+                x += 1
+        # les traits qui touchent les bouts du morceau sont les bords de la bulle (ou le décor contre elle)
+        inside = [(u, v) for u, v in spans if u > lo + 1 and v < hi - 1]
+        texty.append(len(spans) >= max(4, seg // 24))
+        quiet.append(len(inside) <= 1 and sum(v - u + 1 for u, v in inside) <= 0.05 * seg)   # interligne
+    lines, y = 0, 0
+    while y < h:
+        if not texty[y]:
+            y += 1
+            continue
+        a = y
+        while y < h and not quiet[y]:
+            y += 1
+        if (a == 0 or quiet[a - 1]) and (y == h or quiet[y]) and 3 <= y - a <= 18 and sum(texty[a:y]) >= 0.4 * (y - a):
+            lines += 1
+    return lines
+
+
+def _bridge(gray: Image.Image, mask: Image.Image, paper: Image.Image, ink: Image.Image, neutral: Image.Image,
+            a: tuple, b: tuple, axis: int, bw: bool = False) -> Optional[dict]:
+    """`a` puis `b`, voisines (axis=1 : côte à côte, a à gauche ; axis=0 : l'une sous l'autre, a en haut). Un cartouche
+    ou une bulle passe-t-il de l'une à l'autre par-dessus la gouttière ? Renvoie None, ou {"grow": 0|1, "edge": x} :
+    la case qui porte le texte (0 : a, 1 : b) et la coordonnée jusqu'où l'élargir pour qu'il ne soit plus coupé, avec
+    "join": True si le texte est vraiment sur les deux cases (on les montre alors ensemble)."""
+    W, H = gray.size
+    neutral0, ink0 = neutral, ink   # sens d'origine : le texte se lit toujours en lignes horizontales
+    valid0 = ImageChops.lighter(paper, ink)
+    if axis == 0:   # on se ramène au cas « côte à côte » en transposant tout
+        T = Image.Transpose.TRANSPOSE
+        gray, mask, paper, ink, neutral = (im.transpose(T) for im in (gray, mask, paper, ink, neutral))
+        a, b = (a[1], a[0], a[3], a[2]), (b[1], b[0], b[3], b[2])
+        W, H = H, W
+    g0, g1 = a[2], b[0]
+    o0, o1 = max(a[1], b[1]), min(a[3], b[3])
+    if g1 - g0 > BRIDGE_GAP * W or g1 - g0 < -2 or o1 - o0 < 0.25 * min(a[3] - a[1], b[3] - b[1]):
+        return None
+    # cœur de la gouttière : les colonnes les plus « fond » entre les deux cases (les traits de cadre exclus)
+    lo, hi = max(0, g0 - 8), min(W, g1 + 8)
+    cols = _cols(mask, (lo, o0, hi, o1))
+    if not cols:
+        return None
+    best = max(cols)
+    if best < 0.5:
+        return None   # pas de vraie gouttière ici (cases séparées par leurs cadres seulement)
+    core = [i for i, v in enumerate(cols) if v >= best - 0.05]
+    c0, c1 = lo + core[0], lo + core[-1] + 1
+    side = max(6, round(BRIDGE_SIDE * W))
+    n = o1 - o0
+
+    def frame_col(x_from: int, x_to: int) -> Optional[int]:
+        """Trait de cadre vertical le long de la gouttière (colonne la plus encrée), s'il y en a un."""
+        if x_to <= x_from:
+            return None
+        inks = _cols(ink, (x_from, o0, x_to, o1))
+        k = max(range(len(inks)), key=lambda t: inks[t])
+        return x_from + k if inks[k] >= 0.35 else None   # (en partie caché par la bulle elle-même)
+
+    def crossing(fx: Optional[int], x_from: int, x_to: int) -> list[bool]:
+        """Lignes où le côté est « recouvert » : le trait de cadre y disparaît sous du papier (bulle, cartouche posé
+        dessus) ; sans cadre, le papier continue sur toute la bande regardée."""
+        if fx is not None:
+            inks = _rows(ink, (max(0, fx - 1), o0, min(W, fx + 2), o1))
+            papers = _rows(paper, (fx, o0, fx + 1, o1))
+            # une lettre posée sur l'emplacement du cadre : du papier juste avant et juste après
+            before = _rows(paper, (max(0, fx - 3), o0, max(1, fx - 2), o1))
+            after = _rows(paper, (min(W - 1, fx + 3), o0, min(W, fx + 4), o1))
+            return [(iv == 0 and pv >= 1.0) or (bv >= 1.0 and av >= 1.0)
+                    for iv, pv, bv, av in zip(inks, papers, before, after)]
+        pv = _rows(paper, (max(0, x_from), o0, min(W, x_to), o1))
+        nv = _rows(neutral, (max(0, x_from), o0, min(W, x_to), o1))
+        return [p >= 0.4 and q >= 0.9 for p, q in zip(pv, nv)]   # papier et lettres seulement, pas de décor
+
+    fa = frame_col(max(a[0], c0 - 10), c0)
+    fb = frame_col(c1, min(b[2], c1 + 10))
+    if bw and (fa is None or fb is None):
+        return None   # noir et blanc : tout y est « papier et encre », seule une bulle qui cache un cadre est sûre
+    ca = crossing(fa, c0 - side, c0)
+    cb = crossing(fb, c1, c1 + side)
+    inner = [x and y for x, y in zip(ca, cb)]
+
+    valid = ImageChops.lighter(paper, ink)   # papier ou encre : l'intérieur d'une bulle, lettres comprises
+
+    def reach(ya: int, yb: int, direction: int) -> int:
+        """Jusqu'où va le papier (avec ses lettres) de ce côté-ci, ligne par ligne : la largeur du cartouche dans la case
+        (une bulle ovale est plus étroite en haut et en bas : on garde les lignes les plus larges)."""
+        if direction < 0:
+            x_lo, x_hi = max(0, a[0]), c0
+        else:
+            x_lo, x_hi = c1, min(W, b[2])
+        if x_hi <= x_lo:
+            return 0
+        reg = valid.crop((x_lo, o0 + ya, x_hi, o0 + yb))
+        rw, rh = reg.size
+        data = reg.tobytes()
+        ext = []
+        for yy in range(rh):
+            if not inner[ya + yy]:
+                continue   # seulement les lignes où la bulle passe par-dessus la gouttière
+            row = data[yy * rw:(yy + 1) * rw]
+            seq = row[::-1] if direction < 0 else row   # depuis la gouttière vers le fond de la case
+            last, miss = 0, 0
+            for k, v in enumerate(seq):
+                if v:
+                    last, miss = k + 1, 0
+                else:
+                    miss += 1
+                    if miss > 3:
+                        break
+            if last < 0.95 * rw:   # une ligne qui va jusqu'au fond de la case : trait de cadre, pas une bulle
+                ext.append(last)
+        if len(ext) < 3:
+            return rw   # pas de bout trouvé : rejeté plus bas (papier jusqu'au fond de la case)
+        ext.sort()
+        return ext[len(ext) // 2]
+
+    found = None
+    y = 0
+    while y < n:
+        if not inner[y]:
+            y += 1
+            continue
+        # des lettres posées sur le trait de cadre le font réapparaître sur une ligne de texte : trous tolérés
+        ya, holes, gap = y, 0, max(4, round(0.012 * H))
+        while y < n and (inner[y] or holes < gap):
+            holes = 0 if inner[y] else holes + 1
+            y += 1
+        yb = y - holes
+        if yb - ya < BRIDGE_MIN * H or yb - ya > 0.6 * n or sum(inner[ya:yb]) < 0.3 * (yb - ya):
+            continue
+        # le cartouche passe vraiment par-dessus la gouttière : son contour (haut, bas) ou ses lettres la traversent.
+        # Deux cartouches face à face, chacun dans sa case, laissent la gouttière vide.
+        core_ink = _rows(ink, (c0, o0 + ya, c1, o0 + yb))
+        if sum(1 for v in core_ink if v > 0) < 2:
+            continue
+        ra, rb = reach(ya, yb, -1), reach(ya, yb, 1)
+        if ra < 2 or rb < 2:
+            continue
+        # une bulle a un bout : du papier jusqu'au fond de la case, c'est un dessin au trait sur fond blanc, pas un cartouche
+        if ra >= 0.85 * (c0 - a[0]) or rb >= 0.85 * (b[2] - c1):
+            continue
+        if axis == 1:
+            tbox, anchor = (max(0, c0 - ra - 4), o0 + ya, min(W, c1 + rb + 4), o0 + yb), (c0 + c1) // 2
+        else:   # gouttière horizontale : on lit les lignes au-dessus et au-dessous, depuis le milieu du passage
+            tbox, anchor = (o0 + ya, max(0, c0 - ra - 4), o0 + yb, min(W, c1 + rb + 4)), o0 + (ya + yb) // 2
+        # lettres nettes (papier + encre) ou adoucies par la réduction (gris neutres) : l'une ou l'autre lecture
+        lines = max(_text_lines(valid0, ink0, tbox, anchor), _text_lines(neutral0, ink0, tbox, anchor))
+        if lines < 1:
+            continue
+        wa, wb = max(1, a[2] - a[0]), max(1, b[2] - b[0])
+        in_a, in_b = max(0, ra - (c0 - a[2])), max(0, rb - (b[0] - c1))   # part dans chaque case, depuis son bord
+        share = in_b / wb if in_b / wb >= in_a / wa else in_a / wa
+        if in_b / wb >= in_a / wa:   # surtout dans b : b s'élargit jusqu'au bout du cartouche, côté a
+            r = {"grow": 1, "edge": c0 - ra - 2, "share": share}
+        else:
+            r = {"grow": 0, "edge": c1 + rb + 2, "share": share}
+        # réunir seulement si les lettres elles-mêmes passent par la gouttière (le texte serait coupé en deux) :
+        # au moins deux lignes d'encre distinctes dans la gouttière, en plus du contour
+        inked_rows = [v > 0 for v in core_ink]
+        bands = sum(1 for t in range(len(inked_rows)) if inked_rows[t] and (t == 0 or not inked_rows[t - 1]))
+        if in_a >= BRIDGE_JOIN * wa and in_b >= BRIDGE_JOIN * wb and bands >= 3:
+            r["join"] = True   # (l'élargissement sert de repli si la réunion déborderait sur d'autres cases)
+            return r
+        if found is None or share > found["share"]:
+            found = r
+    return found
+
+
+def text_bridges(img: Image.Image, gray: Image.Image, mask: Image.Image, boxes: list[tuple]) -> tuple[list, dict]:
+    """Cases reliées par un texte à cheval sur la gouttière. Renvoie (paires à réunir, {indice: case élargie})."""
+    w, h = gray.size
+    pairs = []
+    for i, a in enumerate(boxes):
+        for j, b in enumerate(boxes):
+            if i != j and a[2] <= b[0] + 2 and min(a[3], b[3]) - max(a[1], b[1]) > 0:
+                pairs.append((i, j, 1))
+            elif i != j and a[3] <= b[1] + 2 and min(a[2], b[2]) - max(a[0], b[0]) > 0:
+                pairs.append((i, j, 0))
+    if not pairs:
+        return [], {}
+    paper, ink, neutral = _paper_ink(img, (w, h))
+    bw = ImageStat.Stat(neutral).mean[0] >= 0.85 * 255   # planche en noir et blanc (ou presque)
+    join, grown = [], {}
+    for i, j, axis in pairs:
+        r = _bridge(gray, mask, paper, ink, neutral, boxes[i], boxes[j], axis, bw)
+        if not r:
+            continue
+        if r.get("join"):
+            u = (min(boxes[i][0], boxes[j][0]), min(boxes[i][1], boxes[j][1]),
+                 max(boxes[i][2], boxes[j][2]), max(boxes[i][3], boxes[j][3]))
+            # les deux cases réunies ne doivent pas en recouvrir une troisième (sinon : élargir seulement)
+            if _area(u) <= 0.5 * w * h and not any(k not in (i, j) and _inter(u, c) > 0.1 * _area(c) for k, c in enumerate(boxes)):
+                if [i, j] not in join:
+                    join.append([i, j])
+                continue
+        k = i if r["grow"] == 0 else j
+        box = list(grown.get(k, boxes[k]))
+        size = (box[2] - box[0]) if axis == 1 else (box[3] - box[1])
+        lo_side, hi_side = (box[0], box[2]) if axis == 1 else (box[1], box[3])
+        reach = (lo_side - r["edge"]) if k == j else (r["edge"] - hi_side)
+        if reach > 0.4 * size:
+            continue   # une bulle qui déborde d'un peu, pas une moitié de case voisine
+        if axis == 1:
+            if k == j:
+                box[0] = min(box[0], r["edge"])
+            else:
+                box[2] = max(box[2], r["edge"])
+        else:
+            if k == j:
+                box[1] = min(box[1], r["edge"])
+            else:
+                box[3] = max(box[3], r["edge"])
+        grown[k] = tuple(box)
+    return join, grown
+
+
 def detect_panels(img: Image.Image) -> dict:
     """Cases d'une planche : {"panels": [[x0, y0, x1, y1], …] (fractions, ordre occidental), "rtl": [indices, ordre manga]}."""
     gray = ImageOps.grayscale(img)
@@ -657,4 +951,14 @@ def detect_panels(img: Image.Image) -> dict:
     order = [index.get(tuple(rel(b)), i) for i, b in enumerate(rtl)]
     if sorted(order) != list(range(len(panels))):
         order = list(range(len(panels)))
-    return {"panels": panels, "rtl": order, "v": PANELS_VERSION}
+    out = {"panels": panels, "rtl": order, "v": PANELS_VERSION}
+    if bg >= 200 or bg <= 55:
+        try:
+            join, grown = text_bridges(img, gray, mask, ltr)
+        except Exception:  # noqa: BLE001
+            join, grown = [], {}
+        if join:
+            out["join"] = join
+        if grown:   # cases élargies pour ne pas couper une bulle qui déborde (même ordre, mêmes indices)
+            out["grow"] = {str(k): rel(v) for k, v in grown.items()}
+    return out
