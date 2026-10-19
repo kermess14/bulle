@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.28.2)
+# Bulle — lecteur de BD maison (v0.29.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -147,6 +147,14 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
+- **Mettre Bulle sur Internet** : Réglages › Comptes et accès › « Se connecter avec un compte ». À l'ouverture, on
+  tape le nom d'un compte et son mot de passe (8 caractères au moins) ; sans cela on ne voit rien, ni les BD, ni les
+  couvertures, ni la liste des comptes. Un compte par personne, supprimable à tout moment ; un lecteur ne voit que son
+  compte et ne peut pas en changer. Session de 30 jours (cookie protégé, « Secure » en HTTPS), coupée si le mot de
+  passe change ou si le compte est supprimé. Après 5 essais ratés, l'adresse est bloquée 15 minutes (20 sur un même
+  compte) ; fonctionne derrière Nginx Proxy Manager (adresse réelle du visiteur lue dans X-Real-IP). Le flux OPDS
+  demande le nom du compte et son mot de passe. Le même blocage protège aussi le code d'accès, les mots de passe des
+  profils et le code de la rubrique Adulte. Deux comptes ne peuvent plus porter le même nom.
 - One shots : auteurs, éditeur et résumé. Sur Bédéthèque, la page d'une série d'un seul album n'a pas la petite liste
   des albums, seulement le bloc « Détail » : Bulle n'y trouvait donc aucun album et ne liait que la série (« album non
   repéré », sans auteurs ni résumé). L'album est maintenant lu dans ce bloc (scénario, dessin, éditeur, année).
