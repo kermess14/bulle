@@ -1079,11 +1079,11 @@
     const done = c.ok + c.ambiguous + c.not_found, pct = c.total ? Math.round(done / c.total * 100) : 0;
     const amb = o.albums.filter(a => a.status === "ambiguous"), nf = o.albums.filter(a => a.status === "not_found"), ok = o.albums.filter(a => a.status === "ok");
     const admin = isAdmin();
-    const other = a => admin ? `<button class="btn mini" type="button" data-bdt="os-query" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Chercher sous un autre titre">Chercher…</button>` : "";
+    const other = a => admin ? `<button class="btn mini" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Chercher cet album sur Bédéthèque : autre titre, homonymes, ou adresse de la fiche">Chercher…</button>` : "";
     const ambHtml = amb.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}</div>
         <div class="os-cands">${a.candidates.map(cd => `<button type="button" class="chip gray" ${admin ? `data-bdt="os-pick" data-album="${a.id}" data-url="${esc(cd.url)}"` : "disabled"} title="Choisir cette série">${esc(cd.name)}</button>`).join("")}${other(a)}</div></div>`).join("");
-    const nfHtml = nf.map(a => `<span class="os-nf"><span class="chip gray">${esc(a.name)}</span>${other(a)}</span>`).join("");
-    const okHtml = ok.map(a => `<li><span>${esc(a.name)}</span> → <a class="ext" href="${esc(a.series_url)}" target="_blank" rel="noopener">${esc(a.series_title || "")}</a>${a.manual ? "" : a.score != null && a.score < 0.95 ? ` <span class="warnlabel">à vérifier</span>` : ""}${admin ? ` <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Oublier ce lien (l'album sera recherché de nouveau)">oublier</button>` : ""}</li>`).join("");
+    const nfHtml = nf.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}</div><div class="os-cands">${other(a)}</div></div>`).join("");
+    const okHtml = ok.map(a => `<li><span>${esc(a.name)}</span> → <a class="ext" href="${esc(a.series_url)}" target="_blank" rel="noopener">${esc(a.series_title || "")}</a>${a.manual ? "" : a.score != null && a.score < 0.95 ? ` <span class="warnlabel">à vérifier</span>` : ""}${admin ? ` <button class="linkbtn" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Choisir une autre série">changer</button> <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Oublier ce lien (l'album sera recherché de nouveau)">oublier</button>` : ""}</li>`).join("");
     return `<div class="bdt-panel oneshots ${c.total && c.ok === c.total ? "full" : ""}" id="bdt-panel" data-folder="${fid}">
       <div class="bdt-row">
         <span class="bdt-logo">BD</span>
@@ -1100,7 +1100,7 @@
         </div>
       </div>
       ${amb.length ? `<details class="os-sec" open><summary>${plural(amb.length, "album à choisir", "albums à choisir")} : plusieurs séries possibles</summary>${ambHtml}</details>` : ""}
-      ${nf.length ? `<details class="os-sec"${amb.length ? "" : " open"}><summary>${plural(nf.length, "album introuvable", "albums introuvables")} sous ce titre</summary><div class="os-nfs">${nfHtml}</div></details>` : ""}
+      ${nf.length ? `<details class="os-sec"${amb.length ? "" : " open"}><summary>${plural(nf.length, "album introuvable", "albums introuvables")} sous ce titre</summary>${nfHtml}</details>` : ""}
       ${ok.length ? `<details class="os-sec"><summary>${plural(ok.length, "album trouvé", "albums trouvés")}</summary><ul class="os-ok">${okHtml}</ul></details>` : ""}
     </div>`;
   }
@@ -1159,6 +1159,19 @@
       }
       if (action === "os-stop") { await api("/api/bdt/batch", { method: "DELETE" }); toast("Arrêt demandé (après l'album en cours)"); return; }
       if (action === "os-forget") { await api(`/api/bdt/oneshot/${el.dataset.album}`, { method: "DELETE" }); route(); return; }
+      if (action === "os-open") {
+        const item = el.closest(".os-item, .os-ok li");
+        const old = item.querySelector(".os-search");
+        if (old) { old.remove(); return; }
+        const box = document.createElement("div");
+        box.className = "os-search";
+        box.innerHTML = `<form class="bdt-search" data-os="q" data-album="${el.dataset.album}"><input type="search" name="q" value="${esc(el.dataset.q || "")}" placeholder="Titre de l'album ou de la série"><button class="btn" type="submit">Chercher</button></form>
+          <form class="bdt-search" data-os="url" data-album="${el.dataset.album}"><input type="url" name="url" placeholder="…ou coller l'adresse Bédéthèque de l'album ou de la série (https://www.bedetheque.com/…)"><button class="btn" type="submit">Utiliser</button></form>
+          <div class="os-results"></div>`;
+        item.appendChild(box);
+        box.querySelector("form").requestSubmit();
+        return;
+      }
       if (action === "os-pick" || action === "os-query") {
         const body = {};
         if (action === "os-pick") body.url = el.dataset.url;
@@ -1195,6 +1208,28 @@
     }
   }
   main.addEventListener("submit", async e => {
+    const osf = e.target.closest("form[data-os]");
+    if (osf) {
+      e.preventDefault();
+      const album = osf.dataset.album, box = osf.closest(".os-search"), res = box.querySelector(".os-results");
+      if (osf.dataset.os === "url") {
+        const url = osf.elements.url.value.trim();
+        if (!/bedetheque\.com\/(serie-\d+-BD|BD-)/.test(url)) { toast("Collez l'adresse d'une série (…/serie-1234-BD-…) ou d'un album (…/BD-…-1234.html) de Bédéthèque"); return; }
+        bdtAction("os-pick", { dataset: { album, url } });
+        return;
+      }
+      const q = osf.elements.q.value.trim();
+      if (q.length < 2) return;
+      res.innerHTML = `<div class="spinner" style="margin:8px 0"></div>`;
+      try {
+        const r = await api(`/api/bdt/oneshot/${album}/search?q=${encodeURIComponent(q)}`);
+        res.innerHTML = (r.results.length ? `<div class="cands">${r.results.map(c => `<button type="button" class="cand" data-bdt="os-pick" data-album="${album}" data-url="${esc(c.url)}">
+            <b>${esc(c.name)}</b><small>${[c.genre, c.tomes ? plural(c.tomes, "tome", "tomes") : "", c.exact ? "correspondance exacte" : ""].filter(Boolean).join(" · ")}</small></button>`).join("")}</div>`
+          : `<p class="muted">Aucune série trouvée pour « ${esc(q)} ».</p>`)
+          + `<p class="muted small">Pas la bonne ? <a class="ext" href="${esc(r.web)}" target="_blank" rel="noopener">Chercher « ${esc(q)} » sur Bédéthèque ↗</a>, puis collez l'adresse de la fiche ci-dessus.${r.site_error ? ` (Recherche du site indisponible : ${esc(r.site_error)})` : ""}</p>`;
+      } catch (err) { res.innerHTML = `<p class="error">${esc(err.message)}</p>`; }
+      return;
+    }
     const form = e.target.closest("form[data-bdt]");
     if (!form) return;
     e.preventDefault();
