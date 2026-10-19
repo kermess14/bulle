@@ -1150,7 +1150,7 @@
       ${cands.length ? `<div class="cands">${cands.map(c => `<button type="button" class="cand" data-bdt="pick" data-folder="${folderId}" data-url="${esc(c.url)}">
           <b>${esc(c.name)}</b><small>${[c.genre, c.tomes ? plural(c.tomes, "tome", "tomes") : "", c.exact ? "correspondance exacte" : ""].filter(Boolean).join(" · ")}</small></button>`).join("")}</div>` : ""}
       <form class="bdt-search" data-bdt="search" data-folder="${folderId}"><input type="search" name="q" placeholder="Chercher une série sur Bédéthèque…" value="${esc(report && report.query || "")}"><button class="btn" type="submit">Chercher</button></form>
-      <form class="bdt-search" data-bdt="url" data-folder="${folderId}"><input type="url" name="url" placeholder="…ou coller l'adresse de la série (https://www.bedetheque.com/serie-…html)"><button class="btn" type="submit">Utiliser</button></form>
+      <form class="bdt-search" data-bdt="url" data-folder="${folderId}"><input type="url" name="url" placeholder="…ou coller l'adresse Bédéthèque de la série ou d'un de ses albums"><button class="btn" type="submit">Utiliser</button></form>
       <div class="bdt-results" id="bdt-results"></div>
     </div>`;
   }
@@ -1238,7 +1238,7 @@
       const album = osf.dataset.album, box = osf.closest(".os-search"), res = box.querySelector(".os-results");
       if (osf.dataset.os === "url") {
         const url = osf.elements.url.value.trim();
-        if (!/bedetheque\.com\/(serie-\d+-BD|BD-)/.test(url)) { toast("Collez l'adresse d'une série (…/serie-1234-BD-…) ou d'un album (…/BD-…-1234.html) de Bédéthèque"); return; }
+        if (!/bedetheque\.com\/(serie-\d+-BD|BD-)|bdgest\.com\//.test(url)) { toast("Collez l'adresse d'une série (…/serie-1234-BD-…) ou d'un album (…/BD-…-1234.html) de Bédéthèque, ou une page BDGest"); return; }
         bdtAction("os-pick", { dataset: { album, url } });
         return;
       }
