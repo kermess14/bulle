@@ -29,7 +29,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.28.1"
+VERSION = "0.28.2"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -515,16 +515,24 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             return mode
         return "oneshots" if is_oneshot_name(folder.get("name") or "") else "series"
 
+    def incomplete_oneshot(row: Optional[dict], meta: Optional[dict]) -> bool:
+        """One shot lié à sa série, mais dont l'album n'a pas été repéré (pas de fiche : ni auteurs ni résumé)."""
+        return bool(row and row["status"] == "ok" and row.get("series_url") and not (meta and meta.get("url"))
+                    and not (meta and meta["data"].get("fix_tried")))
+
     def oneshots_report(folder: dict, children: Optional[list[dict]] = None) -> dict:
         children = children if children is not None else lib.children(folder["id"])
         albums = [c for c in children if c["kind"] == "album"]
         rows = lib.bdt_oneshots_for(folder["id"])
-        counts = {"ok": 0, "ambiguous": 0, "not_found": 0, "todo": 0, "total": len(albums)}
+        metas = lib.bdt_albums_for_folder(folder["id"])
+        counts = {"ok": 0, "ambiguous": 0, "not_found": 0, "todo": 0, "total": len(albums), "incomplete": 0}
         items = []
         for a in albums:
             r = rows.get(a["id"])
             st = r["status"] if r else "todo"
             counts[st] = counts.get(st, 0) + 1
+            if incomplete_oneshot(r, metas.get(a["id"])):
+                counts["incomplete"] += 1
             if st in ("ambiguous", "not_found"):
                 items.append({"id": a["id"], "name": a["name"], "status": st, "query": r.get("query"),
                               "candidates": r.get("candidates") or []})
@@ -1560,7 +1568,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         report["query"] = query_from_folder(folder["name"])
         return report
 
-    def analyze_oneshot(folder: dict, album: dict, url: Optional[str] = None, query: Optional[str] = None) -> dict:
+    def analyze_oneshot(folder: dict, album: dict, url: Optional[str] = None, query: Optional[str] = None,
+                        keep: Optional[dict] = None) -> dict:
         """Un album d'un dossier de one shots, cherché comme sa propre série : recherche dans l'index (sans requête
         réseau la plupart du temps), puis une seule page — la fiche de la série — si la correspondance est sûre."""
         q = (query or query_from_album(album["name"])).strip()
@@ -1572,6 +1581,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if not re.search(r"/serie-\d+-BD", url) and re.search(r"bedetheque\.com/BD-.*-\d+\.html", url):
                 album_url, url = url, bdt.album_series_url(url)   # fiche d'un album : on remonte à sa série
             series, manual = bdt.series(url), True
+            if keep:   # fiche complétée : on garde la façon dont l'album avait été lié
+                q, score, manual = keep.get("query") or q, keep.get("score"), bool(keep.get("manual"))
         else:
             manual = bool(query)
             candidates = bdt_search(q, year=year)
@@ -1594,7 +1605,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             series = bdt.series(best["url"])
         alb = pick_album(series, album["name"], album_url)
         data = dict(alb) if alb else {"url": None, "title": series.get("title"), "number": None, "kind": None,
-                                      "year": None}
+                                      "year": None, "fix_tried": bool(keep)}
         data.update(series_title=series.get("title"), series_url=series["url"], series_genre=series.get("genre"))
         lib.bdt_oneshot_set(album["id"], folder["id"], "ok", query=q, score=score, manual=manual, series=series,
                             album=data)
@@ -1606,7 +1617,22 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         albums = [c for c in lib.children(folder["id"]) if c["kind"] == "album"]
         done = lib.bdt_oneshots_for(folder["id"])
         todo = [a for a in albums if force or a["id"] not in done]
-        bdt_job.update(folder_id=folder["id"], sub_done=0, sub_total=len(todo))
+        # albums liés à leur série mais sans fiche d'album (auteurs, résumé) : la page de la série est relue,
+        # depuis le cache la plupart du temps (pas de requête), pour y retrouver l'album
+        metas = lib.bdt_albums_for_folder(folder["id"])
+        fix = [a for a in albums if not force and incomplete_oneshot(done.get(a["id"]), metas.get(a["id"]))]
+        bdt_job.update(folder_id=folder["id"], sub_done=0, sub_total=len(todo) + len(fix))
+        for a in fix:
+            if bdt_job["stop"]:
+                return
+            bdt_job["current"] = f"{folder['name']} › {a['name']}"
+            try:
+                analyze_oneshot(folder, a, url=done[a["id"]]["series_url"], keep=done[a["id"]])
+            except BdtError as e:
+                if "refuse" in str(e) or "vérification" in str(e):
+                    raise
+                bdt_job["errors"].append({"folder": a["name"], "error": str(e)})
+            bdt_job["sub_done"] += 1
         if not done and lib.bdt_series_get(folder["id"]):
             lib.bdt_series_delete(folder["id"])   # ancien lien erroné : le dossier entier pris pour une seule série
         for a in todo:
