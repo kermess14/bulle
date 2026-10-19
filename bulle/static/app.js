@@ -1062,6 +1062,7 @@
     if (!hasAlbums || data.bdt_enabled === false) return "";
     if (data.bdt_oneshots) return oneshotsPanelHtml(data);
     const b = data.bdt;
+    if (!b && !isAdmin()) return "";   // un lecteur ne lance pas d'analyse : rien à proposer
     const osBtn = isAdmin() ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="oneshots" data-folder="${data.folder.id}" title="Ce dossier rassemble des albums sans rapport entre eux : chacun sera cherché comme sa propre série">Ce sont des one shots</button>` : "";
     if (!b) {
       return `<div class="bdt-panel" id="bdt-panel"><div class="bdt-row"><span class="bdt-logo">BD</span>
@@ -1082,14 +1083,14 @@
           ${b.unmatched.length ? `<div class="bdt-unmatched">Non reconnus : ${b.unmatched.map(u => `<span class="chip gray" title="Ce fichier n'a pas pu être rattaché à un tome">${esc(u.name)}</span>`).join(" ")}</div>` : ""}
           ${b.duplicates.length ? `<div class="bdt-unmatched">${plural(b.duplicates.length, "doublon", "doublons")} (plusieurs fichiers pour le même tome)</div>` : ""}
         </div>
-        <div class="bdt-actions">
+        ${!isAdmin() ? "" : `<div class="bdt-actions">
           <button class="btn" type="button" data-bdt="refresh" data-folder="${data.folder.id}" title="Relire la fiche sur Bédéthèque">↻ Mettre à jour</button>
           ${sr.detailed ? "" : `<button class="btn" type="button" data-bdt="details" data-folder="${data.folder.id}" title="Lire les auteurs, éditeur, ISBN de chaque tome (une page Bédéthèque par 10 tomes)">Auteurs et détails</button>`}
           <button class="btn" type="button" data-bdt="summaries" data-folder="${data.folder.id}" title="Lire le début du résumé de chaque album (une page Bédéthèque par album, en tâche de fond)">Résumés</button>
           <button class="btn" type="button" data-bdt="change" data-folder="${data.folder.id}">Changer de série</button>
           <button class="btn" type="button" data-bdt="forget" data-folder="${data.folder.id}">Oublier</button>
           ${osBtn}
-        </div>
+        </div>`}
       </div>${extra || ""}</div>`;
   }
 
@@ -1116,12 +1117,12 @@
           ${!admin ? "" : o.running ? `<button class="btn" type="button" data-bdt="os-stop" data-folder="${fid}">Arrêter</button>`
             : c.todo ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Une requête Bédéthèque par album trouvé, au rythme prudent habituel, en tâche de fond">Chercher les ${c.todo} albums</button>`
             : c.incomplete ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Ces albums sont liés à leur série mais leur fiche (auteurs, éditeur, résumé) n'a pas été lue : la page de la série est relue, le plus souvent depuis la mémoire de Bulle, sans requête">Compléter ${plural(c.incomplete, "fiche", "fiches")}</button>` : ""}
-          ${c.ok ? `<button class="btn" type="button" data-bdt="summaries" data-folder="${fid}" title="Lire le début du résumé de chaque album trouvé (une page Bédéthèque par album, en tâche de fond)">Résumés</button>` : ""}
+          ${c.ok && admin ? `<button class="btn" type="button" data-bdt="summaries" data-folder="${fid}" title="Lire le début du résumé de chaque album trouvé (une page Bédéthèque par album, en tâche de fond)">Résumés</button>` : ""}
           ${admin && !o.running ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="series" data-folder="${fid}" title="Traiter ce dossier comme une seule série">C'est une série</button>` : ""}
         </div>
       </div>
-      ${amb.length ? `<details class="os-sec" open><summary>${plural(amb.length, "album à choisir", "albums à choisir")} : plusieurs séries possibles</summary>${ambHtml}</details>` : ""}
-      ${nf.length ? `<details class="os-sec"${amb.length ? "" : " open"}><summary>${plural(nf.length, "album introuvable", "albums introuvables")} sous ce titre</summary>${nfHtml}</details>` : ""}
+      ${amb.length && admin ? `<details class="os-sec" open><summary>${plural(amb.length, "album à choisir", "albums à choisir")} : plusieurs séries possibles</summary>${ambHtml}</details>` : ""}
+      ${nf.length && admin ? `<details class="os-sec"${amb.length ? "" : " open"}><summary>${plural(nf.length, "album introuvable", "albums introuvables")} sous ce titre</summary>${nfHtml}</details>` : ""}
       ${ok.length ? `<details class="os-sec"><summary>${plural(ok.length, "album trouvé", "albums trouvés")}</summary><ul class="os-ok">${okHtml}</ul></details>` : ""}
     </div>`;
   }
@@ -1329,11 +1330,11 @@
       return `<div class="bdt-row"><div class="spinner" style="margin:0"></div><div class="bdt-main">Analyse en cours : ${job.done} / ${job.total}${job.current ? ` — <i>${esc(job.current)}</i>` : ""}${job.sub_total ? ` <small class="muted">(one shot ${job.sub_done} / ${job.sub_total})</small>` : ""}
         <div class="pbar"><i style="width:${job.total ? Math.round(job.done / job.total * 100) : 0}%"></i></div>
         <small class="muted">${job.linked} liées · ${job.ambiguous} à choisir · ${job.not_found} introuvables${job.os_found + job.os_ambiguous + job.os_not_found ? ` · one shots : ${job.os_found} trouvés, ${job.os_ambiguous} à choisir, ${job.os_not_found} introuvables` : ""} · ${job.errors.length} erreurs</small></div>
-        <button class="btn" type="button" data-batch="stop">Arrêter</button></div>`;
+        ${isAdmin() ? `<button class="btn" type="button" data-batch="stop">Arrêter</button>` : ""}</div>`;
     }
     const last = job.total ? `<small class="muted">Dernière analyse groupée : ${job.done}/${job.total} dossiers — ${job.linked} liées, ${job.ambiguous} à choisir à la main, ${job.not_found} introuvables${job.errors.length ? `, ${job.errors.length} erreurs (${esc(job.errors[0].error)})` : ""}.</small>` : "";
     return `<div class="bdt-row"><span class="bdt-logo">BD</span><div class="bdt-main">${unlinkedCount ? `${plural(unlinkedCount, "dossier d'albums n'est pas encore comparé", "dossiers d'albums ne sont pas encore comparés")} à Bédéthèque. ${osTodo ? ` Dont ${plural(osTodo, "one shot", "one shots")} à chercher un par un.` : ""} L'analyse groupée fait environ une requête par série, une toutes les ${st.interval} s (environ ${Math.max(1, Math.ceil(requests * st.interval * 1.15 / 60))} min, pauses comprises) et s'arrête quand vous voulez.` : "Tous les dossiers d'albums ont été comparés à Bédéthèque."}${last ? "<br>" + last : ""}</div>
-      ${unlinkedCount ? `<button class="btn primary" type="button" data-batch="start">Analyser les ${unlinkedCount} dossiers</button>` : ""}</div>`;
+      ${unlinkedCount && isAdmin() ? `<button class="btn primary" type="button" data-batch="start">Analyser les ${unlinkedCount} dossiers</button>` : ""}</div>`;
   }
   async function pollBatch() {
     clearTimeout(batchTimer);
@@ -1915,6 +1916,10 @@
   async function renderSummary(slot, it) {
     if (!slot || !it.meta || !it.meta.url) return;
     if (it.meta.summary_at) { slot.innerHTML = summaryHtml(it.meta.summary, it.meta.url); return; }
+    if (!isAdmin()) {   // un lecteur ne déclenche jamais de requête vers Bédéthèque
+      slot.innerHTML = `<p class="summary muted">Résumé pas encore récupéré. <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">Voir la fiche sur Bédéthèque ↗</a></p>`;
+      return;
+    }
     if (!settings.global.bdt_enabled || settings.global.bdt_auto_summary === false) {
       slot.innerHTML = `<p class="summary muted"><button class="btn mini" type="button" data-summary="${it.id}">Lire le résumé sur Bédéthèque</button></p>`;
       return;
@@ -2405,6 +2410,10 @@
     try {
       let r = await api(`/api/bdt/album/${id}/summary`);
       if (!r.linked) { fill(null); return; }
+      if (!r.summary_at && !isAdmin()) {
+        if (popEl) { popEl.querySelector("p").outerHTML = `<p class="muted">Résumé pas encore récupéré.</p>`; placePop(card || btn); }
+        return;
+      }
       if (!r.summary_at) r = await api(`/api/bdt/album/${id}/summary`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       fill(r.summary, item && item.meta ? item.meta.url : "");
     } catch (e) { if (popEl) popEl.querySelector("p").textContent = `Résumé indisponible : ${e.message}`; }
