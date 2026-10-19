@@ -150,7 +150,8 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - Présentation téléphone (écran de 700 px ou moins, dans l'appli Android comme dans un navigateur) : barre
   d'onglets en bas à portée du pouce (Bibliothèque, À lire, Recherche, Favoris — ou Hors ligne dans l'appli —,
   Plus), pochettes à trois par ligne, fiche d'album qui monte du bas avec de gros boutons, réglages en liste de
-  rubriques puis rubrique plein écran, décor animé coupé. Tout le reste (Listes, Historique, Activité,
+  rubriques puis rubrique plein écran, lettres en rangée horizontale sous la barre du haut (plus de barre
+  latérale), décor animé coupé. Tout le reste (Listes, Historique, Activité,
   Collection, Au hasard, Adulte, Réglages, qualité HD/SD, scan, profil, laboratoire) est dans « Plus ».
   Sur tablette et PC, rien ne change.
 - Appli Android ([bulle-android](https://github.com/kermess14/bulle-android)) : dans l'appli, la fiche d'un album
