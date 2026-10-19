@@ -32,7 +32,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.29.5"
+VERSION = "0.30.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -85,6 +85,7 @@ def global_defaults() -> dict:
         "bdt_pause_every": 50,        # tâches de fond : pause après n requêtes…
         "bdt_pause_minutes": 2.5,     # … de cette durée (± 20 %)
         "bdt_auto_summary": True,     # résumé lu sur la fiche Bédéthèque quand on ouvre la fiche d'un album
+        "bdt_bdgest": False,          # laboratoire : si l'index ne trouve pas sûr, recherche « tout le site » BDGest (albums compris)
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
         "account_login": False,       # se connecter avec un compte (nom + mot de passe) : pour mettre Bulle sur Internet
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
@@ -100,7 +101,7 @@ GLOBAL_TYPES = {
     "scan_interval_hours": (int, 0, 720), "scan_on_start": (bool,), "preload_covers": (bool,), "scan_mode": (str,), "preload_threads": (int, 1, 8),
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
-    "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,),
+    "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,), "bdt_bdgest": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
     "require_profile": (bool,), "account_login": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
     "quality_auto": (bool,), "hd_min_px": (int, 800, 8000),
@@ -1816,6 +1817,33 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 return res
         return bdt.search_site(query)
 
+    def bdgest_search(q: str, year: Optional[int] = None) -> Optional[dict]:
+        """Recherche « dans tout le site » BDGest (une requête, gardée 7 jours), si le laboratoire l'a activée."""
+        if not settings().get("bdt_bdgest"):
+            return None
+        try:
+            return bdt.search_full(q, year)
+        except BdtError as e:
+            log.info("Recherche BDGest « %s » : %s", q, e)
+            return None
+
+    def album_candidates(albums: list[dict], limit: int = 8) -> list[dict]:
+        """Albums trouvés par la recherche du site, présentés comme des propositions : en choisir un lie directement
+        la bonne fiche (l'adresse est celle de l'album)."""
+        out = []
+        for h in albums[:limit]:
+            label = h["series"] if norm_title(h["title"]) == norm_title(re.sub(r"\([^()]*\)", " ", h["series"])) \
+                else f"{h['series']} — {h['title']}"
+            out.append({"url": h["url"], "name": label + (f" ({h['year']})" if h.get("year") else ""), "score": h["score"],
+                        "album": True, "genre": "album", "tomes": None, "exact": False})
+        return out
+
+    def merge_candidates(a: list[dict], b: list[dict]) -> list[dict]:
+        seen = {c["url"] for c in a}
+        out = list(a) + [c for c in b if c["url"] not in seen]
+        out.sort(key=lambda c: -c.get("score", 0))
+        return out
+
     def analyze_folder(folder: dict, url: Optional[str] = None, details: bool = False, force: bool = False) -> dict:
         """Analyse d'un dossier : recherche (ou lien existant / adresse donnée), lecture de la série, comparaison."""
         children = lib.children(folder["id"])
@@ -1849,6 +1877,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 candidates = bdt_search(query, hint_int)
                 if not candidates and len(query.split()) > 2:
                     candidates = bdt_search(" ".join(query.split()[:2]), hint_int)
+                if not candidates or candidates[0]["score"] < 0.75:   # laboratoire : recherche BDGest en secours
+                    full = bdgest_search(query)
+                    if full:
+                        candidates = merge_candidates(candidates, full["series"])
                 if not candidates:
                     return {"status": "not_found", "query": query,
                             "message": f"Aucune série trouvée sur Bédéthèque pour « {query} »."}
@@ -1893,18 +1925,45 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 more = bdt_search(re.sub(r"\s+", " ", full), year=year)   # « Zélie nord - Sud » : on essaie aussi le nom entier
                 if more and (not candidates or more[0]["score"] > candidates[0]["score"]):
                     candidates = more
-            if not candidates:
-                lib.bdt_oneshot_set(album["id"], folder["id"], "not_found", query=q)
-                return {"status": "not_found", "query": q}
-            best = candidates[0]
-            # un titre de one shot est court : on ne lie tout seul que si le nom est quasi identique, et sans homonyme
-            # à égalité (« Angela (Panini) » / « Angela (Pecqueur/Vatine) ») : alors c'est à choisir
-            tie = len(candidates) > 1 and candidates[1]["score"] >= best["score"] - 0.05
-            if (best["score"] < 0.86 or tie) and not (query and len(candidates) == 1):
-                lib.bdt_oneshot_set(album["id"], folder["id"], "ambiguous", query=q, candidates=candidates[:12])
-                return {"status": "ambiguous", "query": q, "candidates": candidates[:12]}
-            score = best["score"]
-            series = bdt.series(best["url"])
+
+            def unsure(cands: list[dict]) -> bool:
+                # un titre de one shot est court : on ne lie tout seul que si le nom est quasi identique, et sans
+                # homonyme à égalité (« Angela (Panini) » / « Angela (Pecqueur/Vatine) ») : sinon c'est à choisir
+                if not cands:
+                    return True
+                tie = len(cands) > 1 and cands[1]["score"] >= cands[0]["score"] - 0.05
+                return (cands[0]["score"] < 0.86 or tie) and not (query and len(cands) == 1)
+
+            series = None
+            if unsure(candidates):
+                # laboratoire : la recherche de tout le site BDGest trouve aussi les albums par leur titre ; l'année
+                # du fichier départage les homonymes (« Là-bas (2003) » → Là-bas (Sibran/Tronchet), paru en 2003)
+                site = bdgest_search(q, year)
+                if site:
+                    hits = [h for h in site["albums"] if h["score"] >= 0.86]
+                    if year and any(h.get("year") == year for h in hits):
+                        hits = [h for h in hits if h.get("year") == year]
+                    if hits and len({norm_title(h["series"]) for h in hits}) == 1:
+                        h = hits[0]
+                        album_url = h["url"]
+                        s_url = next((c["url"] for c in site["series"] if norm_title(c["name"]) == norm_title(h["series"])), None)
+                        series, score = bdt.series(s_url or bdt.album_series_url(h["url"])), h["score"]
+                    else:
+                        candidates = merge_candidates(candidates, site["series"] + album_candidates(site["albums"]))
+            if series is None:
+                if not candidates:
+                    lib.bdt_oneshot_set(album["id"], folder["id"], "not_found", query=q)
+                    return {"status": "not_found", "query": q}
+                if unsure(candidates):
+                    lib.bdt_oneshot_set(album["id"], folder["id"], "ambiguous", query=q, candidates=candidates[:12])
+                    return {"status": "ambiguous", "query": q, "candidates": candidates[:12]}
+                best = candidates[0]
+                score = best["score"]
+                if bdt_album_url(best["url"]):   # proposition « album » (recherche du site) : sa série, et cet album
+                    album_url = bdt_album_url(best["url"])
+                    series = bdt.series(bdt.album_series_url(album_url))
+                else:
+                    series = bdt.series(best["url"])
         alb = pick_album(series, album["name"], album_url)
         data = dict(alb) if alb else {"url": None, "title": series.get("title"), "number": None, "kind": None,
                                       "year": None, "fix_tried": bool(keep)}
@@ -1982,12 +2041,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         results = bdt_search(q, year=year, limit=25)
         site_error = None
         try:
+            # recherche de tout le site (BDGest) : séries, et albums par leur titre (choisir un album lie la bonne fiche)
+            full = bdt.search_full(q, year)
             seen = {r["url"].split("/")[-1].split("-BD")[0] for r in results}
-            for r in bdt.search_site(q):
+            for r in full["series"]:
                 key = r["url"].split("/")[-1].split("-BD")[0]
                 if key not in seen:
                     seen.add(key)
                     results.append(r)
+            results += album_candidates(full["albums"], 10)
         except BdtError as e:
             site_error = str(e)
         return jsonify({"results": results[:30], "site_error": site_error,
