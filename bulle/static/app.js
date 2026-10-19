@@ -1089,12 +1089,13 @@
         <span class="bdt-logo">BD</span>
         <div class="bdt-main">
           <div><b>One shots</b> · chaque album est cherché sur Bédéthèque comme sa propre série</div>
-          <div class="bdt-progress"><span>${plural(c.ok, "trouvé", "trouvés")} · ${c.ambiguous} à choisir · ${plural(c.not_found, "introuvable", "introuvables")}${c.todo ? ` · <b>${c.todo} pas encore cherchés</b>` : ""}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
+          <div class="bdt-progress"><span>${plural(c.ok, "trouvé", "trouvés")} · ${c.ambiguous} à choisir · ${plural(c.not_found, "introuvable", "introuvables")}${c.todo ? ` · <b>${c.todo} pas encore cherchés</b>` : ""}${c.incomplete ? ` · ${plural(c.incomplete, "fiche à compléter", "fiches à compléter")}` : ""}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
           <div id="os-job" class="muted">${o.running ? `<div class="spinner" style="margin:0;display:inline-block;vertical-align:middle;width:14px;height:14px"></div> Recherche en cours…` : ""}</div>
         </div>
         <div class="bdt-actions">
           ${!admin ? "" : o.running ? `<button class="btn" type="button" data-bdt="os-stop" data-folder="${fid}">Arrêter</button>`
-            : c.todo ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Une requête Bédéthèque par album trouvé, au rythme prudent habituel, en tâche de fond">Chercher les ${c.todo} albums</button>` : ""}
+            : c.todo ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Une requête Bédéthèque par album trouvé, au rythme prudent habituel, en tâche de fond">Chercher les ${c.todo} albums</button>`
+            : c.incomplete ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Ces albums sont liés à leur série mais leur fiche (auteurs, éditeur, résumé) n'a pas été lue : la page de la série est relue, le plus souvent depuis la mémoire de Bulle, sans requête">Compléter ${plural(c.incomplete, "fiche", "fiches")}</button>` : ""}
           ${c.ok ? `<button class="btn" type="button" data-bdt="summaries" data-folder="${fid}" title="Lire le début du résumé de chaque album trouvé (une page Bédéthèque par album, en tâche de fond)">Résumés</button>` : ""}
           ${admin && !o.running ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="series" data-folder="${fid}" title="Traiter ce dossier comme une seule série">C'est une série</button>` : ""}
         </div>
