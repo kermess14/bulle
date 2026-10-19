@@ -9,6 +9,7 @@ import logging
 import glob
 import os
 import re
+import urllib.parse
 import secrets
 import threading
 import time
@@ -22,12 +23,13 @@ from PIL import Image
 from . import opds
 
 from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, compare, index_letter_for, norm_title,
-                         is_oneshot_name, parse_album_name, pick_album, query_from_album, query_from_folder)
+                         album_year, is_oneshot_name, parse_album_name, pick_album, query_from_album,
+                         query_from_folder)
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.28.0"
+VERSION = "0.28.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -528,7 +530,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                               "candidates": r.get("candidates") or []})
             elif st == "ok":
                 items.append({"id": a["id"], "name": a["name"], "status": st, "series_title": r.get("series_title"),
-                              "series_url": r.get("series_url"), "manual": bool(r.get("manual")),
+                              "series_url": r.get("series_url"), "manual": bool(r.get("manual")), "query": r.get("query"),
                               "score": r.get("score")})
         running = bdt_job["running"] and bdt_job.get("folder_id") == folder["id"]
         return {"counts": counts, "albums": items, "running": running, "named": is_oneshot_name(folder["name"])}
@@ -1496,7 +1498,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             lib.bdt_index_store(letter, rows, norm_title)
         return lib.bdt_index_rows(letter)
 
-    def bdt_search(query: str, hint_int: bool = False) -> list[dict]:
+    def bdt_search(query: str, hint_int: bool = False, year: Optional[int] = None, limit: int = 12) -> list[dict]:
         """Recherche d'une série : index alphabétique d'abord, recherche du site en secours."""
         try:
             rows = bdt_index_for(query)
@@ -1504,7 +1506,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             log.warning("Index Bédéthèque indisponible (%s), recherche du site", e)
             rows = None
         if rows:
-            res = bdt.search_index(query, rows, hint_int=hint_int)
+            res = bdt.search_index(query, rows, hint_int=hint_int, year=year, limit=limit)
             if res:
                 return res
         return bdt.search_site(query)
@@ -1562,29 +1564,35 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         """Un album d'un dossier de one shots, cherché comme sa propre série : recherche dans l'index (sans requête
         réseau la plupart du temps), puis une seule page — la fiche de la série — si la correspondance est sûre."""
         q = (query or query_from_album(album["name"])).strip()
+        year = album_year(album["name"])
         candidates: list[dict] = []
         score: Optional[float] = None
+        album_url = None
         if url:
+            if not re.search(r"/serie-\d+-BD", url) and re.search(r"bedetheque\.com/BD-.*-\d+\.html", url):
+                album_url, url = url, bdt.album_series_url(url)   # fiche d'un album : on remonte à sa série
             series, manual = bdt.series(url), True
         else:
             manual = bool(query)
-            candidates = bdt_search(q)
+            candidates = bdt_search(q, year=year)
             full = re.sub(r"\([^()]*\)", " ", album["name"]).strip()
             if (not candidates or candidates[0]["score"] < 0.86) and not query and norm_title(full) != norm_title(q):
-                more = bdt_search(re.sub(r"\s+", " ", full))   # « Zélie nord - Sud » : on essaie aussi le nom entier
+                more = bdt_search(re.sub(r"\s+", " ", full), year=year)   # « Zélie nord - Sud » : on essaie aussi le nom entier
                 if more and (not candidates or more[0]["score"] > candidates[0]["score"]):
                     candidates = more
             if not candidates:
                 lib.bdt_oneshot_set(album["id"], folder["id"], "not_found", query=q)
                 return {"status": "not_found", "query": q}
             best = candidates[0]
-            # un titre de one shot est court : on ne lie tout seul que si le nom est quasi identique
-            if best["score"] < 0.86 and not (query and len(candidates) == 1):
-                lib.bdt_oneshot_set(album["id"], folder["id"], "ambiguous", query=q, candidates=candidates[:6])
-                return {"status": "ambiguous", "query": q, "candidates": candidates[:6]}
+            # un titre de one shot est court : on ne lie tout seul que si le nom est quasi identique, et sans homonyme
+            # à égalité (« Angela (Panini) » / « Angela (Pecqueur/Vatine) ») : alors c'est à choisir
+            tie = len(candidates) > 1 and candidates[1]["score"] >= best["score"] - 0.05
+            if (best["score"] < 0.86 or tie) and not (query and len(candidates) == 1):
+                lib.bdt_oneshot_set(album["id"], folder["id"], "ambiguous", query=q, candidates=candidates[:12])
+                return {"status": "ambiguous", "query": q, "candidates": candidates[:12]}
             score = best["score"]
             series = bdt.series(best["url"])
-        alb = pick_album(series, album["name"])
+        alb = pick_album(series, album["name"], album_url)
         data = dict(alb) if alb else {"url": None, "title": series.get("title"), "number": None, "kind": None,
                                       "year": None}
         data.update(series_title=series.get("title"), series_url=series["url"], series_genre=series.get("genre"))
@@ -1631,6 +1639,30 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                                            query=(body.get("query") or "").strip() or None))
         except BdtError as e:
             abort(502, description=str(e))
+
+    @app.route("/api/bdt/oneshot/<int:node_id>/search")
+    def api_bdt_oneshot_search(node_id: int):
+        """Recherche à la main pour un one shot : l'index des séries (sans requête) puis la recherche du site
+        (une requête, gardée 7 jours), fusionnés ; les homonymes sont tous montrés."""
+        bdt_check_enabled()
+        album = get_node(node_id, "album")
+        q = (request.args.get("q") or "").strip()
+        if len(q) < 2:
+            return jsonify({"results": [], "site_error": None})
+        year = album_year(album["name"])
+        results = bdt_search(q, year=year, limit=25)
+        site_error = None
+        try:
+            seen = {r["url"].split("/")[-1].split("-BD")[0] for r in results}
+            for r in bdt.search_site(q):
+                key = r["url"].split("/")[-1].split("-BD")[0]
+                if key not in seen:
+                    seen.add(key)
+                    results.append(r)
+        except BdtError as e:
+            site_error = str(e)
+        return jsonify({"results": results[:30], "site_error": site_error,
+                        "web": f"https://www.bedetheque.com/search/tout?RechTexte={urllib.parse.quote(q)}"})
 
     @app.route("/api/bdt/oneshot/<int:node_id>", methods=["DELETE"])
     def api_bdt_oneshot_forget(node_id: int):

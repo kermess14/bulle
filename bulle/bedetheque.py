@@ -106,9 +106,15 @@ def album_year(name: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def pick_album(series: dict, name: str) -> Optional[dict]:
-    """L'album d'une série qui correspond à un fichier de one shot : le seul album, sinon par titre puis par année."""
+def pick_album(series: dict, name: str, album_url: Optional[str] = None) -> Optional[dict]:
+    """L'album d'une série qui correspond à un fichier de one shot : celui qu'on a désigné, le seul album, sinon par
+    titre puis par année."""
     albums = series.get("albums") or []
+    if album_url:
+        key = re.sub(r"^https?://www\.bedetheque\.com", "", album_url)
+        for a in albums:
+            if re.sub(r"^https?://www\.bedetheque\.com", "", a.get("url") or "") == key:
+                return a
     if len(albums) == 1:
         return albums[0]
     if not albums:
@@ -276,16 +282,24 @@ class BedethequeClient:
         html = self.fetch(f"{BASE}/bandes_dessinees_{letter}.html", ttl=INDEX_TTL, force=force)
         return parse_index(html)
 
-    def search_index(self, query: str, index_rows: list[dict], hint_int: bool = False, limit: int = 12) -> list[dict]:
-        """Recherche locale dans l'index d'une lettre : exact, préfixe, puis ressemblance."""
+    def search_index(self, query: str, index_rows: list[dict], hint_int: bool = False, limit: int = 12,
+                     year: Optional[int] = None) -> list[dict]:
+        """Recherche locale dans l'index d'une lettre : exact, préfixe, puis ressemblance.
+        Les homonymes du site portent une précision entre parenthèses (« Angela (Pecqueur/Vatine) », « Angela (1994) ») :
+        un nom identique à la précision près compte presque comme exact ; une année en précision qui ne correspond pas
+        à celle du fichier (`year`) est déclassée."""
         q = norm_title(query)
         if not q:
             return []
         out = []
         for row in index_rows:
             name_n = row.get("name_norm") or norm_title(row["name"])
+            base = norm_title(re.sub(r"\([^()]*\)", " ", row["name"]))
+            qual_year = re.search(r"\(((?:19|20)\d\d)\)", row["name"])
             if name_n == q:
                 score = 1.0
+            elif base == q:
+                score = 0.93
             elif name_n.startswith(q + " ") or q.startswith(name_n + " "):
                 score = 0.9 - min(0.2, abs(len(name_n) - len(q)) / 100)
             else:
@@ -296,6 +310,8 @@ class BedethequeClient:
                 score += 0.25 if "integrale" in name_n else -0.08
             elif "integrale" in name_n and "integrale" not in q:
                 score -= 0.08
+            if year and qual_year:
+                score += 0.05 if int(qual_year.group(1)) == year else -0.15
             out.append({"id": row["id"], "url": row["url"], "name": row["name"], "genre": None, "tomes": None,
                         "exact": name_n == q, "score": round(min(1.0, score), 3)})
         out.sort(key=lambda c: -c["score"])
@@ -306,6 +322,14 @@ class BedethequeClient:
         if index_rows is not None:
             return self.search_index(query, index_rows, hint_int=hint_int)
         return self.search_site(query)
+
+    def album_series_url(self, url: str) -> str:
+        """Adresse d'une fiche album (…/BD-Titre-1234.html) → adresse de sa série (lien présent sur la fiche)."""
+        html = self.fetch(url)
+        m = re.search(r'href="((?:https?://www\.bedetheque\.com)?/serie-\d+-BD[^"]*?\.html)"', html)
+        if not m:
+            raise BdtError("Série introuvable sur cette fiche d'album Bédéthèque")
+        return m.group(1) if m.group(1).startswith("http") else BASE + m.group(1)
 
     def album_summary(self, url: str, force: bool = False) -> Optional[str]:
         """Résumé (début) d'un album d'après sa fiche Bédéthèque."""
