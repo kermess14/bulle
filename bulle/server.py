@@ -30,7 +30,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.29.0"
+VERSION = "0.29.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -1857,6 +1857,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_bdt_oneshot_search(node_id: int):
         """Recherche à la main pour un one shot : l'index des séries (sans requête) puis la recherche du site
         (une requête, gardée 7 jours), fusionnés ; les homonymes sont tous montrés."""
+        require_admin()   # aucune requête vers Bédéthèque depuis un compte lecteur
         bdt_check_enabled()
         album = get_node(node_id, "album")
         q = (request.args.get("q") or "").strip()
@@ -1913,6 +1914,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/bdt/search")
     def api_bdt_search():
+        require_admin()   # aucune requête vers Bédéthèque depuis un compte lecteur
         bdt_check_enabled()
         q = (request.args.get("q") or "").strip()
         if len(q) < 2:
@@ -1925,6 +1927,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/bdt/debug")
     def api_bdt_debug():
         """Diagnostic : ce que Bédéthèque renvoie au serveur (index et recherche du site)."""
+        require_admin()   # aucune requête vers Bédéthèque depuis un compte lecteur
         bdt_check_enabled()
         q = (request.args.get("q") or "Blueberry").strip()
         out = {"query": q, "letter": index_letter_for(q), "index": lib.bdt_index_stats(), "user_agent": _bdt_mod.USER_AGENT}
@@ -1996,6 +1999,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/bdt/album/<int:node_id>/summary", methods=["POST"])
     def api_bdt_summary(node_id: int):
         """Va chercher le résumé (une requête vers la fiche de l'album, puis mise en cache)."""
+        require_admin()   # aucune requête vers Bédéthèque depuis un compte lecteur
         bdt_check_enabled()
         get_node(node_id, "album")
         body = request.get_json(force=True, silent=True) or {}
@@ -2013,6 +2017,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/bdt/summaries/<int:folder_id>", methods=["POST"])
     def api_bdt_summaries(folder_id: int):
         """Résumés de tous les albums liés d'un dossier, en tâche de fond (une requête par album)."""
+        require_admin()   # aucune requête vers Bédéthèque depuis un compte lecteur
         bdt_check_enabled()
         folder = get_node(folder_id, "folder")
         if summary_job["running"]:
@@ -2051,6 +2056,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/bdt/summaries", methods=["DELETE"])
     def api_bdt_summaries_stop():
+        require_admin()   # aucune requête vers Bédéthèque depuis un compte lecteur
         summary_job["stop"] = True
         return jsonify(summary_job)
 
