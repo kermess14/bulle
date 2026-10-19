@@ -26,6 +26,7 @@ from bs4 import BeautifulSoup
 log = logging.getLogger("bulle.bedetheque")
 
 BASE = "https://www.bedetheque.com"
+BDGEST = "https://www.bdgest.com"   # site jumeau (critiques, previews) : ses pages renvoient vers la fiche Bédéthèque
 USER_AGENT = "Bulle (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
 PAGE_TTL = 30 * 24 * 3600          # fiches de séries : 30 jours
 SEARCH_TTL = 7 * 24 * 3600         # résultats de recherche : 7 jours
@@ -50,11 +51,12 @@ def strip_accents(s: str) -> str:
 
 def norm_title(s: str) -> str:
     """Minuscules, sans accents ni ponctuation, articles retirés (« Aigles Décapitées (Les) » = « les aigles decapitees »)."""
+    adverb = bool(re.match(r"\s*là(?!\w)", unicodedata.normalize("NFC", s), re.I))   # « Là-bas » : adverbe, pas l'article
     s = strip_accents(s).lower().replace("’", "'").replace("œ", "oe")
     s = re.sub(r"\(\s*(l'|les|le|la|the|un|une|des|a|an)\s*\)", " ", s)      # article entre parenthèses à la fin
     s = re.sub(r"[^a-z0-9]+", " ", s).strip()
     words = s.split()
-    while words and words[0] in ARTICLES:
+    while words and words[0] in ARTICLES and not adverb:
         words.pop(0)
     return " ".join(words)
 
@@ -223,9 +225,9 @@ class BedethequeClient:
             time.sleep(wait)
 
     def fetch(self, url: str, ttl: float = PAGE_TTL, force: bool = False) -> str:
-        if not url.startswith(BASE + "/"):
+        if not (url.startswith(BASE + "/") or url.startswith(BDGEST + "/")):
             raise BdtError("Adresse hors de bedetheque.com")
-        path = url[len(BASE):]
+        path = url[len(BASE):] if url.startswith(BASE + "/") else ""
         if re.match(r"^/(ajax|api|images|Couvertures|thb_couv|Planches|Versos|fiche|admin)", path, re.I):
             raise BdtError("Cette page de Bédéthèque est réservée (robots.txt) : non consultée")
         if not force:
@@ -301,7 +303,7 @@ class BedethequeClient:
             return []
         out = []
         for row in index_rows:
-            name_n = row.get("name_norm") or norm_title(row["name"])
+            name_n = norm_title(row["name"])   # recalculé : la normalisation a pu changer depuis la lecture de l'index
             base = norm_title(re.sub(r"\([^()]*\)", " ", row["name"]))
             qual_year = re.search(r"\(((?:19|20)\d\d)\)", row["name"])
             if name_n == q:
@@ -330,6 +332,22 @@ class BedethequeClient:
         if index_rows is not None:
             return self.search_index(query, index_rows, hint_int=hint_int)
         return self.search_site(query)
+
+    def resolve_url(self, url: str) -> str:
+        """Adresse collée par l'utilisateur → adresse Bédéthèque. Une page de BDGest, le site jumeau (critique, preview,
+        « chronique-42-BD-La-bas… »), est lue une fois pour y prendre le lien vers la fiche Bédéthèque (série de
+        préférence, sinon album). Toute autre adresse est rendue telle quelle."""
+        u = (url or "").strip()
+        m = re.match(r"https?://(?:www\.)?bdgest\.com(/[^\s#]*)", u)
+        if not m:
+            return u
+        html = self.fetch(BDGEST + m.group(1).split("?")[0])
+        link = (re.search(r"https?://www\.bedetheque\.com/serie-\d+-BD[^\"'\s<>]*?\.html", html)
+                or re.search(r"https?://www\.bedetheque\.com/BD-[^\"'\s<>]*?-\d+\.html", html))
+        if not link:
+            raise BdtError("Cette page BDGest ne renvoie vers aucune fiche Bédéthèque : collez plutôt l'adresse de la "
+                           "fiche sur bedetheque.com")
+        return link.group(0)
 
     def album_series_url(self, url: str) -> str:
         """Adresse d'une fiche album (…/BD-Titre-1234.html) → adresse de sa série (lien présent sur la fiche)."""
@@ -382,6 +400,14 @@ def _mock_page(url: str) -> Optional[str]:
     raise BdtError(f"(test) page simulée absente pour {url}")
 
 
+def album_url(s: str) -> Optional[str]:
+    """Adresse d'une fiche album (…/BD-Titre-1234.html) remise sous sa forme canonique, sinon None."""
+    if re.search(r"/serie-\d+-BD", s or ""):
+        return None
+    m = re.search(r"bedetheque\.com(/BD-[^/?#\s]*-\d+\.html)", s or "")
+    return BASE + m.group(1) if m else None
+
+
 def series_url(url_or_id) -> str:
     """Accepte un identifiant (« 5323 ») ou une adresse de série, renvoie l'adresse canonique."""
     s = str(url_or_id).strip()
@@ -390,7 +416,8 @@ def series_url(url_or_id) -> str:
     m = re.search(r"serie-(\d+)-BD([-\w]*?)(?:__\d+)?\.html", s)
     if m:
         return f"{BASE}/serie-{m.group(1)}-BD{m.group(2)}.html"
-    raise BdtError("Adresse de série Bédéthèque non reconnue (attendu : …/serie-1234-BD-Nom.html)")
+    raise BdtError("Adresse Bédéthèque non reconnue : collez l'adresse de la série (…/serie-1234-BD-Nom.html) "
+                   "ou celle d'un de ses albums (…/BD-Nom-Titre-1234.html)")
 
 
 # ----------------------------------------------------------------------------

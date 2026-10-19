@@ -26,13 +26,13 @@ from PIL import Image
 from . import opds
 
 from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, compare, index_letter_for, norm_title,
-                         album_year, is_oneshot_name, parse_album_name, pick_album, query_from_album,
+                         album_url as bdt_album_url, album_year, is_oneshot_name, parse_album_name, pick_album, query_from_album,
                          query_from_folder)
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.29.4"
+VERSION = "0.29.5"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -1830,6 +1830,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         score: Optional[float] = None
         manual = False
         if url:
+            url = bdt.resolve_url(url)   # page BDGest → fiche Bédéthèque
+            if bdt_album_url(url):   # adresse d'un album de la série (et non de la série) : on remonte à sa série
+                url = bdt.album_series_url(bdt_album_url(url))
             series = bdt.series(url, details=details, force=force)
             manual = True
         elif existing and not force:
@@ -1875,8 +1878,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         score: Optional[float] = None
         album_url = None
         if url:
-            if not re.search(r"/serie-\d+-BD", url) and re.search(r"bedetheque\.com/BD-.*-\d+\.html", url):
-                album_url, url = url, bdt.album_series_url(url)   # fiche d'un album : on remonte à sa série
+            url = bdt.resolve_url(url)   # page BDGest → fiche Bédéthèque
+            if bdt_album_url(url):
+                album_url = bdt_album_url(url)
+                url = bdt.album_series_url(album_url)   # fiche d'un album : on remonte à sa série
             series, manual = bdt.series(url), True
             if keep:   # fiche complétée : on garde la façon dont l'album avait été lié
                 q, score, manual = keep.get("query") or q, keep.get("score"), bool(keep.get("manual"))
