@@ -147,13 +147,14 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
-- Présentation téléphone (écran de 700 px ou moins, dans l'appli Android comme dans un navigateur) : barre
+- Présentation téléphone, **dans l'appli Android seulement** (écran de 700 px ou moins ; dans un navigateur, même sur
+  téléphone, rien ne change) : barre
   d'onglets en bas à portée du pouce (Bibliothèque, À lire, Recherche, Favoris — ou Hors ligne dans l'appli —,
   Plus), pochettes à trois par ligne, fiche d'album qui monte du bas avec de gros boutons, réglages en liste de
   rubriques puis rubrique plein écran, lettres en rangée horizontale sous la barre du haut (plus de barre
   latérale), décor animé coupé. Tout le reste (Listes, Historique, Activité,
   Collection, Au hasard, Adulte, Réglages, qualité HD/SD, scan, profil, laboratoire) est dans « Plus ».
-  Sur tablette et PC, rien ne change.
+  Sur tablette, PC et dans tout navigateur, rien ne change.
 - Appli Android ([bulle-android](https://github.com/kermess14/bulle-android)) : dans l'appli, la fiche d'un album
   propose « Garder hors connexion » (pages copiées sur le téléphone, lisibles sans réseau, avec le lecteur
   habituel) et le menu gagne une rubrique « Hors connexion ». Dans un navigateur, rien ne change.
