@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.24.1)
+# Bulle — lecteur de BD maison (v0.25.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -147,6 +147,9 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
+- Appli Android ([bulle-android](https://github.com/kermess14/bulle-android)) : dans l'appli, la fiche d'un album
+  propose « Garder hors connexion » (pages copiées sur le téléphone, lisibles sans réseau, avec le lecteur
+  habituel) et le menu gagne une rubrique « Hors connexion ». Dans un navigateur, rien ne change.
 - Rogner les marges blanches (Réglages › Lecteur, ou touche `R` dans le lecteur) : le tour blanc ou crème des
   pages est coupé à l'affichage, pour une planche plus grande à l'écran, en une page, double page et défilement.
   Les numéros de page isolés dans la marge sont ignorés, un titre dans la marge est gardé ; une page blanche, un
