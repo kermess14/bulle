@@ -72,6 +72,9 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
     <a href="#/history" data-tab="history" title="Historique">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
       <span class="lbl">Historique</span></a>
+    <a href="/__hors_connexion" id="tab-offline" title="Albums gardés sur ce téléphone, lisibles sans connexion" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+      <span class="lbl">Hors connexion</span><span class="cnt" id="offline-count"></span></a>
     <a href="#/activity" data-tab="activity" title="Activité de lecture">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 17V11M11 17V6M16 17v-4M21 17V9"/></svg>
       <span class="lbl">Activité</span></a>

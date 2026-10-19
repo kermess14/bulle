@@ -1339,3 +1339,7 @@ img.pavatar { object-fit: cover; padding: 0; }
 :root[data-lite="on"] .sidebar .ono, :root[data-lite="on"] h2::before, :root[data-lite="on"] h1, :root[data-lite="on"] .card .cover { animation: none !important; }
 :root[data-lite="on"][data-skin="stars"] body::after, :root[data-lite="on"][data-skin="ocean"] body::before { display: none; }
 :root[data-lite="on"] .card .cover, :root[data-lite="on"] .card:hover .cover { transition: none; }
+
+/* appli Android : lecture hors connexion */
+.offline-slot { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.offline-slot .btn.ok { background: rgba(79, 211, 140, .16); color: #4fd38c; border-color: rgba(79, 211, 140, .45); cursor: default; }

@@ -1593,6 +1593,7 @@
           <div class="sa-main">
             ${it.error ? "" : `<a class="btn primary big" href="/read/${it.id}${p && !p.completed ? "" : "?page=0"}">${ICON.play} ${p && !p.completed ? `Reprendre p. ${p.page + 1}` : (p ? "Relire" : "Lire")}</a>`}
             ${p && !p.completed && !it.error ? `<a class="btn" href="/read/${it.id}?page=0">Recommencer</a>` : ""}
+            ${it.error ? "" : `<span class="offline-slot" id="sheet-offline" data-id="${it.id}" data-pages="${it.pages || 0}"></span>`}
           </div>
           <div class="sa-row">
             ${it.error ? "" : (p && p.completed
@@ -1610,7 +1611,52 @@
       </div></div></div>`;
     renderSheetLists($("#sheet-lists"), it.id, it.lists || []);
     renderSummary($("#sheet-summary"), it);
+    renderOffline($("#sheet-offline"));
   }
+
+  // ---------------------------------------------------------------- appli Android : lecture hors connexion
+  // L'appli « Bulle pour Android » expose window.BulleApp : on peut y garder un album sur le téléphone
+  // (pages à la taille de l'écran) pour le lire sans réseau. Dans un navigateur, rien de tout cela n'apparaît.
+  const offlineApp = () => (window.BulleApp && typeof window.BulleApp.offlineState === "function") ? window.BulleApp : null;
+  function offlineCount() {
+    const app = offlineApp(), tab = $("#tab-offline");
+    if (!app || !tab) return;
+    tab.hidden = false;
+    try { const n = JSON.parse(app.offlineList()).filter(a => a.done).length; $("#offline-count").textContent = n ? String(n) : ""; } catch (_) { /* ignore */ }
+  }
+  function renderOffline(slot) {
+    const app = offlineApp();
+    if (!slot || !app) return;
+    const id = +slot.dataset.id;
+    let st = {};
+    try { st = JSON.parse(app.offlineState(id)) || {}; } catch (_) { /* ignore */ }
+    if (st.busy) {
+      const pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
+      slot.innerHTML = `<button class="btn" type="button" data-offline-cancel="${id}" title="Arrêter le téléchargement">📥 ${pct} % — arrêter</button>`;
+    } else if (st.ready) {
+      slot.innerHTML = `<span class="btn ok" title="Lisible sans connexion sur ce téléphone">✓ Hors connexion</span><button class="btn mini" type="button" data-offline-remove="${id}" title="Libérer la place sur le téléphone">Retirer</button>`;
+    } else {
+      slot.innerHTML = `<button class="btn" type="button" data-offline-get="${id}" title="Garder cet album sur le téléphone pour le lire sans réseau">📥 Garder hors connexion${st.done ? ` (reprendre, ${st.done}/${st.total})` : ""}</button>`;
+    }
+  }
+  window.onOfflineProgress = (id, done, total, state) => {
+    const slot = $("#sheet-offline");
+    if (slot && +slot.dataset.id === +id) renderOffline(slot);
+    if (state === "done") { toast(`📥 Album gardé hors connexion (${plural(total, "page", "pages")})`); offlineCount(); }
+    else if (state === "error") toast(`${ICON.warn} Téléchargement interrompu (${done}/${total}) : il reprendra où il s'est arrêté`);
+  };
+  modal.addEventListener("click", e => {
+    const app = offlineApp();
+    if (!app) return;
+    const g = e.target.closest("[data-offline-get]"), r = e.target.closest("[data-offline-remove]"), c = e.target.closest("[data-offline-cancel]");
+    if (!g && !r && !c) return;
+    e.preventDefault();
+    if (g) app.offlineDownload(+g.dataset.offlineGet);
+    if (c) app.offlineCancel(+c.dataset.offlineCancel);
+    if (r) { app.offlineRemove(+r.dataset.offlineRemove); toast("Album retiré du téléphone"); offlineCount(); }
+    renderOffline($("#sheet-offline"));
+  });
+  offlineCount();
   function summaryHtml(text, url) {
     if (!text) return `<p class="summary muted">Pas de résumé sur Bédéthèque pour cet album.</p>`;
     const cut = /[.…]$/.test(text) ? text : text + "…";
