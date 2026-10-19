@@ -1339,3 +1339,142 @@ img.pavatar { object-fit: cover; padding: 0; }
 :root[data-lite="on"] .sidebar .ono, :root[data-lite="on"] h2::before, :root[data-lite="on"] h1, :root[data-lite="on"] .card .cover { animation: none !important; }
 :root[data-lite="on"][data-skin="stars"] body::after, :root[data-lite="on"][data-skin="ocean"] body::before { display: none; }
 :root[data-lite="on"] .card .cover, :root[data-lite="on"] .card:hover .cover { transition: none; }
+
+/* appli Android : lecture hors connexion */
+.offline-slot { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.offline-slot .btn.ok { background: rgba(79, 211, 140, .16); color: #4fd38c; border-color: rgba(79, 211, 140, .45); cursor: default; }
+
+/* =====================================================================================================
+   Présentation TÉLÉPHONE (écran de 700 px ou moins) : barre d'onglets en bas à portée du pouce, pochettes
+   à trois par ligne, fiche d'album qui monte du bas, réglages en liste, décor animé coupé.
+   Sur PC et tablette (plus de 700 px), rien de tout cela ne s'applique.
+   ===================================================================================================== */
+.tabbar, .more { display: none; }
+:root[data-phone="on"] {
+  --tabbar-h: 58px;
+  --thumb: 100px;
+}
+:root[data-phone="on"] body { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px)); }
+/* --- barre du haut : logo + recherche, rien d'autre (le reste est dans « Plus ») --- */
+:root[data-phone="on"] .topbar { gap: 8px; padding-left: 10px; padding-right: 10px; }
+:root[data-phone="on"] .topbar .ver, :root[data-phone="on"] .topbar .stats, :root[data-phone="on"] .topbar .shroom, :root[data-phone="on"] .topbar .lite,
+:root[data-phone="on"] .topbar #season-btn, :root[data-phone="on"] .topbar #bubble-mute, :root[data-phone="on"] .topbar #scan-btn,
+:root[data-phone="on"] .topbar a[href="#/settings"], :root[data-phone="on"] .topbar #profile-btn { display: none !important; }
+:root[data-phone="on"] .search input { height: 38px; font-size: 16px; }   /* 16 px : pas de zoom automatique sur iPhone */
+/* --- l'ancienne rangée d'onglets disparaît --- */
+:root[data-phone="on"] .sidebar { display: none !important; }
+:root[data-phone="on"] .layout { display: block; }
+:root[data-phone="on"] main { padding: 6px 12px 24px; }
+:root[data-phone="on"] .crumbs { padding: 10px 12px 0; font-size: 13.5px; }
+:root[data-phone="on"] h1 { font-size: 20px; margin: 8px 0 10px; }
+:root[data-phone="on"] h2 { margin: 18px 0 8px; font-size: 13.5px; }
+:root[data-phone="on"] .h1tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+:root[data-phone="on"] .h1tools .btn { height: 30px; font-size: 12.5px; }
+/* --- pochettes : trois par ligne, rangées qui défilent au doigt --- */
+:root[data-phone="on"] .grid, :root[data-phone="on"][data-covers="book"] .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 8px; }
+:root[data-phone="on"] .row { grid-auto-columns: calc((100vw - 24px - 16px) / 3); gap: 8px; padding: 4px 2px 10px; scroll-snap-type: x mandatory; }
+:root[data-phone="on"] .card .title { font-size: 12px; margin-top: 6px; -webkit-line-clamp: 2; }
+:root[data-phone="on"] .card .sub { font-size: 11px; }
+:root[data-phone="on"] .card .info { opacity: 1; width: 24px; height: 24px; left: 6px; bottom: 8px; font-size: 13px; }
+:root[data-phone="on"] .card .info.sum { left: 34px; font-size: 14px; }
+:root[data-phone="on"] .card .fav { width: 36px; height: 36px; }
+:root[data-phone="on"] .card .fav b { font-size: 13px; left: 4px; }
+:root[data-phone="on"] .card .remove { opacity: 1; width: 24px; height: 24px; }
+:root[data-phone="on"] .listgrid { grid-template-columns: 1fr; }
+:root[data-phone="on"] .pager .pg { min-width: 38px; height: 38px; }
+/* --- décor : rien ne bouge en arrière-plan --- */
+:root[data-phone="on"] #mosaic, :root[data-phone="on"] #seasonfx, :root[data-phone="on"] #bubbles, :root[data-phone="on"] .sidebar .ono, :root[data-phone="on"] .stars-sky { display: none !important; }
+:root[data-phone="on"] .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; }
+/* --- Bédéthèque : panneau compact --- */
+:root[data-phone="on"] .bdt-panel { padding: 10px 12px; font-size: 13.5px; }
+:root[data-phone="on"] .bdt-row { flex-wrap: wrap; }
+:root[data-phone="on"] .bdt-actions { width: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+:root[data-phone="on"] .bdt-actions .btn { height: 30px; font-size: 12.5px; padding: 0 10px; }
+/* --- barre d'onglets du bas --- */
+:root[data-phone="on"] .tabbar {
+  display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px)); padding: 0 4px env(safe-area-inset-bottom, 0px);
+  background: var(--bg-2); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px rgba(0, 0, 0, .25);
+}
+.tabbar a, .tabbar button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: 0; height: var(--tabbar-h); border: 0; background: none; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 600; letter-spacing: .01em; position: relative; -webkit-tap-highlight-color: transparent; }
+.tabbar a[hidden] { display: none; }
+.tabbar svg { width: 23px; height: 23px; }
+.tabbar span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabbar .on { color: var(--accent); }
+.tabbar .on::before { content: ""; position: absolute; top: 0; left: 50%; width: 28px; height: 3px; border-radius: 0 0 3px 3px; background: var(--accent); transform: translateX(-50%); }
+.tabbar .cnt { position: absolute; top: 6px; left: calc(50% + 6px); min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: 800; font-style: normal; line-height: 16px; text-align: center; }
+.tabbar .cnt:empty { display: none; }
+/* --- feuille « Plus » qui monte du bas --- */
+:root[data-phone="on"] .more { display: block; position: fixed; inset: 0; z-index: 45; background: rgba(0, 0, 0, .55); animation: fade .15s; }
+:root[data-phone="on"] .more[hidden] { display: none; }
+.more .panel { position: absolute; left: 0; right: 0; bottom: 0; max-height: 82vh; overflow: auto; background: var(--bg-2); border-radius: 18px 18px 0 0; padding: 8px 12px calc(14px + env(safe-area-inset-bottom, 0px)); box-shadow: var(--shadow); animation: up .22s cubic-bezier(.2, .8, .3, 1); }
+@keyframes up { from { transform: translateY(40px); opacity: .4; } }
+.more .grip { width: 38px; height: 4px; border-radius: 2px; background: var(--line); margin: 2px auto 10px; }
+.more .mhead { display: flex; align-items: center; gap: 10px; padding: 4px 4px 10px; }
+.more .mhead .pavatar { width: 34px; height: 34px; font-size: 15px; }
+.more .mhead b { font-size: 16px; }
+.more .mhead small { display: block; color: var(--muted); font-size: 12.5px; }
+.more .mhead .btn { margin-left: auto; height: 32px; font-size: 13px; }
+.more .mgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
+.more .mgrid a, .more .mgrid button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 12px 4px 10px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; text-align: center; min-height: 72px; }
+.more .mgrid svg { width: 22px; height: 22px; color: var(--accent); }
+.more .mgrid .on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.more .mgrid .cnt { font-size: 11px; color: var(--muted); font-weight: 500; }
+.more .mrow { display: flex; align-items: center; gap: 10px; padding: 11px 6px; border-top: 1px solid var(--line); font-size: 14.5px; font-weight: 600; color: var(--text); width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; font-family: inherit; text-align: left; }
+.more .mrow svg { width: 20px; height: 20px; color: var(--muted); flex: none; }
+.more .mrow .right { margin-left: auto; color: var(--muted); font-weight: 500; font-size: 13px; display: inline-flex; gap: 4px; }
+.more .mrow .right button { height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; }
+.more .mrow .right button.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.more .mrow .switch { margin-left: auto; }
+/* --- fiche d'album : feuille qui monte du bas, gros boutons --- */
+:root[data-phone="on"] .backdrop { align-items: flex-end; padding: 0; }
+:root[data-phone="on"] .sheet { width: 100%; max-height: 92vh; border-radius: 18px 18px 0 0; border-bottom: 0; grid-template-columns: 96px 1fr; gap: 12px; padding: 16px 14px calc(16px + var(--tabbar-h) + env(safe-area-inset-bottom, 0px)); animation: up .22s cubic-bezier(.2, .8, .3, 1); }
+/* pochette et titre côte à côte en haut, puis chaque bloc en pleine largeur */
+:root[data-phone="on"] .sheet { grid-template-rows: auto auto auto 1fr; grid-template-areas: "cover head" "cover path" "cover err" "cover gap" "dl dl" "listsel listsel" "sum sum" "act act"; align-items: start; row-gap: 4px; }
+:root[data-phone="on"] .sheet .sheet-left, :root[data-phone="on"] .sheet > div:not(.sheet-left) { display: contents; }
+:root[data-phone="on"] .sheet .sheet-left .cover { grid-area: cover; width: 96px; margin: 0; }
+:root[data-phone="on"] .sheet h3 { grid-area: head; margin: 0; }
+:root[data-phone="on"] .sheet > div > .path { grid-area: path; }   /* le sous-titre seulement, pas la ligne « Fichier » du tableau */
+:root[data-phone="on"] .sheet p.error { grid-area: err; margin: 0; }
+:root[data-phone="on"] .sheet .sheet-listsel { grid-area: listsel; }
+:root[data-phone="on"] .sheet .sheet-listsel select { height: 42px; font-size: 14.5px; }
+:root[data-phone="on"] .sheet .summary-slot { grid-area: sum; }
+:root[data-phone="on"] .sheet .sheet-actions { grid-area: act; margin-top: 4px; }
+:root[data-phone="on"] .sheet h3 { font-size: 17px; }
+:root[data-phone="on"] .sheet dl { grid-area: dl; grid-template-columns: max-content 1fr; font-size: 13.5px; gap: 4px 12px; margin: 8px 0 4px; }
+:root[data-phone="on"] .sheet dd { margin: 0; min-width: 0; }
+:root[data-phone="on"] .sheet .sa-main { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+:root[data-phone="on"] .sheet .sa-main .btn { width: 100%; height: 46px; font-size: 15px; justify-content: center; }
+:root[data-phone="on"] .sheet .sa-main .btn.primary.big { grid-column: 1 / -1; height: 50px; font-size: 16px; }
+:root[data-phone="on"] .sheet .offline-slot { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; }
+:root[data-phone="on"] .sheet .sa-row { display: flex; flex-wrap: wrap; gap: 6px; }
+:root[data-phone="on"] .sheet .sa-row .btn { flex: 1 1 45%; height: 40px; justify-content: center; font-size: 13.5px; white-space: nowrap; }
+:root[data-phone="on"] .sheet .sa-minor .btn { flex: 1 1 30%; height: 36px; font-size: 12.5px; }
+:root[data-phone="on"] .sheet .close { top: 10px; right: 10px; }
+:root[data-phone="on"] .sumpop { left: 12px !important; right: 12px !important; width: auto !important; }
+/* --- réglages : une liste de rubriques, puis une rubrique plein écran ; chaque réglage sur deux lignes --- */
+:root[data-phone="on"] .settings.tabbed { grid-template-columns: 1fr; gap: 0; }
+:root[data-phone="on"] .stabs { display: none; }
+:root[data-phone="on"] .settings section { padding: 4px 14px 10px; border-radius: 14px; }
+:root[data-phone="on"] .settings h2 { margin: 10px 0 4px; }
+:root[data-phone="on"] .field { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 0; }
+:root[data-phone="on"] .field.inline { flex-direction: row; align-items: center; justify-content: space-between; }
+:root[data-phone="on"] .field select, :root[data-phone="on"] .field input[type=number], :root[data-phone="on"] .field input[type=text] { max-width: none; width: 100%; height: 42px; font-size: 15px; }
+:root[data-phone="on"] .field .actions { justify-content: flex-start; }
+:root[data-phone="on"] .field .actions .btn { height: 38px; }
+.smenu { display: flex; flex-direction: column; gap: 0; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 6px; }
+.smenu a { display: flex; align-items: center; gap: 12px; padding: 14px 14px; border-top: 1px solid var(--line); color: var(--text); font-weight: 600; font-size: 15px; }
+.smenu a:first-child { border-top: 0; }
+.smenu a small { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+.smenu a::after { content: "›"; margin-left: auto; color: var(--muted); font-size: 20px; line-height: 1; }
+.smenu .ico { width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); color: var(--accent); font-size: 17px; flex: none; }
+/* --- divers --- */
+:root[data-phone="on"] .toast { top: auto; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 12px); }
+/* lettres : une rangée discrète sous la barre du haut, qu'on fait défiler du doigt (jamais la barre latérale) */
+:root[data-phone="on"] .letters, :root[data-phone="on"] .letters.rail { position: sticky; top: calc(var(--bar-h) + env(safe-area-inset-top, 0px)); left: auto; right: auto; transform: none; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 2px; padding: 6px 0; margin: 0 -12px; padding-left: 12px; padding-right: 12px; border: 0; border-radius: 0; box-shadow: none; background: var(--bg); scrollbar-width: none; max-height: none; width: auto; }
+:root[data-phone="on"] .letters::-webkit-scrollbar { display: none; }
+:root[data-phone="on"] .letters button, :root[data-phone="on"] .letters.rail button { flex: none; min-width: 30px; width: 30px; height: 30px; font-size: 13px; font-weight: 700; border-radius: 8px; }
+:root[data-phone="on"] .letters button:disabled { opacity: .3; }
+:root[data-phone="on"] body:has(.letters.rail.right) main, :root[data-phone="on"] body:has(.letters.rail.left) main { padding-left: 12px; padding-right: 12px; }
+:root[data-phone="on"] .listhead .btn[data-action="back"] { display: none; }
+:root[data-phone="on"] .crumbs:not(:has(.sep)):not(:has(.cur)) { display: none; }   /* « Accueil » seul : inutile sur téléphone */
