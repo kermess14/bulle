@@ -71,7 +71,7 @@
       [r, s] = await Promise.all([fetch(`/api/item/${id}`), fetch("/api/settings").then(x => x.ok ? x.json() : null).catch(() => null)]);
       item = await r.json();
     } catch (e) { showMessage("Impossible de charger l'album", String(e)); return; }
-    if (r.status === 401) { showMessage("Code d'accès requis", "Ouvrez d'abord la bibliothèque pour entrer le code.", `<a class="btn" href="/">Ouvrir Bulle</a>`); return; }
+    if (r.status === 401) { showMessage("Connexion requise", "Ouvrez d'abord la bibliothèque pour vous connecter.", `<a class="btn" href="/">Ouvrir Bulle</a>`); return; }
     if (s && s.profile) { Object.assign(prefs, pick(s.profile)); fit = prefs.reader_fit; manga = !!prefs.reader_manga; mode = MODES.includes(prefs.reader_mode) ? prefs.reader_mode : "single"; applyPrefs(); }
     if (s && s.global && s.global.img_tag) imgTag = s.global.img_tag;
     loadAlbumMemory();
