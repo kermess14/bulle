@@ -344,7 +344,9 @@ class BedethequeClient:
             for i in range(1, n_pages):
                 page_url = re.sub(r"\.html$", f"__{i}.html", url)
                 try:
-                    data["details"].update(parse_details(self.fetch(page_url, force=force)))
+                    more = parse_details(self.fetch(page_url, force=force))
+                    more.pop("_heads", None)
+                    data["details"].update(more)
                 except BdtError as e:
                     log.warning("Page de détails %s : %s", page_url, e)
                     break
@@ -513,8 +515,23 @@ def parse_series(html: str, url: str) -> dict:
         href = a["href"]
         albums.append({"num_raw": raw, "number": number, "suffix": suffix, "kind": kind, "title": t,
                        "date": date, "year": year, "url": href if href.startswith("http") else BASE + href})
+    details = parse_details(html)
+    if not albums:
+        # Une série d'un seul album (one shot) n'a pas la petite liste des albums : seul le bloc « Détail des
+        # albums » est là. On reconstruit la liste à partir de ses fiches.
+        heads = details.pop("_heads", [])
+        for h in heads:
+            m = re.match(r"\s*-?\s*(\d+)\s*[-.]\s*(.*)$", h["text"])
+            number = int(m.group(1)) if m else (1 if len(heads) == 1 else None)
+            t = (m.group(2) if m else h["text"]).strip() or title
+            legal = (details.get(h["url"]) or {}).get("legal") or ""
+            my = re.search(r"((?:19|20)\d\d)", legal)
+            albums.append({"num_raw": str(number) if number is not None else "", "number": number, "suffix": None,
+                           "kind": "tome", "title": t, "date": legal or None, "year": int(my.group(1)) if my else None,
+                           "url": h["url"]})
+    details.pop("_heads", None)
     data = {"id": sid, "url": url, "title": title, "genre": genre, "status": status, "years": years,
-            "tomes_count": tomes_count, "albums": albums, "details": parse_details(html)}
+            "tomes_count": tomes_count, "albums": albums, "details": details}
     return data
 
 
@@ -551,13 +568,14 @@ def classify_number(raw: str) -> tuple[str, Optional[int], Optional[str]]:
 def parse_details(html: str) -> dict:
     """Blocs « Détail des albums » : { url_album: {writers, pencillers, colorists, publisher, collection, isbn, pages, legal} }."""
     soup = BeautifulSoup(html, "html.parser")
-    out = {}
+    out: dict = {"_heads": []}
     for ed in soup.select(".bdt-edition"):
         head = ed.select_one(".bdt-edition-head h3 a[href]") or ed.select_one(".bdt-edition-head a[href]")
         if not head:
             continue
         href = head["href"]
         url = href if href.startswith("http") else BASE + href
+        out["_heads"].append({"url": url, "text": _text(head)})
         info = {"writers": [], "pencillers": [], "colorists": [], "publisher": None, "collection": None,
                 "isbn": None, "pages": None, "legal": None}
         for dl in ed.select("dl"):
@@ -581,7 +599,7 @@ def parse_details(html: str) -> dict:
                 elif label.startswith("planches"):
                     m = re.search(r"\d+", _text(dd))
                     info["pages"] = int(m.group()) if m else None
-                elif label.startswith("dépôt") or label.startswith("depot"):
+                elif strip_accents(label).startswith("depot"):
                     info["legal"] = _text(dd) or None
         out[url] = info
     return out
