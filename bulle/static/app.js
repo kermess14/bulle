@@ -27,7 +27,7 @@
     if (!r.ok) {
       let msg = r.statusText, body = null;
       try { body = await r.json(); msg = body.error || msg; } catch (_) { /* ignore */ }
-      if (r.status === 401 && body && body.auth_required) showPinScreen();
+      if (r.status === 401 && body && body.auth_required) showPinScreen(body.mode);
       if (r.status === 403 && body && body.adult_locked && !(opts && opts.noAdultPrompt)) {
         if (await adultPrompt()) return api(url, opts);
       }
@@ -38,10 +38,29 @@
 
   // ================================================================ code d'accès (écran)
   let pinShown = false;
-  function showPinScreen() {
+  function showPinScreen(mode) {
     if (pinShown) return;
     pinShown = true;
     modal.hidden = false;
+    if (mode === "accounts") {
+      // connexion par compte : nom + mot de passe (Bulle mis en ligne sur Internet)
+      modal.innerHTML = `<div class="backdrop locked"><form class="sheet pin login" id="login-form">
+        <h3>Bulle</h3><p class="muted">Connectez-vous avec votre compte.</p>
+        <input type="text" name="name" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Nom du compte" autofocus required>
+        <input type="password" name="password" autocomplete="current-password" placeholder="Mot de passe" required>
+        <div class="actions"><button class="btn primary" type="submit">Se connecter</button></div><p class="error" hidden></p></form></div>`;
+      $("#login-form").addEventListener("submit", async e => {
+        e.preventDefault();
+        const f = e.target, err = f.querySelector(".error");
+        try {
+          const r = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: f.elements.name.value, password: f.elements.password.value }) });
+          if (!r.ok) { err.textContent = (await r.json().catch(() => ({}))).error || "Connexion refusée"; err.hidden = false; f.elements.password.select(); return; }
+          try { localStorage.removeItem("bulle:profile"); } catch (_) { /* ignore */ }
+          location.reload();
+        } catch (_) { err.textContent = "Serveur injoignable"; err.hidden = false; }
+      });
+      return;
+    }
     modal.innerHTML = `<div class="backdrop locked"><form class="sheet pin" id="pin-form">
       <h3>Code d'accès</h3><p class="muted">Cette bibliothèque est protégée. Entrez le code pour continuer.</p>
       <input type="password" inputmode="numeric" autocomplete="current-password" name="pin" placeholder="Code" autofocus>
@@ -108,6 +127,7 @@
       ${avatarHtml(p)}<span class="pname">${esc(p.name)}</span>${p.has_pin ? `<span class="plock" title="Protégé par un mot de passe">🔒</span>` : ""}${p.role === "admin" ? `<span class="prole" title="Administrateur">admin</span>` : ""}</button>`;
   }
   async function openProfiles({ locked = false } = {}) {
+    if (settings.global && settings.global.account_login) { location.hash = "#/settings/account"; return; }   // un compte = une connexion
     let data;
     try { data = await api("/api/profiles"); } catch (_) { return; }
     modal.hidden = false;
@@ -166,7 +186,7 @@
     const cur = list.find(p => p.id === settings.meta.profile_id);
     btn.innerHTML = avatarHtml(cur || { name: "?" }, "small");
     btn.title = cur ? `${cur.name}${cur.role === "admin" ? " (administrateur)" : ""} — profil, mon compte, déconnexion` : "Profil";
-    btn.hidden = list.length < 2 && !settings.global.require_profile && !settings.meta.profile_selected;
+    btn.hidden = !settings.global.account_login && list.length < 2 && !settings.global.require_profile && !settings.meta.profile_selected;
     const scan = $("#scan-btn"); if (scan) scan.hidden = !isAdmin();
   }
   document.addEventListener("click", e => { if (e.target.closest("#profile-btn")) openProfiles(); });
@@ -1471,14 +1491,15 @@
         ${field("Résumé lu à l'ouverture d'une fiche", chk("g", "bdt_auto_summary", g.bdt_auto_summary), "Une requête vers la fiche de l'album, une seule fois ; le bouton « Résumés » d'une série les lit tous en tâche de fond.")}
         <p class="muted">Rien n'est jamais écrit dans vos fichiers : les informations Bédéthèque restent dans la base de Bulle. <a href="#/collection">Voir la collection</a>.</p>`,
       access: () => `
-        ${field("Demander « qui lit ? » à l'ouverture", chk("g", "require_profile", g.require_profile), "Chaque profil a sa progression et ses réglages d'affichage.")}
-        <div class="field"><div class="flabel"><span>Comptes</span><small>Un mot de passe par compte est facultatif (4 caractères au moins, gardé chiffré). Administrateur : réglages, scans, comptes, rubrique Adulte ; lecteur : lecture et listes seulement. Il faut garder au moins un administrateur.</small></div>
+        ${field("Se connecter avec un compte", chk("g", "account_login", g.account_login), "Pour mettre Bulle sur Internet : à l'ouverture, on tape le nom d'un compte et son mot de passe, sinon on ne voit rien (ni les BD, ni la liste des comptes). Chaque personne a son compte, que vous pouvez supprimer à tout moment. Après 5 essais ratés, l'adresse est bloquée 15 minutes. On reste connecté 30 jours. Le flux OPDS demande aussi le nom du compte et son mot de passe. Avant d'activer : donnez un mot de passe à votre compte (Mon compte), c'est avec lui que vous vous connecterez.")}
+        ${g.account_login ? "" : field("Demander « qui lit ? » à l'ouverture", chk("g", "require_profile", g.require_profile), "Chaque profil a sa progression et ses réglages d'affichage.")}
+        <div class="field"><div class="flabel"><span>Comptes</span><small>${g.account_login ? "Chaque compte a un mot de passe (8 caractères au moins, gardé chiffré) : on se connecte avec le nom du compte et ce mot de passe." : "Un mot de passe par compte est facultatif (4 caractères au moins, gardé chiffré)."} Administrateur : réglages, scans, comptes, rubrique Adulte ; lecteur : lecture et listes seulement. Il faut garder au moins un administrateur.</small></div>
           <div class="plist">${(settings.meta.profiles || []).map(pr => `<span class="prow">${avatarHtml(pr, "small")} ${esc(pr.name)}${pr.has_pin ? " 🔒" : ""}
             <select data-role="${pr.id}" title="Rôle"><option value="reader" ${pr.role !== "admin" ? "selected" : ""}>Lecteur</option><option value="admin" ${pr.role === "admin" ? "selected" : ""}>Administrateur</option></select>
             <button class="btn mini" type="button" data-action="profile-edit" data-id="${pr.id}" data-name="${esc(pr.name)}">Modifier</button>${pr.id === 1 ? "" : `<button class="btn mini" type="button" data-action="profile-delete" data-id="${pr.id}" data-name="${esc(pr.name)}">Supprimer</button>`}</span>`).join("")}
             <button class="btn mini" type="button" data-action="profile-add">+ Ajouter un compte</button></div></div>
-        <div class="field"><div class="flabel"><span>Code d'accès à Bulle</span><small>${g.access_pin_set ? "Un code est demandé à l'ouverture (et pour le flux OPDS : mot de passe = ce code)." : "Aucun code : tout le réseau local peut ouvrir Bulle."}</small></div>
-          <div class="actions"><button class="btn" type="button" data-action="access-pin-set">${g.access_pin_set ? "Changer le code" : "Définir un code"}</button>${g.access_pin_set ? `<button class="btn" type="button" data-action="access-pin-clear">Supprimer le code</button>` : ""}</div></div>
+        ${g.account_login ? "" : `<div class="field"><div class="flabel"><span>Code d'accès à Bulle</span><small>${g.access_pin_set ? "Un code est demandé à l'ouverture (et pour le flux OPDS : mot de passe = ce code)." : "Aucun code : tout le réseau local peut ouvrir Bulle."}</small></div>
+          <div class="actions"><button class="btn" type="button" data-action="access-pin-set">${g.access_pin_set ? "Changer le code" : "Définir un code"}</button>${g.access_pin_set ? `<button class="btn" type="button" data-action="access-pin-clear">Supprimer le code</button>` : ""}</div></div>`}
         ${field("Flux OPDS pour les applis mobiles", chk("g", "opds_enabled", g.opds_enabled), `Adresse à donner à l'appli (Panels, Chunky, Moon+, Mihon…) : <code>${esc(location.origin)}/opds</code>`)}`,
       adult: () => `
         <p class="muted">Les séries marquées « 18+ » (bouton en haut de leur page) disparaissent de partout — accueil, recherche, hasard, mosaïque, OPDS — tant que le code n'est pas entré. Une fois entré, elles restent visibles 12 heures sur l'appareil. Rien n'est déplacé ni modifié dans vos fichiers.</p>
@@ -1628,13 +1649,15 @@
         await putJson(`/api/profiles/${btn.dataset.id}`, { avatar: "" }); await loadSettings(); updateProfileButton(); route();
       } else if (action === "profile-add") {
         const name = prompt("Prénom du nouveau profil :"); if (!name) return;
-        const pin = prompt("Mot de passe (laisser vide pour aucun, 4 caractères au moins) :") || "";
+        const acc = settings.global.account_login;
+        const pin = prompt(acc ? "Mot de passe (8 caractères au moins) — c'est avec lui que cette personne se connectera :" : "Mot de passe (laisser vide pour aucun, 4 caractères au moins) :") || "";
         await api("/api/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, pin }) });
         await loadSettings(); updateProfileButton(); route();
       } else if (action === "profile-edit") {
         const name = prompt("Nom du profil :", btn.dataset.name); if (name === null) return;
-        const pin = prompt("Nouveau mot de passe (vide = aucun, 4 caractères au moins) :"); if (pin === null) return;
-        await putJson(`/api/profiles/${btn.dataset.id}`, { name, pin });
+        const acc = settings.global.account_login;
+        const pin = prompt(acc ? "Nouveau mot de passe (8 caractères au moins ; vide = ne pas changer) :" : "Nouveau mot de passe (vide = aucun, 4 caractères au moins) :"); if (pin === null) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, acc && !pin ? { name } : { name, pin });
         await loadSettings(); updateProfileButton(); route();
       } else if (action === "profile-delete") {
         if (!confirm(`Supprimer le profil « ${btn.dataset.name} » et sa progression de lecture ?`)) return;
@@ -1787,7 +1810,7 @@
     moreEl.innerHTML = `<div class="panel" role="dialog" aria-label="Plus">
       <div class="grip"></div>
       <div class="mhead">${avatarHtml(me, "small")}<div><b>${esc(me.name)}</b><small>${me.role === "admin" ? "Administrateur" : "Lecteur"} · Bulle ${esc(settings.meta.version || "")}</small></div>
-        ${list.length > 1 || g.require_profile ? `<button class="btn" type="button" data-more="profiles">Changer</button>` : `<a class="btn" href="#/settings/account">Mon compte</a>`}</div>
+        ${!g.account_login && (list.length > 1 || g.require_profile) ? `<button class="btn" type="button" data-more="profiles">Changer</button>` : `<a class="btn" href="#/settings/account">Mon compte</a>`}</div>
       <div class="mgrid">
         ${tile("#/lists", SVG.lists, "Listes", custom.length ? `data-cnt="${custom.length}"` : "")}
         ${tile("#/history", SVG.history, "Historique")}
@@ -2539,7 +2562,7 @@
   (async () => {
     await loadSettings();
     updateProfileButton();
-    if (settings.global.require_profile && settings.meta.profile_selected === false) openProfiles({ locked: true });
+    if (!settings.global.account_login && settings.global.require_profile && settings.meta.profile_selected === false) openProfiles({ locked: true });
     try {
       if (settings.profile.remember_folder && !sessionStorage.getItem("bulle:visited") && (location.hash === "" || location.hash === "#/")) {
         const last = localStorage.getItem("bulle:lastHash");
