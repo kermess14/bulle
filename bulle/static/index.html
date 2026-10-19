@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/style.css">
 <script>/* thème et disposition avant le premier rendu, pour éviter un flash */
-try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; if (p.skin === "seasons") { var d = new Date(), md = (d.getMonth() + 1) * 100 + d.getDate(); document.documentElement.dataset.season = ["spring", "summer", "autumn", "winter"].indexOf(p.season) >= 0 ? p.season : (md >= 1221 || md < 320 ? "winter" : md < 621 ? "spring" : md < 922 ? "summer" : "autumn"); } document.documentElement.dataset.lite = localStorage.getItem("bulle:lite") === "1" ? "on" : "off"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso", "seasons"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
+try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : (p.theme || "dark"); document.documentElement.dataset.theme = t; document.documentElement.dataset.tabs = p.tabs_side || "left"; document.documentElement.dataset.covers = p.cover_style || "book"; if (p.skin === "seasons") { var d = new Date(), md = (d.getMonth() + 1) * 100 + d.getDate(); document.documentElement.dataset.season = ["spring", "summer", "autumn", "winter"].indexOf(p.season) >= 0 ? p.season : (md >= 1221 || md < 320 ? "winter" : md < 621 ? "spring" : md < 922 ? "summer" : "autumn"); } document.documentElement.dataset.lite = localStorage.getItem("bulle:lite") === "1" ? "on" : "off"; document.documentElement.dataset.phone = window.innerWidth <= 700 ? "on" : "off"; document.documentElement.dataset.skin = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso", "seasons"].includes(p.skin) ? p.skin : "bd"; } catch (e) {}</script>
 </head>
 <body>
 <header class="topbar">
@@ -105,6 +105,15 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
   <div class="labbar"><span class="labtitle">Le laboratoire — BDConverter</span><a class="btn mini" id="lab-open" href="#" target="_blank" rel="noopener">Ouvrir dans un onglet ↗</a><button class="iconbtn" id="lab-close" type="button" title="Fermer (Échap)" aria-label="Fermer">✕</button></div>
   <iframe id="lab-frame" title="BDConverter" src="about:blank" allow="clipboard-write"></iframe>
 </div>
+<nav class="tabbar" id="tabbar" aria-label="Navigation">
+  <a href="#/" data-tb="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14.5"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M8 7h8M8 11h5"/></svg><span>Bibliothèque</span></a>
+  <a href="#/list/readlater" data-tb="readlater"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span>À lire</span><i class="cnt" data-count="readlater"></i></a>
+  <button type="button" data-tb="search" id="tb-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Recherche</span></button>
+  <a href="#/list/favorites" data-tb="favorites" id="tb-fav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2.8 2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.7l-5.9 3.1 1.2-6.5-4.8-4.6 6.6-.9z"/></svg><span>Favoris</span></a>
+  <a href="/__hors_connexion" data-tb="offline" id="tb-offline" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span>Hors ligne</span></a>
+  <button type="button" data-tb="more" id="tb-more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>Plus</span></button>
+</nav>
+<div id="more" class="more" hidden></div>
 <div id="modal" hidden></div>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>

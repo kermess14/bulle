@@ -216,6 +216,9 @@
      verre dépoli, couvertures au hasard, bulles, saisons, petits mots animés). Mémorisé sur l'appareil, pas sur le
      profil : léger sur la tablette, complet sur le PC. */
   function liteMode() { try { return localStorage.getItem("bulle:lite") === "1"; } catch (_) { return false; } }
+  // Téléphone (700 px ou moins) : présentation à part — barre d'onglets en bas, pochettes à trois, fiche qui monte
+  // du bas, réglages en liste, rien qui bouge en arrière-plan. Tablette et PC gardent la présentation habituelle.
+  const isPhone = () => window.innerWidth <= 700;
   function updateLiteBtn() {
     const b = $("#lite-btn"); if (!b) return;
     const on = liteMode();
@@ -261,6 +264,7 @@
     const theme = p.theme === "auto" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : p.theme;
     root.dataset.theme = theme === "light" ? "light" : "dark";
     root.dataset.tabs = p.tabs_side === "top" || window.innerWidth <= 700 ? "top" : "left";
+    root.dataset.phone = isPhone() ? "on" : "off";
     root.dataset.covers = ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
     root.dataset.skin = SKINS.includes(p.skin) ? p.skin : "bd";
     const season = ["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason();
@@ -268,8 +272,8 @@
     const words = root.dataset.skin === "seasons" ? ONO[season] : ONO[root.dataset.skin];
     if (words) document.querySelectorAll("#maintabs .ono").forEach((el, i) => { el.textContent = words[i % words.length]; });
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const lite = liteMode();
-    root.dataset.lite = lite ? "on" : "off";
+    const lite = liteMode() || isPhone();   // sur téléphone, le décor animé est toujours coupé
+    root.dataset.lite = liteMode() ? "on" : "off";
     root.dataset.mosaic = lite || p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
     root.dataset.glass = !lite && p.mosaic_glass !== false && root.dataset.mosaic !== "off" ? "on" : "off";
     root.style.setProperty("--mosaic-opacity", String(Math.max(5, Math.min(100, +p.mosaic_opacity || 45)) / 100));
@@ -292,7 +296,7 @@
      rien n'est animé si l'appareil demande moins d'animations. */
   let seasonFx = null;
   function setupSeasonFx() {
-    const root = document.documentElement, want = root.dataset.skin === "seasons" && !liteMode() && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const root = document.documentElement, want = root.dataset.skin === "seasons" && !liteMode() && !isPhone() && !matchMedia("(prefers-reduced-motion: reduce)").matches;
     const kind = want ? root.dataset.season : null;
     const theme = root.dataset.theme;
     if (seasonFx && seasonFx.kind === kind && seasonFx.theme === theme) return;
@@ -579,7 +583,7 @@
     setTimeout(kill, dur * 1000 + 200);
   }
   function setupBubbles() {
-    const want = document.documentElement.dataset.skin === "ocean" && !liteMode() && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const want = document.documentElement.dataset.skin === "ocean" && !liteMode() && !isPhone() && !matchMedia("(prefers-reduced-motion: reduce)").matches;
     let box = $("#bubbles");
     updateMuteBtn();
     if (!want) { clearInterval(bubbleTimer); bubbleTimer = null; if (box) box.remove(); return; }
@@ -964,7 +968,7 @@
   function setCrumbs(list, tail) {
     const parts = list.map((c, i) => i === list.length - 1 && !tail
       ? `<span class="cur">${esc(c.name)}</span>`
-      : `<a href="${i === 0 ? "#/" : "#/f/" + c.id}">${esc(c.name)}</a>`);
+      : `<a href="${c.href || (i === 0 ? "#/" : "#/f/" + c.id)}">${esc(c.name)}</a>`);
     if (tail) parts.push(`<span class="cur">${esc(tail)}</span>`);
     // bouton « retour » devant le fil d'Ariane, dès qu'on n'est pas à l'accueil : sur tablette et téléphone, il n'y a
     // ni touche Échap ni forcément de bouton « précédent » (Bulle installé sur l'écran d'accueil)
@@ -1223,7 +1227,8 @@
 
   // ================================================================ page Réglages
   function field(label, control, help = "") {
-    return `<div class="field"><div class="flabel"><span>${label}</span>${help ? `<small>${help}</small>` : ""}</div>${control}</div>`;
+    const inline = control.startsWith('<label class="switch"') ? " inline" : "";
+    return `<div class="field${inline}"><div class="flabel"><span>${label}</span>${help ? `<small>${help}</small>` : ""}</div>${control}</div>`;
   }
   const sel = (scope, key, opts, val) => `<select data-scope="${scope}" data-key="${key}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(val) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
   const chk = (scope, key, val) => `<label class="switch"><input type="checkbox" data-scope="${scope}" data-key="${key}" ${val ? "checked" : ""}><i></i></label>`;
@@ -1238,6 +1243,7 @@
   const ADMIN_GROUPS = ["images", "bdt", "access", "adult", "lab"];
   let SETTINGS_GROUPS = ALL_SETTINGS_GROUPS;
   async function viewSettings(group) {
+    const openedGroup = !!group;   // téléphone : « #/settings » = liste des rubriques, « #/settings/xxx » = la rubrique
     setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
     document.title = "Réglages — Bulle";
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
@@ -1372,6 +1378,21 @@
     };
     const section = ([k, name]) => `<section data-group="${k}"><h2>${name}</h2>${sections[k]()}</section>`;
     const head = `<div class="listhead"><h1>Réglages</h1><button class="btn" type="button" data-action="back" title="Revenir à la page précédente (Échap)">✕ Fermer</button></div>`;
+    if (isPhone()) {
+      // téléphone : d'abord la liste des rubriques (comme les réglages d'Android), puis la rubrique seule
+      const ICONS = { look: "🎨", library: "📚", reader: "📖", account: "👤", images: "🖼️", bdt: "🏷️", access: "🔐", adult: "🔞", lab: "🍄", about: "ℹ️" };
+      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter", about: `Bulle ${esc(settings.meta.version || "")}` };
+      if (!openedGroup) {
+        setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
+        main.innerHTML = `<h1>Réglages</h1><nav class="smenu">${SETTINGS_GROUPS.map(([k, name]) => `<a href="#/settings/${k}"><span class="ico">${ICONS[k] || "•"}</span><span>${name}<small>${HELP[k] || ""}</small></span></a>`).join("")}</nav>`;
+        return;
+      }
+      const cur = SETTINGS_GROUPS.find(([k]) => k === group);
+      setCrumbs([{ id: 0, name: "Accueil" }, { id: -1, name: "Réglages", href: "#/settings" }], cur[1]);
+      main.innerHTML = `<div class="settings tabbed"><div class="spane">${section(cur)}</div></div>`;
+      if (quality && quality.job && quality.job.running) pollQuality();
+      return;
+    }
     if (tabs) {
       main.innerHTML = `${head}<div class="settings tabbed">
         <nav class="stabs" aria-label="Rubriques">${SETTINGS_GROUPS.map(([k, name]) => `<a class="tab ${k === group ? "on" : ""}" href="#/settings/${k}">${name}</a>`).join("")}</nav>
@@ -1614,6 +1635,89 @@
     renderOffline($("#sheet-offline"));
   }
 
+  // ---------------------------------------------------------------- téléphone : barre du bas et feuille « Plus »
+  const moreEl = $("#more");
+  const SVG = {
+    lists: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1.2" fill="currentColor"/><circle cx="3.5" cy="12" r="1.2" fill="currentColor"/><circle cx="3.5" cy="18" r="1.2" fill="currentColor"/></svg>`,
+    history: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`,
+    activity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M6 17V11M11 17V6M16 17v-4M21 17V9"/></svg>`,
+    collection: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 5.2l3.9-1 3.6 14.6-3.9 1z"/></svg>`,
+    random: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="16" cy="8" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="8" cy="16" r="1.3" fill="currentColor"/><circle cx="16" cy="16" r="1.3" fill="currentColor"/></svg>`,
+    adult: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
+    settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`,
+    scan: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>`,
+    lab: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/></svg>`,
+    offline: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`,
+  };
+  async function openMore() {
+    if (!moreEl) return;
+    const p = settings.profile, g = settings.global;
+    const list = settings.meta.profiles || [];
+    const me = list.find(x => x.id === settings.meta.profile_id) || { name: "Moi" };
+    let lists = [];
+    try { lists = await getLists(); } catch (_) { /* ignore */ }
+    const custom = lists.filter(l => l.kind === "custom");
+    const showAdult = !g.adult_hide_tab && (g.adult_pin_set || g.adult_count > 0);   // même règle que l'entrée du menu
+    const q = p.quality || "all";
+    const skinSeasons = document.documentElement.dataset.skin === "seasons";
+    const tile = (href, icon, label, extra = "") => `<a href="${href}" ${extra}>${icon}<span>${label}</span></a>`;
+    moreEl.innerHTML = `<div class="panel" role="dialog" aria-label="Plus">
+      <div class="grip"></div>
+      <div class="mhead">${avatarHtml(me, "small")}<div><b>${esc(me.name)}</b><small>${me.role === "admin" ? "Administrateur" : "Lecteur"} · Bulle ${esc(settings.meta.version || "")}</small></div>
+        ${list.length > 1 || g.require_profile ? `<button class="btn" type="button" data-more="profiles">Changer</button>` : `<a class="btn" href="#/settings/account">Mon compte</a>`}</div>
+      <div class="mgrid">
+        ${tile("#/lists", SVG.lists, "Listes", custom.length ? `data-cnt="${custom.length}"` : "")}
+        ${tile("#/history", SVG.history, "Historique")}
+        ${tile("#/activity", SVG.activity, "Activité")}
+        ${tile("#/collection", SVG.collection, "Collection")}
+        ${tile("#/random", SVG.random, "Au hasard")}
+        ${offlineApp() ? tile("/__hors_connexion", SVG.offline, "Hors connexion") : ""}
+        ${showAdult ? tile("#/adult", SVG.adult, "Adulte") : ""}
+        ${tile("#/settings", SVG.settings, "Réglages")}
+      </div>
+      ${custom.length ? `<div class="mrow" style="padding-top:4px;border-top:0"><span class="muted" style="font-weight:500;font-size:13px">Mes listes</span></div>
+        <div class="mgrid">${custom.slice(0, 8).map(l => tile(`#/list/${l.id}`, SVG.lists, esc(l.name), `title="${esc(l.name)}"`)).join("")}</div>` : ""}
+      <div class="mrow"><span>Qualité des albums</span><span class="right">${["all", "hd", "sd"].map(k => `<button type="button" data-more-quality="${k}" class="${q === k ? "on" : ""}">${k === "all" ? "Tout" : k.toUpperCase()}</button>`).join("")}</span></div>
+      ${skinSeasons ? `<div class="mrow"><span>Saison</span><span class="right"><button type="button" data-more="season">${SEASON_EMOJI[["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason()]} Changer</button></span></div>` : ""}
+      ${isAdmin() ? `<button class="mrow" type="button" data-more="scan">${SVG.scan}<span>Rechercher les nouveaux albums</span></button>` : ""}
+      ${shroom && !shroom.hidden ? `<button class="mrow" type="button" data-more="lab">${SVG.lab}<span>Le laboratoire (BDConverter)</span></button>` : ""}
+    </div>`;
+    moreEl.hidden = false;
+    document.body.style.overflow = "hidden";
+  }
+  function closeMore() { if (moreEl && !moreEl.hidden) { moreEl.hidden = true; moreEl.innerHTML = ""; document.body.style.overflow = ""; } }
+  document.addEventListener("click", e => {
+    const tb = e.target.closest("#tabbar [data-tb]");
+    if (tb) {
+      closeModal();
+      if (tb.dataset.tb === "more") { e.preventDefault(); if (moreEl && !moreEl.hidden) closeMore(); else openMore(); return; }
+      if (tb.dataset.tb === "search") { e.preventDefault(); closeMore(); window.scrollTo({ top: 0 }); searchInput.focus(); searchInput.select(); return; }
+      if (tb.dataset.tb === "offline" && offlineApp()) { e.preventDefault(); closeMore(); window.BulleApp.openOffline(); return; }
+      closeMore();
+      if (tb.getAttribute("href") === location.hash) window.scrollTo({ top: 0, behavior: "smooth" });   // onglet déjà ouvert : retour en haut
+      return;
+    }
+    if (!moreEl || moreEl.hidden) return;
+    if (e.target === moreEl) { closeMore(); return; }
+    const a = e.target.closest("#more a[href]");
+    if (a) {
+      if (a.getAttribute("href") === "/__hors_connexion" && offlineApp()) { e.preventDefault(); window.BulleApp.openOffline(); }
+      closeMore(); return;
+    }
+    const qb = e.target.closest("[data-more-quality]");
+    if (qb) { const b = document.querySelector(`#side-quality [data-quality="${qb.dataset.moreQuality}"]`); if (b) b.click(); closeMore(); return; }
+    const m = e.target.closest("[data-more]");
+    if (!m) return;
+    closeMore();
+    if (m.dataset.more === "profiles") openProfiles();
+    else if (m.dataset.more === "scan") scanBtn.click();
+    else if (m.dataset.more === "season") { const b = $("#season-btn"); if (b) b.click(); }
+    else if (m.dataset.more === "lab") shroom.click();
+  });
+  window.addEventListener("hashchange", closeMore);
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && moreEl && !moreEl.hidden) closeMore(); });
+  function updateTabbarOffline() { const t = $("#tb-offline"), f = $("#tb-fav"); if (!t) return; const app = !!offlineApp(); t.hidden = !app; if (f) f.hidden = app; }
+
   // ---------------------------------------------------------------- appli Android : lecture hors connexion
   // L'appli « Bulle pour Android » expose window.BulleApp : on peut y garder un album sur le téléphone
   // (pages à la taille de l'écran) pour le lire sans réseau. Dans un navigateur, rien de tout cela n'apparaît.
@@ -1656,7 +1760,7 @@
     if (r) { app.offlineRemove(+r.dataset.offlineRemove); toast("Album retiré du téléphone"); offlineCount(); }
     renderOffline($("#sheet-offline"));
   });
-  offlineCount();
+  offlineCount(); updateTabbarOffline();
   function summaryHtml(text, url) {
     if (!text) return `<p class="summary muted">Pas de résumé sur Bédéthèque pour cet album.</p>`;
     const cut = /[.…]$/.test(text) ? text : text + "…";
@@ -1778,7 +1882,7 @@
   async function renderSidebar() {
     let lists = [];
     try { lists = await getLists(); } catch (_) { return; }
-    for (const el of document.querySelectorAll("#maintabs [data-count]")) {
+    for (const el of document.querySelectorAll("#maintabs [data-count], #tabbar [data-count]")) {
       const l = lists.find(x => x.kind === el.dataset.count);
       el.textContent = l && l.count ? String(l.count) : "";
     }
@@ -1795,6 +1899,9 @@
     let m;
     const tab = (m = /^#\/list\/(\d+)/.exec(h)) ? "list-" + m[1] : h.startsWith("#/list/favorites") ? "favorites" : h.startsWith("#/list/readlater") ? "readlater" : h.startsWith("#/list") ? "lists" : h.startsWith("#/history") ? "history" : h.startsWith("#/activity") ? "activity" : h.startsWith("#/collection") ? "collection" : h.startsWith("#/adult") ? "adult" : h.startsWith("#/settings") ? "settings" : h.startsWith("#/s/") ? "" : "home";
     for (const a of document.querySelectorAll("#maintabs a")) a.classList.toggle("on", a.dataset.tab === tab);
+    const tb = tab === "home" || tab === "readlater" || tab === "favorites" ? tab : "";
+    for (const a of document.querySelectorAll("#tabbar [data-tb]")) a.classList.toggle("on", a.dataset.tb === tb);
+    const more = $("#tb-more"); if (more) more.classList.toggle("on", !tb && !!tab);
   }
 
   // ------------------------------------------------ glisser-déposer un album ou une série sur une liste
