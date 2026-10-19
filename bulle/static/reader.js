@@ -20,8 +20,11 @@
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
     reader_trim: false, reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 100,
+    reader_panels_speed: 0.55, reader_panels_join: true,
   };
   const prefs = Object.assign({}, DEFAULTS);
+  // durée du glissement d'une case à l'autre (secondes ; 0 = instantané)
+  const panelSpeed = () => { const v = +prefs.reader_panels_speed; return isFinite(v) ? Math.max(0, Math.min(2, v)) : 0.55; };
   function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
   try { Object.assign(prefs, pick(JSON.parse(localStorage.getItem("bulle:profile") || "{}"))); } catch (_) { /* ignore */ }
   const store = {
@@ -35,6 +38,7 @@
     body.style.setProperty("--night", String((+prefs.reader_night || 0) / 100));
     body.classList.toggle("night", (+prefs.reader_night || 0) > 0);
     body.style.setProperty("--dim", String(Math.max(0, Math.min(100, +prefs.reader_panels_dim || 0)) / 100));
+    body.style.setProperty("--panel-speed", panelSpeed() + "s");
     body.style.setProperty("--scroll-w", String(Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100))) + "%");
   }
   function loadAlbumMemory() {
@@ -271,7 +275,7 @@
     if (mode === "panels") {
       const d = panelsCache.get(current);
       const v = d && d.panels instanceof Array && d.panels.length ? viewsOf(d)[panelIdx] : null;
-      if (d && d.panels instanceof Array && d.panels.length) extra = !v ? ` · ${d.panels.length} cases` : ` · case ${v.p + 1}/${d.panels.length}` + (v.parts > 1 ? ` (${v.part + 1}/${v.parts})` : "");
+      if (d && d.panels instanceof Array && d.panels.length) { const nb = d._count || d.panels.length; extra = !v ? ` · ${nb} cases` : ` · case ${v.p + 1}/${nb}` + (v.parts > 1 ? ` (${v.part + 1}/${v.parts})` : ""); }
     }
     countEl.textContent = `${label} / ${pages}${extra}`;
     slider.value = current + 1;
@@ -287,6 +291,33 @@
     return d;
   }
   const padOf = () => Math.max(0, Math.min(15, +prefs.reader_panels_margin || 0)) / 100;
+  /* Texte à cheval sur deux cases (détecté par le serveur) : une case dont une bulle déborde est élargie (« grow ») ;
+     deux cases qui se partagent un cartouche sont montrées ensemble (« join »), à la place de la première dans l'ordre
+     de lecture. Réglage « texte à cheval sur deux cases » : désactivé, chaque case reste seule. */
+  const joinOn = () => !(prefs.reader_panels_join === false || prefs.reader_panels_join === "false");
+  function readingPanels(d) {
+    let panels = d.panels.map(r => r.slice());
+    const order = manga && d.rtl && d.rtl.length === d.panels.length ? d.rtl : d.panels.map((_, i) => i);
+    if (!joinOn()) return { panels, order };
+    if (d.grow) for (const [k, r] of Object.entries(d.grow)) if (panels[+k] && r && r.length === 4) panels[+k] = r.slice();
+    if (!(d.join instanceof Array) || !d.join.length) return { panels, order };
+    const parent = panels.map((_, i) => i);
+    const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (const [a, b] of d.join) if (panels[a] && panels[b]) parent[find(a)] = find(b);
+    const union = new Map();
+    panels.forEach((r, i) => {
+      const g = find(i), u = union.get(g);
+      union.set(g, u ? [Math.min(u[0], r[0]), Math.min(u[1], r[1]), Math.max(u[2], r[2]), Math.max(u[3], r[3])] : r.slice());
+    });
+    const seen = new Set(), merged = [];
+    for (const i of order) {
+      const g = find(i);
+      if (seen.has(g)) continue;
+      seen.add(g);
+      merged.push(union.get(g));
+    }
+    return { panels: merged, order: merged.map((_, i) => i) };
+  }
   /* Les « vues » d'une planche : une par case, dans l'ordre de lecture. Une case large (bandeau sur toute la
      largeur) ne peut pas être agrandie sur un écran étroit : réduite pour tenir en largeur, elle reste petite.
      Si l'option est active, elle est alors lue en deux ou trois temps (gauche → droite, l'inverse en manga),
@@ -294,13 +325,14 @@
   function viewsOf(d, n = current) {
     if (!d || !(d.panels instanceof Array)) return [];
     const vw = stage.clientWidth, vh = stage.clientHeight, asp = aspects[n] || 0.7, pad = padOf();
-    const key = `${vw}x${vh}|${asp.toFixed(3)}|${manga}|${prefs.reader_panels_wide}|${pad}`;
+    const key = `${vw}x${vh}|${asp.toFixed(3)}|${manga}|${prefs.reader_panels_wide}|${pad}|${joinOn()}`;
     if (d._vkey === key) return d._views;
     const ih = Math.min(vh, vw / asp), iw = ih * asp;
-    const order = manga && d.rtl && d.rtl.length === d.panels.length ? d.rtl : d.panels.map((_, i) => i);
+    const { panels, order } = readingPanels(d);
+    d._count = panels.length;
     const out = [];
     order.forEach((pi, i) => {
-      const r = d.panels[pi];
+      const r = panels[pi];
       const pw = Math.max(1, (r[2] - r[0]) * iw), ph = Math.max(1, (r[3] - r[1]) * ih);
       const sw = vw * (1 - 2 * pad) / pw, sh = vh * (1 - 2 * pad) / ph, s = Math.max(1, Math.min(5, sw, sh));
       let k = 1;
@@ -332,7 +364,11 @@
     if (pendingSwap) { const { el, src, n } = pendingSwap; pendingSwap = null; if (shown.includes(n) && el.src !== src) el.src = src; }
   }
   img.addEventListener("transitionend", e => { if (e.propertyName === "transform") endMove(); });
-  function startMove() { panelMoving = true; clearTimeout(movingTimer); movingTimer = setTimeout(endMove, 800); }
+  function startMove() {
+    clearTimeout(movingTimer);
+    if (!(panelSpeed() > 0)) { endMove(); return; }   // passage instantané : rien ne glisse, rien à attendre
+    panelMoving = true; movingTimer = setTimeout(endMove, panelSpeed() * 1000 + 250);
+  }
   function swapSrc(el, src, n) {
     if (el === img && panelMoving) { pendingSwap = { el, src, n }; return; }
     pendingSwap = null;

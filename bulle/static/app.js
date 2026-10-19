@@ -201,7 +201,7 @@
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false, reader_trim: false,
-    reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 100,
+    reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 100, reader_panels_speed: 0.55, reader_panels_join: true,
     bdt_ghosts: true, bdt_titles: false, quality: "all",
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
@@ -969,7 +969,11 @@
   function pagerHtml(page, pages, total) {
     if (pages <= 1) return "";
     const btn = (n, label = n, cls = "") => `<button type="button" class="pg ${cls} ${n === page ? "on" : ""}" data-page="${n}" ${n < 1 || n > pages ? "disabled" : ""}>${label}</button>`;
-    const nums = new Set([1, pages, page - 1, page, page + 1, page - 2, page + 2].filter(n => n >= 1 && n <= pages));
+    // jusqu'à 20 numéros affichés d'un coup ; au-delà, une fenêtre de 20 autour de la page en cours, plus la première et la dernière
+    const SHOW = 20;
+    const lo = Math.max(1, Math.min(page - Math.floor(SHOW / 2) + 1, pages - SHOW + 1)), hi = Math.min(pages, lo + SHOW - 1);
+    const nums = new Set([1, pages]);
+    for (let n = lo; n <= hi; n++) nums.add(n);
     const sorted = [...nums].sort((a, b) => a - b);
     let items = "", prev = 0;
     for (const n of sorted) { if (n - prev > 1) items += `<span class="dots">…</span>`; items += btn(n); prev = n; }
@@ -1458,6 +1462,8 @@
         ${field("Case par case : cases larges (bandeaux)", sel("p", "reader_panels_wide", [["split", "Lues en deux ou trois temps quand elles restent petites"], ["fit", "Toujours entières, réduites pour tenir dans l'écran"]], p.reader_panels_wide), "Une case qui fait toute la largeur de la planche ne peut pas être agrandie sur un écran étroit (téléphone) : elle est alors lue par morceaux, de gauche à droite (l'inverse en manga), chaque morceau grossi comme une case normale. Le compteur indique « case 3/7 (1/2) ».")}
         ${field("Case par case : marge autour de la case", sel("p", "reader_panels_margin", [[0, "Aucune : la case touche les bords"], [3, "Fine"], [8, "Large"]], p.reader_panels_margin))}
         ${field("Case par case : autour de la case", sel("p", "reader_panels_dim", [[100, "Masquer : seule la case est visible"], [70, "Assombrir beaucoup"], [40, "Assombrir un peu"], [0, "Laisser la planche visible"]], p.reader_panels_dim), "Sur un écran large, une case haute et étroite ne peut pas remplir l'écran : ses voisines apparaissent à côté. Masquée, seule la case en cours est visible ; le masque la suit quand on passe à la suivante, et s'efface quand on glisse pour recadrer.")}
+        ${field("Case par case : passage d'une case à l'autre", sel("p", "reader_panels_speed", [[0, "Instantané (pas de glissement)"], [0.3, "Glissement rapide"], [0.55, "Glissement normal"], [0.9, "Glissement lent"], [1.4, "Glissement très lent"]], p.reader_panels_speed), "Vitesse à laquelle l'image glisse et zoome d'une case vers la suivante.")}
+        ${field("Case par case : texte à cheval sur deux cases", chk("p", "reader_panels_join", p.reader_panels_join), "Quand un cartouche ou une bulle déborde d'une case sur sa voisine, les deux cases sont montrées ensemble pour lire le texte en entier. Désactivé : chaque case seule (le texte peut être coupé).")}
         ${field("Rogner les marges blanches", chk("p", "reader_trim", p.reader_trim), "Le tour blanc des pages est coupé à l'affichage, pour une planche plus grande à l'écran (une page, double page, défilement). Les fichiers ne sont jamais modifiés ; une page blanche ou un dessin à fond perdu restent entiers. Touche R dans le lecteur.")}
         ${field("Défilement continu : largeur", sel("p", "reader_scroll_width", [[100, "Toute la largeur"], [80, "80 %"], [60, "60 %"], [45, "45 %"]], p.reader_scroll_width))}
         ${field("Ajustement par défaut (une page)", sel("p", "reader_fit", [["page", "Page entière"], ["width", "Pleine largeur"], ["original", "Taille d'origine"]], p.reader_fit))}
@@ -1517,7 +1523,8 @@
             ${adult.folders && !adult.folders.length ? `<span class="muted">Aucune pour l'instant : ouvrez une série et cliquez « 18+ ».</span>` : ""}</div></div>
         <p class="muted"><a href="#/adult">Ouvrir la rubrique Adulte</a> (aussi dans la colonne de gauche dès qu'une série y est).</p>`,
       lab: () => `
-        ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}`,
+        ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}
+        ${field("Recherche BDGest en secours", chk("g", "bdt_bdgest", g.bdt_bdgest), "Quand l'index de Bédéthèque ne trouve rien de sûr (nom approchant, homonymes), Bulle cherche aussi « dans tout le site » BDGest : c'est la même base, mais cette recherche trouve aussi les albums par leur titre, et l'année du fichier départage les homonymes (« Là-bas (2003) »). Une requête de plus, au rythme prudent, pour chaque album ou série concerné. La recherche à la main (« Chercher… ») l'utilise toujours.")}`,
       about: () => `
         <p class="muted">Bulle ${esc(settings.meta.version || "")} · ${plural(stats.albums || 0, "album", "albums")} dans ${plural(stats.folders || 0, "dossier", "dossiers")} (${fmtSize(stats.size || 0)}) · dernier scan : ${fmtDate(stats.last_scan)}<br>
         Dossier des BD : <code>${esc(settings.meta.library_root || "")}</code> · <a href="https://github.com/kermess14/bulle" target="_blank" rel="noopener">github.com/kermess14/bulle</a></p>
@@ -1528,7 +1535,7 @@
     if (isPhone()) {
       // téléphone : d'abord la liste des rubriques (comme les réglages d'Android), puis la rubrique seule
       const ICONS = { look: "🎨", library: "📚", reader: "📖", account: "👤", images: "🖼️", bdt: "🏷️", access: "🔐", adult: "🔞", lab: "🍄", about: "ℹ️" };
-      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter", about: `Bulle ${esc(settings.meta.version || "")}` };
+      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter, recherche BDGest", about: `Bulle ${esc(settings.meta.version || "")}` };
       if (!openedGroup) {
         setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
         main.innerHTML = `<h1>Réglages</h1><nav class="smenu">${SETTINGS_GROUPS.map(([k, name]) => `<a href="#/settings/${k}"><span class="ico">${ICONS[k] || "•"}</span><span>${name}<small>${HELP[k] || ""}</small></span></a>`).join("")}</nav>`;

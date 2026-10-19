@@ -394,6 +394,7 @@ body:has(.letters.rail.right) .toast { right: 72px; }   /* à gauche de la barre
 .pager .pg:disabled { opacity: .35; cursor: default; }
 .pager .dots { padding: 0 4px; color: var(--muted); }
 .pager .pginfo { margin-left: auto; color: var(--muted); font-size: 13px; }
+@media (max-width: 560px) { .pager .pg { min-width: 30px; height: 30px; padding: 0 5px; font-size: 13px; } .pager .pginfo { width: 100%; margin-left: 0; } }
 .h1sub { font-size: 14px; font-weight: 400; }
 
 /* ---------- page Réglages ---------- */
@@ -567,10 +568,10 @@ body.mode-scroll #stage { overflow-y: auto; align-items: flex-start; justify-con
 body.mode-scroll #stage .wrap, body.mode-double #stage .wrap { display: none; }
 /* case par case : l'image reste mise en page « page entière », une transformation la cadre sur la case */
 body.mode-panels #stage { overflow: hidden; }
-body.mode-panels #stage img { transform-origin: 0 0; will-change: transform; transition: transform .55s cubic-bezier(.22, .75, .25, 1); }
+body.mode-panels #stage img { transform-origin: 0 0; will-change: transform; transition: transform var(--panel-speed, .55s) cubic-bezier(.22, .75, .25, 1); }
 body.mode-panels #stage img.nofx { transition: none; }
 /* voile autour de la case (réglage « assombrir le reste de la planche ») : troué à la case, le trou suit l'image */
-#stage .dim { position: absolute; inset: 0; z-index: 2; pointer-events: none; background: rgba(0, 0, 0, var(--dim, 0)); transition: clip-path .55s cubic-bezier(.22, .75, .25, 1), opacity .25s; }
+#stage .dim { position: absolute; inset: 0; z-index: 2; pointer-events: none; background: rgba(0, 0, 0, var(--dim, 0)); transition: clip-path var(--panel-speed, .55s) cubic-bezier(.22, .75, .25, 1), opacity .25s; }
 #stage .dim.loose { opacity: 0; }
 @media (max-width: 560px) { .rbar .zbtn { display: none; } }   /* téléphone : le pincement suffit, la barre est étroite */
 /* masque de la couleur du fond choisi : seule la case en cours reste visible */
