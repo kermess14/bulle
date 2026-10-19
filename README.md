@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.29.0)
+# Bulle — lecteur de BD maison (v0.29.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -147,6 +147,10 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
+- Bédéthèque réservé à l'administrateur : un compte lecteur ne peut déclencher **aucune** requête vers Bédéthèque
+  (recherche, analyse, résumés, one shots, diagnostic : refusés par le serveur, boutons cachés). Il voit les
+  informations déjà récupérées (séries, auteurs, résumés déjà lus) ; un résumé pas encore lu affiche simplement un
+  lien vers la fiche Bédéthèque.
 - **Mettre Bulle sur Internet** : Réglages › Comptes et accès › « Se connecter avec un compte ». À l'ouverture, on
   tape le nom d'un compte et son mot de passe (8 caractères au moins) ; sans cela on ne voit rien, ni les BD, ni les
   couvertures, ni la liste des comptes. Un compte par personne, supprimable à tout moment ; un lecteur ne voit que son
