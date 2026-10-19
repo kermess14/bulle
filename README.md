@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.29.1)
+# Bulle — lecteur de BD maison (v0.29.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -147,6 +147,19 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
+- Case par case, la case seule à l'écran : sur un écran large, une case haute et étroite remplit la hauteur mais pas la
+  largeur, et ses voisines restaient visibles à côté ; la première case d'une rangée n'était même pas centrée (la planche
+  était recalée contre le bord de l'écran), si bien que passer à la suivante donnait l'impression de simplement glisser
+  vers la droite. Désormais la case est toujours centrée et tout le reste est masqué, de la couleur du fond choisi ; le
+  masque suit la case et s'efface quand on glisse pour recadrer. Réglage « Case par case : autour de la case » :
+  masquer (par défaut), assombrir beaucoup / un peu, ou laisser la planche visible.
+- Case par case, détection des cases revue sur 74 planches réelles de 52 albums très différents : les bulles et
+  cartouches à cheval sur deux cases ne les soudent plus (ils « barraient » la gouttière), une grande case sur deux
+  rangées n'est plus coupée en deux, la grande image de fond avec des cases incrustées devient une case à part entière,
+  les cases bien posées sur le blanc sont trouvées même quand une voisine déborde jusqu'au bord de la page, et une
+  légende ou une ligne de crédits n'est plus prise pour une case. Sur l'échantillon, 32 planches sur 74 sont découpées
+  autrement, presque toutes mieux ; les planches peintes sans cadre ni gouttière restent lues en page entière. Les cases
+  déjà calculées sont refaites automatiquement, au fil de la lecture.
 - Bédéthèque réservé à l'administrateur : un compte lecteur ne peut déclencher **aucune** requête vers Bédéthèque
   (recherche, analyse, résumés, one shots, diagnostic : refusés par le serveur, boutons cachés). Il voit les
   informations déjà récupérées (séries, auteurs, résumés déjà lus) ; un résumé pas encore lu affiche simplement un
