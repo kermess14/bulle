@@ -258,7 +258,7 @@ class Library:
         self.stop_requested = threading.Event()   # « Arrêter » : le scan ou la génération des couvertures s'interrompt
         self.status = {
             "running": False, "phase": "idle", "started_at": None, "finished_at": None,
-            "duration": None, "albums": 0, "folders": 0, "added": 0, "removed": 0,
+            "duration": None, "albums": 0, "folders": 0, "added": 0, "new_folders": 0, "removed": 0,
             "changed": 0, "error": None, "covers_done": 0, "covers_total": 0,
         }
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -421,7 +421,7 @@ class Library:
         t0 = time.time()
         self.stop_requested.clear()
         self.status.update(running=True, phase="scan", started_at=t0, finished_at=None,
-                           error=None, added=0, removed=0, changed=0, renamed=0, stopped=False, aborted=False)
+                           error=None, added=0, new_folders=0, removed=0, changed=0, renamed=0, stopped=False, aborted=False)
         try:
             result = self._scan(under, force=force)
             self.status.update(**result)
@@ -562,6 +562,7 @@ class Library:
                 "SELECT id, path, kind, size, mtime, format, error FROM nodes")}
             ids: dict[str, int] = {}
             added = changed = renamed = 0
+            new_folders = 0   # comptés à part : « 3 nouveaux albums » ne doit pas devenir 4 parce que leur série est nouvelle
             # albums disparus de leur place : si un fichier « nouveau » a la même taille et la même date, c'est le même
             # album renommé ou déplacé ; on garde sa fiche (lecture en cours, favoris, listes, couverture choisie…)
             present = {a["path"] for a in albums}
@@ -594,7 +595,7 @@ class Library:
                              f["count"], now, gen))
                         ids[rel] = cur.lastrowid
                         if rel:
-                            added += 1
+                            new_folders += 1
                 # Albums
                 for a in albums:
                     if self.stop_requested.is_set():
@@ -653,8 +654,9 @@ class Library:
                         ids[a["path"]] = cur.lastrowid
                         added += 1
                 # Disparus
-                gone = [r["id"] for r in cur.execute("SELECT id FROM nodes WHERE seen<>?", (gen,))]
-                removed = len(gone)
+                gone_rows = cur.execute("SELECT id, kind FROM nodes WHERE seen<>?", (gen,)).fetchall()
+                gone = [r["id"] for r in gone_rows]
+                removed = sum(1 for r in gone_rows if r["kind"] == "album")   # albums seulement, comme « nouveaux »
                 if gone:
                     cur.execute("DELETE FROM nodes WHERE seen<>?", (gen,))
                     invalidate.extend(gone)
@@ -699,7 +701,7 @@ class Library:
             except Exception:  # noqa: BLE001
                 log.exception("Invalidation du cache")
         result = {"albums": len(albums), "folders": max(0, len(folders) - 1), "added": added,
-                  "removed": removed, "changed": changed, "renamed": renamed}
+                  "new_folders": new_folders, "removed": removed, "changed": changed, "renamed": renamed}
         log.info("Scan terminé%s : %%(albums)d albums, %%(folders)d dossiers, +%%(added)d, -%%(removed)d, "
                  "~%%(changed)d modifiés" % (f" ({under})" if under else ""), result)
 

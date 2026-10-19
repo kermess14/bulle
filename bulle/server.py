@@ -14,6 +14,8 @@ import urllib.parse
 import secrets
 import threading
 import time
+import unicodedata
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
@@ -30,7 +32,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.29.2"
+VERSION = "0.29.3"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -1446,6 +1448,98 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             abort(404, description="Fichier introuvable")
         return send_file(path, as_attachment=True, download_name=os.path.basename(path), conditional=True)
 
+    # ---- téléchargement de séries entières (et du « panier ») : un seul fichier .zip, fabriqué à la volée sans rien
+    # compresser (les albums le sont déjà) et sans fichier temporaire ; les fichiers de la bibliothèque sont seulement lus
+    def download_items(folder_ids: list[int], album_ids: list[int]) -> list[tuple[str, str, int]]:
+        """(chemin sur le disque, nom dans le .zip, taille) de chaque album demandé ; dossiers = tous leurs albums,
+        sous-dossiers compris, rangés sous le nom du dossier. Les albums cachés (rubrique Adulte verrouillée) sont exclus."""
+        out, seen = [], set()
+
+        def node_ok(i: int, kind: str) -> Optional[dict]:   # panier : un élément disparu (renommé, supprimé) est ignoré
+            n = lib.node(i)
+            return n if n and n["kind"] == kind and not hidden(n) else None
+
+        for fid in folder_ids[:200]:
+            folder = node_ok(fid, "folder")
+            if not folder:
+                continue
+            base = folder["path"].strip("/")
+            top = folder["name"] if base else "Bibliothèque"
+            ids = [a["id"] for a in lib.albums_under(base)]
+            for a in visible([n for n in (lib.node(i) for i in ids) if n]):
+                if a["id"] in seen:
+                    continue
+                seen.add(a["id"])
+                rel = a["path"][len(base) + 1:] if base else a["path"]
+                out.append((lib.abs_path(a["path"]), f"{top}/{rel}", int(a.get("size") or 0)))
+        for aid in album_ids[:500]:
+            a = node_ok(aid, "album")
+            if a and a["id"] not in seen:
+                seen.add(a["id"])
+                out.append((lib.abs_path(a["path"]), os.path.basename(a["path"]), int(a.get("size") or 0)))
+        return [o for o in out if os.path.isfile(o[0])]
+
+    def ids_arg(name: str) -> list[int]:
+        return [int(x) for x in re.findall(r"\d+", request.args.get(name) or "")]
+
+    def zip_response(items: list[tuple[str, str, int]], name: str) -> Response:
+        if not items:
+            abort(404, description="Rien à télécharger")
+
+        class _Out:   # flux en écriture seule : zipfile écrit, on renvoie au fur et à mesure
+            def __init__(self):
+                self.parts, self.pos = [], 0
+            def write(self, b):
+                self.parts.append(bytes(b)); self.pos += len(b); return len(b)
+            def tell(self):
+                return self.pos
+            def flush(self):
+                pass
+            def take(self) -> bytes:
+                data = b"".join(self.parts); self.parts = []; return data
+
+        def gen():
+            out = _Out()
+            with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+                for path, arc, _size in items:
+                    zi = zipfile.ZipInfo.from_file(path, arc)
+                    zi.compress_type = zipfile.ZIP_STORED
+                    with open(path, "rb") as src, zf.open(zi, "w", force_zip64=True) as dst:
+                        while True:
+                            chunk = src.read(1 << 20)
+                            if not chunk:
+                                break
+                            dst.write(chunk)
+                            yield out.take()
+                    yield out.take()
+            yield out.take()
+
+        safe = re.sub(r'[\\/:*?"<>|]+', " ", name).strip() or "Bulle"
+        resp = Response(gen(), mimetype="application/zip")
+        resp.headers["Content-Disposition"] = (f"attachment; filename=\"{unicodedata.normalize('NFKD', safe).encode('ascii', 'ignore').decode() or 'Bulle'}.zip\"; "
+                                               f"filename*=UTF-8''{urllib.parse.quote(safe + '.zip')}")
+        resp.headers["X-Bulle-Total-Size"] = str(sum(i[2] for i in items))
+        return resp
+
+    @app.route("/api/download/folder/<int:folder_id>")
+    def api_download_folder(folder_id: int):
+        folder = get_node(folder_id, "folder")
+        return zip_response(download_items([folder_id], []), folder["name"] or "Bibliothèque")
+
+    @app.route("/api/download/bundle")
+    def api_download_bundle():
+        """Le panier : ?f=1,2 (séries) &a=3,4 (albums) → un seul .zip."""
+        f, a = ids_arg("f"), ids_arg("a")
+        items = download_items(f, a)
+        n = len(f) + len(a)
+        name = ((lib.node(f[0]) or {}).get("name") or "Bulle") if n == 1 and f else f"Bulle - {n} éléments"
+        return zip_response(items, name)
+
+    @app.route("/api/download/size")
+    def api_download_size():
+        items = download_items(ids_arg("f"), ids_arg("a"))
+        return jsonify({"albums": len(items), "bytes": sum(i[2] for i in items)})
+
     @app.errorhandler(400)
     @app.errorhandler(403)
     @app.errorhandler(404)
@@ -1877,6 +1971,42 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             site_error = str(e)
         return jsonify({"results": results[:30], "site_error": site_error,
                         "web": f"https://www.bedetheque.com/search/tout?RechTexte={urllib.parse.quote(q)}"})
+
+    cover_memo: dict[str, Optional[str]] = {}
+
+    @app.route("/api/bdt/cover")
+    def api_bdt_cover():
+        """Pochette d'une série ou d'un album Bédéthèque, pour l'aperçu au survol des propositions. Bulle ne télécharge
+        jamais l'image (le robots.txt du site l'interdit aux robots) : il renvoie son adresse, que le navigateur affiche
+        comme lors d'une visite du site. Pour une série, la page de la série est lue (une requête, au rythme prudent, puis
+        gardée 30 jours : c'est la même page que celle lue quand on choisit la série)."""
+        require_admin()
+        bdt_check_enabled()
+        url = (request.args.get("url") or "").strip()
+        if not url.startswith("https://www.bedetheque.com/"):
+            abort(400, description="Adresse Bédéthèque attendue")
+        read_page = request.args.get("page") == "1"
+        m = re.search(r"/BD-[^/]*-(\d+)\.html$", url)
+        if m and not read_page:
+            # album : la pochette s'appelle presque toujours Couv_<numéro>.jpg, sans rien demander au site ; si l'image
+            # ne vient pas (vieux albums aux noms libres), le navigateur redemande avec page=1 et on lit la page
+            couv = f"Couv_{m.group(1)}.jpg"
+        else:
+            if url not in cover_memo:
+                try:
+                    html = bdt.fetch(url)
+                except BdtError as e:
+                    abort(502, description=str(e))
+                # la pochette annoncée par la page (balise og:image), sinon la première de la page
+                f = (re.search(r'og:image"\s+content="https://www\.bedetheque\.com/media/Couvertures/([^"/?#<>\s]+)"', html)
+                     or re.search(r'(?:media/Couvertures|cache/thb_couv)/([^"\'/?#<>\s]+\.(?:jpe?g|png|webp|gif))', html, re.I))
+                cover_memo[url] = f.group(1) if f else None
+            couv = cover_memo[url]
+        if not couv:
+            return jsonify({"thumb": None, "image": None})
+        return jsonify({"thumb": f"https://www.bedetheque.com/cache/thb_couv/{couv}",
+                        "image": f"https://www.bedetheque.com/media/Couvertures/{couv}",
+                        "guess": bool(m and not read_page)})
 
     @app.route("/api/bdt/oneshot/<int:node_id>", methods=["DELETE"])
     def api_bdt_oneshot_forget(node_id: int):
