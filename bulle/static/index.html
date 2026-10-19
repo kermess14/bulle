@@ -37,6 +37,9 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
   <button class="iconbtn" id="bubble-mute" type="button" title="Son des bulles (aquarium)" aria-label="Son des bulles">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path class="w" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/><path class="x" d="m16 9 5 6M21 9l-5 6"/></svg>
   </button>
+  <button class="iconbtn basketbtn" id="basket-btn" type="button" title="Téléchargements" aria-label="Téléchargements" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5"/><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/></svg><span class="cnt">0</span>
+  </button>
   <button class="iconbtn" id="profile-btn" type="button" title="Profil" hidden></button>
   <button class="iconbtn" id="scan-btn" type="button" title="Rechercher les nouveaux albums (scan)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>

@@ -752,12 +752,24 @@
     el.style.transform = `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px) scale(${userZoom.toFixed(4)})`;
     body.classList.add("zoomed");
   }
+  /* Zoom minimal : en dessous de 100 % seulement si la page ne tient pas entière à l'écran (ajustement « largeur » ou
+     « taille d'origine ») — le zoom − permet alors de la voir en entier. En case par case, la case cadrée est le minimum. */
+  function minZoom() {
+    if (mode === "panels") return 1;
+    if (!zoomBounds) measureBounds();
+    const { x0, y0, x1, y1, vw, vh } = zoomBounds;
+    const cw = x1 - x0, ch = y1 - y0;
+    if (!(cw > 0 && ch > 0)) return 1;
+    return Math.min(1, 0.98 * vw / cw, 0.98 * vh / ch);
+  }
   function setZoom(z, cx, cy) {
     if (mode === "scroll") return;
-    z = Math.max(1, Math.min(8, z));
-    if (z < 1.04) z = 1;   // un dézoom qui arrive presque à 100 % revient à 100 % (sinon on reste « zoomé » d'un poil)
+    const zmin = minZoom();
+    z = Math.max(zmin, Math.min(8, z));
+    if (Math.abs(z - 1) < 0.04) z = 1;   // un zoom qui arrive presque à 100 % revient à 100 % (sinon on reste « zoomé » d'un poil)
+    if (z === userZoom) { if (z <= zmin + 0.001) flash(mode === "panels" ? "Case entière (touche C pour la planche)" : "Page entière"); return; }
     const el = zoomTarget();
-    if (userZoom === 1 && z > 1) {   // on part de la position de défilement courante
+    if (userZoom === 1 && z !== 1) {   // on part de la position de défilement courante
       panX = -stage.scrollLeft; panY = -stage.scrollTop; stage.scrollLeft = 0; stage.scrollTop = 0;
       el.style.transformOrigin = "0 0";
       zoomBounds = null;
@@ -767,11 +779,15 @@
     cx = (cx == null ? vw / 2 : cx - left); cy = (cy == null ? vh / 2 : cy - top);
     const k = z / userZoom;
     panX = cx - (cx - panX) * k; panY = cy - (cy - panY) * k;
-    const back = z === 1 && userZoom > 1;
+    if (z < 1 && z <= zmin + 0.001) {   // dézoomé au maximum : la page entière, bien au milieu de l'écran
+      const { x0, y0, x1, y1 } = zoomBounds;
+      panX = (vw - (x0 + x1) * z) / 2; panY = (vh - (y0 + y1) * z) / 2;
+    }
+    const back = z === 1 && userZoom !== 1;
     userZoom = z;
     if (back) { cancelAnimationFrame(zoomRaf); zoomRaf = 0; const top = -panY; panX = 0; panY = 0; el.style.transform = ""; body.classList.remove("zoomed"); zoomBounds = null; stage.scrollTop = Math.max(0, top); }
     else applyZoom();
-    if (z > 1) flash(`Zoom ${Math.round(z * 100)} %`);
+    if (z !== 1) flash(`Zoom ${Math.round(z * 100)} %`);
     scheduleRefine();
   }
   /* Quand on zoome, on va chercher une version plus nette de la page, une fois le geste terminé. Trois largeurs seulement
@@ -838,7 +854,7 @@
   stage.addEventListener("dblclick", e => {
     if (mode === "scroll" || e.target.closest(".rmsg")) return;
     e.preventDefault();
-    setZoom(userZoom > 1 ? 1 : 2.5, e.clientX, e.clientY);
+    setZoom(userZoom !== 1 ? 1 : 2.5, e.clientX, e.clientY);
   });
   // pincement à deux doigts
   let pinch = null;
@@ -942,7 +958,7 @@
     const reframed = panelDragEnd();
     const flick = Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < (reframed ? 350 : 600);
     if (reframed && !flick) return;   // recadrage à la main : on garde la case où elle est
-    if (userZoom === 1 && mode !== "scroll" && flick && (fit !== "original" || mode === "panels")) {
+    if (userZoom <= 1 && mode !== "scroll" && flick && (fit !== "original" || mode === "panels")) {
       if (reframed) { panelOff.x = panelDrag ? panelOff.x : 0; panelOff.y = 0; }
       dx < 0 ? forward() : backward();  // balayage vers la gauche = avancer (sens occidental)
       e.preventDefault();
@@ -1011,9 +1027,9 @@
       case "m": case "M": toggleManga(); break;
       case "r": case "R": toggleTrim(); break;
       case "p": case "P": toggleFullscreen(); break;
-      case "Escape": if (!strip.hidden) closeStrip(); else if (userZoom > 1) resetZoom(); else if (!endEl.hidden) hideEnd(); else if (document.fullscreenElement) document.exitFullscreen(); else location.href = folderHref; break;
-      case "+": case "=": setZoom(userZoom * 1.25); break;
-      case "-": setZoom(userZoom / 1.25); break;
+      case "Escape": if (!strip.hidden) closeStrip(); else if (userZoom !== 1) resetZoom(); else if (!endEl.hidden) hideEnd(); else if (document.fullscreenElement) document.exitFullscreen(); else location.href = folderHref; break;
+      case "+": case "=": $("#zoomin").click(); break;
+      case "-": $("#zoomout").click(); break;
       case "0": resetZoom(); break;
       case "t": case "T": toggleStrip(); break;
       case "b": case "B": toggleBars(); break;
@@ -1031,6 +1047,9 @@
   fitBtn.addEventListener("click", cycleFit);
   mangaBtn.addEventListener("click", toggleManga);
   fsBtn.addEventListener("click", toggleFullscreen);
+  // boutons − / + : un cran de 25 %, avec un arrêt à 100 % (la taille d'ajustement) quand on passe d'un côté à l'autre
+  $("#zoomout").addEventListener("click", () => { const z = userZoom / 1.25; setZoom(userZoom > 1 && z < 1 ? 1 : z); });
+  $("#zoomin").addEventListener("click", () => { const z = userZoom * 1.25; setZoom(userZoom < 1 && z > 1 ? 1 : z); });
   slider.addEventListener("input", () => { countEl.textContent = `${slider.value} / ${pages}`; });
   slider.addEventListener("change", () => go(+slider.value - 1));
   let resizeTimer = null;
