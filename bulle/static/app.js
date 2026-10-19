@@ -959,7 +959,7 @@
     if (pref === "auto" && list.length < 40) return "";
     const present = new Set(list.map(c => letterOf(c.name)));
     const all = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"];
-    const side = settings.profile.letters_side || "right";
+    const side = isPhone() ? "top" : (settings.profile.letters_side || "right");   // téléphone : rangée horizontale, jamais la barre latérale
     const size = settings.profile.letters_size === "normal" ? " size-normal" : "";
     return `<div class="letters ${side === "top" ? "" : "rail " + side + size}" id="letters">${all.map(l => `<button type="button" data-letter="${l}" class="${present.has(l) ? "on" : ""}" ${present.has(l) ? "" : "disabled"}>${l}</button>`).join("")}</div>`;
   }

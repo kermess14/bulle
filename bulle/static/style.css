@@ -1470,6 +1470,11 @@ img.pavatar { object-fit: cover; padding: 0; }
 .smenu .ico { width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); color: var(--accent); font-size: 17px; flex: none; }
 /* --- divers --- */
 :root[data-phone="on"] .toast { top: auto; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 12px); }
-:root[data-phone="on"] .letters.rail { top: calc(50% + var(--bar-h) / 2 - var(--tabbar-h) / 2); max-height: calc(100vh - var(--bar-h) - var(--tabbar-h) - 24px); --lh: 17px; }
+/* lettres : une rangée discrète sous la barre du haut, qu'on fait défiler du doigt (jamais la barre latérale) */
+:root[data-phone="on"] .letters, :root[data-phone="on"] .letters.rail { position: sticky; top: calc(var(--bar-h) + env(safe-area-inset-top, 0px)); left: auto; right: auto; transform: none; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 2px; padding: 6px 0; margin: 0 -12px; padding-left: 12px; padding-right: 12px; border: 0; border-radius: 0; box-shadow: none; background: var(--bg); scrollbar-width: none; max-height: none; width: auto; }
+:root[data-phone="on"] .letters::-webkit-scrollbar { display: none; }
+:root[data-phone="on"] .letters button, :root[data-phone="on"] .letters.rail button { flex: none; min-width: 30px; width: 30px; height: 30px; font-size: 13px; font-weight: 700; border-radius: 8px; }
+:root[data-phone="on"] .letters button:disabled { opacity: .3; }
+:root[data-phone="on"] body:has(.letters.rail.right) main, :root[data-phone="on"] body:has(.letters.rail.left) main { padding-left: 12px; padding-right: 12px; }
 :root[data-phone="on"] .listhead .btn[data-action="back"] { display: none; }
 :root[data-phone="on"] .crumbs:not(:has(.sep)):not(:has(.cur)) { display: none; }   /* « Accueil » seul : inutile sur téléphone */
