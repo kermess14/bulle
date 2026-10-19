@@ -136,7 +136,10 @@ NUM_PATTERNS = [
     re.compile(r"(?<![a-z0-9])(?:HS|INT|int[ée]grale|hors[- ]s[ée]rie)\s*0*(\d{1,3})(?![0-9])", re.I),  # HS2, Intégrale 3
     re.compile(r"(?<![a-z0-9])T(?:ome)?\s*0*(\d{1,3})(?![0-9])", re.I),          # T01, Tome 3
     re.compile(r"(?<![a-z0-9])(?:n°|#|no\.?)\s*0*(\d{1,3})(?![0-9])", re.I),      # n°3, #3
-    re.compile(r"(?:^|\s-\s)0*(\d{1,3})(?:\s-\s|\s*[.)]\s|$)"),                  # « 03 - Titre », « 03. Titre »
+    re.compile(r"(?:^|\s-\s)0*(\d{1,3})(?:\s-\s|\s*[.)_-]\s*(?!\d)|$)"),          # « 03 - Titre », « 03. Titre », « 03_Titre »
+    re.compile(r"(?:^|\s-\s)(0\d{1,2}|[1-9]\d)\s+(?=[^\W\d_])"),                 # « 01 Résurrection », « 11 Marlowe » (pas
+                                                                                 # « 3 Fois rien », « 300 Grammes », « 20 000 lieues »)
+    re.compile(r"(?<=[^\W\d_])\s+0*(\d{1,3})\s*(?:-\s|$)"),                       # « Androïdes 01 - Titre », « Androïdes 01 »
     re.compile(r"(?<![a-z0-9])vol(?:ume)?\.?\s*0*(\d{1,3})(?![0-9])", re.I),      # Vol. 2
 ]
 SPECIAL_RE = re.compile(r"(?<![a-z])(HS|hors[- ]s[ée]rie|INT|int[ée]grale|HC|SP)(?![a-z])", re.I)
@@ -160,7 +163,12 @@ def parse_album_name(name: str) -> dict:
     if len(parts) >= 2:
         last = parts[-1]
         if not re.fullmatch(r"(?i)T(?:ome)?\s*\d+|\d+", last):
-            title = re.sub(r"^\s*(?:T(?:ome)?\s*\d+\s*[-:.]?\s*)", "", last).strip() or None
+            title = re.sub(r"^\s*(?:T(?:ome)?\s*\d+\s*[-:.]?\s*|0*\d{1,3}\s*[-:._)]?\s+(?=[^\W\d_]))", "", last, flags=re.I).strip() or None
+    elif number is not None:
+        # « 01 Résurrection » : le titre est ce qui suit le numéro de tête
+        m = re.match(r"^\s*0*\d{1,3}\s*[-:._)]?\s+(.*\S)", name)
+        if m and re.search(r"[^\W\d_]{3}", m.group(1)):
+            title = m.group(1)
     return {"number": number, "kind": kind, "title": title}
 
 

@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.29.3)
+# Bulle — lecteur de BD maison (v0.29.4)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,14 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- Bédéthèque, numéros de tome mieux compris : « 01 Résurrection », « 11 Marlowe chapitre I » (numéro en tête suivi
+  directement du titre), « Androïdes 01 - Titre », « Série - 01 Titre », « 01_Titre », « 01-Titre » étaient « non
+  reconnus » et tous les tomes affichés manquants. Un numéro en tête n'est pris que s'il a deux chiffres (« 01 »,
+  « 11 ») : « 3 Fois rien », « 300 Grammes » ou « 20 000 lieues » restent des titres. Sur les 5 697 albums de la bibliothèque de
+  référence, tous les numéros déjà reconnus restent les mêmes.
+- Plus besoin de « Mettre à jour » pour ça : à l'ouverture d'un dossier déjà lié, les fichiers sont recomparés à la
+  fiche de série enregistrée, **sans aucune requête** vers Bédéthèque (albums ajoutés, renommés ou mieux compris
+  liés tout de suite). Les résumés déjà lus ne sont plus perdus lors d'une mise à jour de la série.
 - **Télécharger des séries** : clic droit sur une série ou un album ›
   « Ajouter aux téléchargements » : un « +1 » s'envole et le compteur du bouton de téléchargement, en haut, augmente.
   Ce bouton ouvre le panier (liste, taille totale, « retirer ») ; « Tout télécharger » donne **un seul .zip**, chaque série
