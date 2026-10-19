@@ -216,9 +216,12 @@
      verre dépoli, couvertures au hasard, bulles, saisons, petits mots animés). Mémorisé sur l'appareil, pas sur le
      profil : léger sur la tablette, complet sur le PC. */
   function liteMode() { try { return localStorage.getItem("bulle:lite") === "1"; } catch (_) { return false; } }
-  // Téléphone (700 px ou moins) : présentation à part — barre d'onglets en bas, pochettes à trois, fiche qui monte
-  // du bas, réglages en liste, rien qui bouge en arrière-plan. Tablette et PC gardent la présentation habituelle.
-  const isPhone = () => window.innerWidth <= 700;
+  // Présentation téléphone : barre d'onglets en bas, pochettes à trois, fiche qui monte du bas, réglages en liste,
+  // rien qui bouge en arrière-plan. SEULEMENT dans l'appli « Bulle pour Android » (elle se signale dans son
+  // identifiant de navigateur) et sur un écran de 700 px ou moins. Dans un navigateur, même sur téléphone, et sur
+  // tablette comme sur PC, Bulle garde sa présentation habituelle.
+  const inApp = /BulleAndroid\//.test(navigator.userAgent);
+  const isPhone = () => inApp && window.innerWidth <= 700;
   function updateLiteBtn() {
     const b = $("#lite-btn"); if (!b) return;
     const on = liteMode();
