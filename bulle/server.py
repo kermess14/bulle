@@ -8,6 +8,7 @@ import io
 import logging
 import glob
 import os
+import re
 import secrets
 import threading
 import time
@@ -21,12 +22,12 @@ from PIL import Image
 from . import opds
 
 from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, compare, index_letter_for, norm_title,
-                         parse_album_name, query_from_folder)
+                         is_oneshot_name, parse_album_name, pick_album, query_from_album, query_from_folder)
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.27.0"
+VERSION = "0.28.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -147,7 +148,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     import bulle.bedetheque as _bdt_mod
     _bdt_mod.USER_AGENT = f"Bulle/{VERSION} (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
     bdt_job = {"running": False, "done": 0, "total": 0, "current": None, "errors": [], "stop": False, "linked": 0,
-               "ambiguous": 0, "not_found": 0}
+               "ambiguous": 0, "not_found": 0, "folder_id": None, "sub_done": 0, "sub_total": 0,
+               "os_found": 0, "os_ambiguous": 0, "os_not_found": 0}
 
     hdcfg = {"min": HD_MIN_PX}   # seuil HD en cours (relu à chaque changement de réglage)
 
@@ -416,7 +418,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 "pencillers": a.get("pencillers") or [], "colorists": a.get("colorists") or [],
                 "publisher": a.get("publisher"), "collection": a.get("collection"), "isbn": a.get("isbn"),
                 "pages": a.get("pages"), "date": a.get("date"), "summary": a.get("summary"),
-                "summary_at": a.get("summary_at")}
+                "summary_at": a.get("summary_at"), "oneshot": m.get("how") == "oneshot",
+                "series_title": a.get("series_title"), "series_url": a.get("series_url"), "genre": a.get("series_genre")}
 
     def folder_payload(folder: dict, profile_id: int) -> dict:
         children = visible(lib.children(folder["id"]))
@@ -468,9 +471,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         payload["folder"]["fav"] = folder["id"] in favs
         payload["folder"]["adult"] = folder["path"].strip("/") in adult_set
         payload["adult_unlocked"] = adult_unlocked()
-        link = lib.bdt_series_get(folder["id"])
-        if link:
-            payload["bdt"] = bdt_report(folder, link, children)
+        if folder_mode(folder) == "oneshots":
+            payload["bdt_oneshots"] = oneshots_report(folder, children)
+        else:
+            link = lib.bdt_series_get(folder["id"])
+            if link:
+                payload["bdt"] = bdt_report(folder, link, children)
         payload["bdt_enabled"] = bool(settings()["bdt_enabled"])
         if folder["path"]:
             pre = folder["path"].strip("/") + "/"
@@ -498,6 +504,34 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             "matches": {m["id"]: {"number": m["album"]["number"], "title": m["album"]["title"], "how": m["how"]}
                         for m in cmp_["matches"]},
         }
+
+    def folder_mode(folder: dict) -> str:
+        """« oneshots » : dossier fourre-tout dont chaque album est une série à part (nommé « One shots », ou choisi à la
+        main) ; sinon « series » : le dossier entier est une série."""
+        mode = lib.bdt_folder_mode(folder["id"])
+        if mode in ("oneshots", "series"):
+            return mode
+        return "oneshots" if is_oneshot_name(folder.get("name") or "") else "series"
+
+    def oneshots_report(folder: dict, children: Optional[list[dict]] = None) -> dict:
+        children = children if children is not None else lib.children(folder["id"])
+        albums = [c for c in children if c["kind"] == "album"]
+        rows = lib.bdt_oneshots_for(folder["id"])
+        counts = {"ok": 0, "ambiguous": 0, "not_found": 0, "todo": 0, "total": len(albums)}
+        items = []
+        for a in albums:
+            r = rows.get(a["id"])
+            st = r["status"] if r else "todo"
+            counts[st] = counts.get(st, 0) + 1
+            if st in ("ambiguous", "not_found"):
+                items.append({"id": a["id"], "name": a["name"], "status": st, "query": r.get("query"),
+                              "candidates": r.get("candidates") or []})
+            elif st == "ok":
+                items.append({"id": a["id"], "name": a["name"], "status": st, "series_title": r.get("series_title"),
+                              "series_url": r.get("series_url"), "manual": bool(r.get("manual")),
+                              "score": r.get("score")})
+        running = bdt_job["running"] and bdt_job.get("folder_id") == folder["id"]
+        return {"counts": counts, "albums": items, "running": running, "named": is_oneshot_name(folder["name"])}
 
     def cache_headers(resp: Response, immutable: bool) -> Response:
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable" if immutable else "public, max-age=600"
@@ -576,6 +610,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         j["lists"] = lib.list_membership(node_id, current_profile())
         if node.get("parent_id"):
             link = lib.bdt_series_get(node["parent_id"])
+            parent = lib.node(node["parent_id"])
+            if parent and folder_mode(parent) == "oneshots":
+                link = None
             if link:
                 j["series"] = {"title": link["title"], "url": link["url"], "status": link["status"]}
         return jsonify(j)
@@ -1521,6 +1558,105 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         report["query"] = query_from_folder(folder["name"])
         return report
 
+    def analyze_oneshot(folder: dict, album: dict, url: Optional[str] = None, query: Optional[str] = None) -> dict:
+        """Un album d'un dossier de one shots, cherché comme sa propre série : recherche dans l'index (sans requête
+        réseau la plupart du temps), puis une seule page — la fiche de la série — si la correspondance est sûre."""
+        q = (query or query_from_album(album["name"])).strip()
+        candidates: list[dict] = []
+        score: Optional[float] = None
+        if url:
+            series, manual = bdt.series(url), True
+        else:
+            manual = bool(query)
+            candidates = bdt_search(q)
+            full = re.sub(r"\([^()]*\)", " ", album["name"]).strip()
+            if (not candidates or candidates[0]["score"] < 0.86) and not query and norm_title(full) != norm_title(q):
+                more = bdt_search(re.sub(r"\s+", " ", full))   # « Zélie nord - Sud » : on essaie aussi le nom entier
+                if more and (not candidates or more[0]["score"] > candidates[0]["score"]):
+                    candidates = more
+            if not candidates:
+                lib.bdt_oneshot_set(album["id"], folder["id"], "not_found", query=q)
+                return {"status": "not_found", "query": q}
+            best = candidates[0]
+            # un titre de one shot est court : on ne lie tout seul que si le nom est quasi identique
+            if best["score"] < 0.86 and not (query and len(candidates) == 1):
+                lib.bdt_oneshot_set(album["id"], folder["id"], "ambiguous", query=q, candidates=candidates[:6])
+                return {"status": "ambiguous", "query": q, "candidates": candidates[:6]}
+            score = best["score"]
+            series = bdt.series(best["url"])
+        alb = pick_album(series, album["name"])
+        data = dict(alb) if alb else {"url": None, "title": series.get("title"), "number": None, "kind": None,
+                                      "year": None}
+        data.update(series_title=series.get("title"), series_url=series["url"], series_genre=series.get("genre"))
+        lib.bdt_oneshot_set(album["id"], folder["id"], "ok", query=q, score=score, manual=manual, series=series,
+                            album=data)
+        return {"status": "ok", "query": q, "series": {"title": series.get("title"), "url": series["url"]},
+                "album_found": bool(alb)}
+
+    def run_oneshots(folder: dict, force: bool = False) -> None:
+        """Tous les albums pas encore cherchés d'un dossier de one shots (tâche de fond, avec le compteur du lot)."""
+        albums = [c for c in lib.children(folder["id"]) if c["kind"] == "album"]
+        done = lib.bdt_oneshots_for(folder["id"])
+        todo = [a for a in albums if force or a["id"] not in done]
+        bdt_job.update(folder_id=folder["id"], sub_done=0, sub_total=len(todo))
+        if not done and lib.bdt_series_get(folder["id"]):
+            lib.bdt_series_delete(folder["id"])   # ancien lien erroné : le dossier entier pris pour une seule série
+        for a in todo:
+            if bdt_job["stop"]:
+                break
+            bdt_job["current"] = f"{folder['name']} › {a['name']}"
+            try:
+                r = analyze_oneshot(folder, a)
+            except BdtError as e:
+                if "refuse" in str(e) or "vérification" in str(e):
+                    raise   # le site bloque : inutile d'insister, le lot s'arrête
+                bdt_job["errors"].append({"folder": a["name"], "error": str(e)})
+                bdt_job["sub_done"] += 1
+                continue
+            key = {"ok": "os_found", "ambiguous": "os_ambiguous", "not_found": "os_not_found"}.get(r["status"])
+            if key:
+                bdt_job[key] += 1
+            bdt_job["sub_done"] += 1
+
+    @app.route("/api/bdt/oneshot/<int:node_id>", methods=["POST"])
+    def api_bdt_oneshot(node_id: int):
+        """Un one shot : choisir parmi les propositions (url), chercher autrement (query) ou relancer."""
+        require_admin()
+        bdt_check_enabled()
+        album = get_node(node_id, "album")
+        folder = get_node(album["parent_id"], "folder")
+        body = request.get_json(force=True, silent=True) or {}
+        try:
+            return jsonify(analyze_oneshot(folder, album, url=(body.get("url") or "").strip() or None,
+                                           query=(body.get("query") or "").strip() or None))
+        except BdtError as e:
+            abort(502, description=str(e))
+
+    @app.route("/api/bdt/oneshot/<int:node_id>", methods=["DELETE"])
+    def api_bdt_oneshot_forget(node_id: int):
+        require_admin()
+        get_node(node_id, "album")
+        lib.bdt_oneshot_delete(node_id)
+        return jsonify(None)
+
+    @app.route("/api/bdt/mode/<int:folder_id>", methods=["POST"])
+    def api_bdt_mode(folder_id: int):
+        """Dossier de one shots ou série : choix à la main (null = automatique, d'après le nom du dossier)."""
+        require_admin()
+        folder = get_node(folder_id, "folder")
+        mode = (request.get_json(force=True, silent=True) or {}).get("mode")
+        if mode not in ("oneshots", "series", None):
+            abort(400, description="Mode inconnu")
+        before = folder_mode(folder)
+        lib.bdt_folder_mode_set(folder_id, mode)
+        after = folder_mode(folder)
+        if after != before:
+            if after == "oneshots":
+                lib.bdt_series_delete(folder_id)
+            else:
+                lib.bdt_oneshots_clear(folder_id)
+        return jsonify({"mode": after})
+
     @app.route("/api/bdt/status")
     def api_bdt_status():
         s = settings()
@@ -1566,6 +1702,11 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         bdt_check_enabled()
         folder = get_node(folder_id, "folder")
         body = request.get_json(force=True, silent=True) or {}
+        if folder_mode(folder) == "oneshots" and not body.get("url"):
+            if bdt_job["running"]:
+                return jsonify({"status": "busy", "message": "Une analyse est déjà en cours, attendez qu'elle finisse."})
+            start_batch([folder_id], force=bool(body.get("force")))
+            return jsonify({"status": "oneshots_started"})
         try:
             return jsonify(analyze_folder(folder, url=(body.get("url") or "").strip() or None,
                                           details=bool(body.get("details")), force=bool(body.get("force"))))
@@ -1670,11 +1811,32 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/bdt/collection")
     def api_bdt_collection():
-        rows = lib.bdt_series_all()
-        linked_ids = {r["folder_id"] for r in rows}
-        unlinked = [f for f in lib.folders_with_albums() if f["id"] not in linked_ids]
-        return jsonify({"series": rows, "unlinked": [{"id": f["id"], "name": f["name"], "albums": f["direct"]}
-                                                     for f in unlinked]})
+        rows, oneshots, unlinked = bdt_overview()
+        return jsonify({"series": rows, "oneshots": oneshots,
+                        "unlinked": [{"id": f["id"], "name": f["name"], "albums": f["direct"]} for f in unlinked]})
+
+    def bdt_overview() -> tuple[list[dict], list[dict], list[dict]]:
+        """Séries liées, dossiers de one shots (avec leurs comptes) et dossiers pas encore analysés."""
+        modes = lib.bdt_folder_modes()
+        counts = lib.bdt_oneshot_counts()
+        series_rows, oneshots, unlinked = [], [], []
+        linked = {}
+        for r in lib.bdt_series_all():
+            linked[r["folder_id"]] = r
+        for f in lib.folders_with_albums():
+            mode = modes.get(f["id"]) or ("oneshots" if is_oneshot_name(f["name"]) else "series")
+            if mode == "oneshots":
+                c = counts.get(f["id"], {"ok": 0, "ambiguous": 0, "not_found": 0})
+                done = c["ok"] + c["ambiguous"] + c["not_found"]
+                oneshots.append({"folder_id": f["id"], "folder_name": f["name"], "total": f["direct"], **c,
+                                 "todo": max(0, f["direct"] - done)})
+                if done < f["direct"]:
+                    unlinked.append(f)
+            elif f["id"] in linked:
+                series_rows.append(linked[f["id"]])
+            else:
+                unlinked.append(f)
+        return series_rows, oneshots, unlinked
 
     @app.route("/api/bdt/batch", methods=["GET"])
     def api_bdt_batch_status():
@@ -1695,11 +1857,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         body = request.get_json(force=True, silent=True) or {}
         ids = body.get("folder_ids")
         if not ids:
-            linked = {r["folder_id"] for r in lib.bdt_series_all()}
-            ids = [f["id"] for f in lib.folders_with_albums() if f["id"] not in linked]
-        ids = [int(i) for i in ids][:2000]
+            ids = [f["id"] for f in bdt_overview()[2]]
+        start_batch([int(i) for i in ids][:2000], details=bool(body.get("details")))
+        time.sleep(0.2)
+        return jsonify(bdt_job), 202
+
+    def start_batch(ids: list[int], details: bool = False, force: bool = False) -> None:
         bdt_job.update(running=True, done=0, total=len(ids), current=None, errors=[], stop=False, linked=0,
-                       ambiguous=0, not_found=0)
+                       ambiguous=0, not_found=0, folder_id=None, sub_done=0, sub_total=0, os_found=0,
+                       os_ambiguous=0, os_not_found=0)
 
         def job():
             bdt.mark_background(True)
@@ -1712,8 +1878,13 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                         bdt_job["done"] += 1
                         continue
                     bdt_job["current"] = folder["name"]
+                    bdt_job.update(folder_id=fid, sub_done=0, sub_total=0)
                     try:
-                        r = analyze_folder(folder, details=bool(body.get("details")))
+                        if folder_mode(folder) == "oneshots":
+                            run_oneshots(folder, force=force)
+                            bdt_job["done"] += 1
+                            continue
+                        r = analyze_folder(folder, details=details)
                         if r.get("status") == "ok":
                             bdt_job["linked"] += 1
                         elif r.get("status") == "ambiguous":
@@ -1731,10 +1902,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             finally:
                 bdt_job["running"] = False
                 bdt_job["current"] = None
+                bdt_job["folder_id"] = None
 
         threading.Thread(target=job, name="bulle-bdt", daemon=True).start()
-        time.sleep(0.2)
-        return jsonify(bdt_job), 202
 
     # ------------------------------------------------------------------ tâches de fond
     def preload_albums(todo: list[dict], label: str, force: bool = False) -> None:

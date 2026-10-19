@@ -82,6 +82,50 @@ def query_from_folder(name: str) -> str:
     return first or name
 
 
+ONESHOT_RE = re.compile(r"one[\s_.-]*shots?", re.I)
+
+
+def is_oneshot_name(name: str) -> bool:
+    """Dossier nommé comme un fourre-tout de one shots (« 0 - ONE SHOTS », « One-shot », « Oneshots »…)."""
+    return bool(ONESHOT_RE.search(name or ""))
+
+
+def query_from_album(name: str) -> str:
+    """Titre à chercher pour un one shot : « Blast (Manu Larcenet) » → « Blast », « 300 Grammes - Marie et Tollet » →
+    « 300 Grammes », « Le photographe (2010) » → « Le photographe ». Les articles entre parenthèses sont gardés."""
+    q = re.sub(r"\((?!\s*(?:l'|les|le|la|the|un|une|des)\s*\))[^()]*\)", " ", name, flags=re.I)
+    q = re.sub(r"\s+-\s*(?:19|20)\d\d\s*$", " ", q)                                   # « Mexicana - 2022 »
+    q = re.sub(r"\b(int[ée]grales?|one[- ]?shots?|[ée]dition luxe)\b", " ", q, flags=re.I)
+    q = re.sub(r"\s+", " ", q).strip(" -–,;")
+    first = re.split(r"\s*-\s+|\s+-\s*", q)[0].strip(" -–,;")                      # un titre en chiffres (« 1984 ») est gardé
+    return first or q or name
+
+
+def album_year(name: str) -> Optional[int]:
+    m = re.search(r"(?:\(|\s-\s*)((?:19|20)\d\d)\)?\s*$", name or "")
+    return int(m.group(1)) if m else None
+
+
+def pick_album(series: dict, name: str) -> Optional[dict]:
+    """L'album d'une série qui correspond à un fichier de one shot : le seul album, sinon par titre puis par année."""
+    albums = series.get("albums") or []
+    if len(albums) == 1:
+        return albums[0]
+    if not albums:
+        return None
+    q, year = query_from_album(name), album_year(name)
+    scored = sorted(((similarity(q, a.get("title") or ""), a) for a in albums), key=lambda x: -x[0])
+    good = [a for sc, a in scored if sc >= 0.86]
+    if good:
+        same_year = [a for a in good if year and a.get("year") == year]
+        return (same_year or good)[0]
+    if year:
+        same_year = [a for a in albums if a.get("year") == year]
+        if len(same_year) == 1:
+            return same_year[0]
+    return None
+
+
 NUM_PATTERNS = [
     re.compile(r"(?<![a-z0-9])(?:HS|INT|int[ée]grale|hors[- ]s[ée]rie)\s*0*(\d{1,3})(?![0-9])", re.I),  # HS2, Intégrale 3
     re.compile(r"(?<![a-z0-9])T(?:ome)?\s*0*(\d{1,3})(?![0-9])", re.I),          # T01, Tome 3
