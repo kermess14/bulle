@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.28.1)
+# Bulle — lecteur de BD maison (v0.28.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -147,6 +147,11 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   hiver : vrais flocons à six branches et neige fine), saison réglable à la main dans Réglages › Affichage, ou d'un clic sur le
   bouton de saison en haut (🌸 ☀️ 🍂 ❄️ : il montre la saison affichée et passe à la suivante).
   L'habillage Néon a été retiré (ceux qui l'avaient repassent en Bande dessinée).
+- One shots : auteurs, éditeur et résumé. Sur Bédéthèque, la page d'une série d'un seul album n'a pas la petite liste
+  des albums, seulement le bloc « Détail » : Bulle n'y trouvait donc aucun album et ne liait que la série (« album non
+  repéré », sans auteurs ni résumé). L'album est maintenant lu dans ce bloc (scénario, dessin, éditeur, année).
+  Pour les albums déjà liés, le bouton « Compléter N fiches » relit la page de la série, depuis la mémoire de Bulle
+  la plupart du temps (sans requête). Corrige aussi les séries d'un seul tome analysées comme série (0 / 0 tomes).
 - One shots, recherche album par album : « Chercher… » (sur un album à choisir, introuvable, ou « changer » sur un
   album trouvé) ouvre une vraie recherche sous l'album : titre modifiable, résultats de l'index et de la recherche du
   site réunis, tous les homonymes montrés ; on peut aussi coller l'adresse Bédéthèque de la **fiche de l'album**
