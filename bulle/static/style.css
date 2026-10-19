@@ -344,7 +344,7 @@ body:has(.letters.rail.left.size-normal) main { padding-left: 48px; }
 
 /* profils et code d'accès */
 .backdrop.locked { background: rgba(0, 0, 0, .85); }
-.sheet.pin, .sheet.profiles { display: block; }
+.sheet.pin, .sheet.profiles, .sheet.basket { display: block; }
 .sheet.pin input, .pin-inline input { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 0 12px; font: inherit; font-size: 16px; }
 .sheet.pin input { width: 100%; margin: 10px 0; }
 .sheet .error[hidden] { display: none; }
@@ -572,6 +572,7 @@ body.mode-panels #stage img.nofx { transition: none; }
 /* voile autour de la case (réglage « assombrir le reste de la planche ») : troué à la case, le trou suit l'image */
 #stage .dim { position: absolute; inset: 0; z-index: 2; pointer-events: none; background: rgba(0, 0, 0, var(--dim, 0)); transition: clip-path .55s cubic-bezier(.22, .75, .25, 1), opacity .25s; }
 #stage .dim.loose { opacity: 0; }
+@media (max-width: 560px) { .rbar .zbtn { display: none; } }   /* téléphone : le pincement suffit, la barre est étroite */
 /* masque de la couleur du fond choisi : seule la case en cours reste visible */
 body.reader.bg-dark #stage .dim { background: rgba(21, 23, 28, var(--dim, 0)); }
 body.reader.bg-gray #stage .dim { background: rgba(90, 94, 104, var(--dim, 0)); }
@@ -1501,3 +1502,31 @@ img.pavatar { object-fit: cover; padding: 0; }
 :root[data-phone="on"] body:has(.letters.rail.right) main, :root[data-phone="on"] body:has(.letters.rail.left) main { padding-left: 12px; padding-right: 12px; }
 :root[data-phone="on"] .listhead .btn[data-action="back"] { display: none; }
 :root[data-phone="on"] .crumbs:not(:has(.sep)):not(:has(.cur)) { display: none; }   /* « Accueil » seul : inutile sur téléphone */
+
+/* taille des pochettes (− / + au-dessus de la grille) */
+.gridtools { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 12.5px; color: var(--muted); }
+.gridtools button { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
+.gridtools button:hover:not(:disabled) { border-color: var(--accent); }
+.gridtools button:disabled { opacity: .35; cursor: default; }
+:root[data-phone="on"] .gridtools { display: none; }
+/* clic droit sur une carte */
+.ctxmenu { position: fixed; z-index: 60; min-width: 230px; max-width: 320px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; display: flex; flex-direction: column; animation: fade .12s; }
+.ctxmenu .ctxhead { padding: 6px 10px 8px; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.ctxmenu button { text-align: left; border: 0; background: none; color: var(--text); font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.ctxmenu button:hover { background: var(--card-2); }
+/* panier de téléchargements */
+.basketbtn { position: relative; }
+.basketbtn .cnt { position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 800; line-height: 17px; text-align: center; }
+.basketbtn.bump { animation: bump .45s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes bump { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 100% { transform: scale(1); } }
+.plusone { position: fixed; z-index: 70; pointer-events: none; font-weight: 900; font-size: 22px; color: var(--accent); text-shadow: 0 2px 8px rgba(0, 0, 0, .6); transform: translate(-50%, -50%); animation: plusone 1s ease-out forwards; }
+@keyframes plusone { 0% { opacity: 0; transform: translate(-50%, -30%) scale(.7); } 20% { opacity: 1; transform: translate(-50%, -60%) scale(1.15); } 100% { opacity: 0; transform: translate(-50%, -260%) scale(1); } }
+.sheet.basket { width: min(520px, 100%); }
+.sheet.basket .blist { list-style: none; margin: 10px 0; padding: 0; max-height: 50vh; overflow: auto; }
+.sheet.basket .blist li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.sheet.basket .blist li svg { width: 15px; height: 15px; vertical-align: -2px; color: var(--muted); }
+.sheet.basket .small { font-size: 12.5px; }
+/* pochette au survol d'une proposition Bédéthèque */
+.bdtpop { position: fixed; z-index: 65; pointer-events: none; padding: 6px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); min-width: 60px; min-height: 40px; display: flex; align-items: center; justify-content: center; font-size: 12.5px; }
+.bdtpop img { display: block; width: 150px; height: auto; border-radius: 4px; }
+.bdtpop .spinner { margin: 6px; width: 18px; height: 18px; }

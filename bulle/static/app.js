@@ -1018,7 +1018,9 @@
     page = Math.min(Math.max(1, page), pages);
     const slice = per ? list.slice((page - 1) * per, page * per) : list;
     view.page = page; view.pages = pages; view.list = list;
-    return `${pagerHtml(page, pages, list.length)}
+    const sizes = ["s", "m", "l", "xl"], si = sizes.indexOf(settings.profile.thumb_size || "m");
+    const tools = list.length ? `<div class="gridtools" title="Taille des pochettes"><button type="button" data-thumb="-" ${si <= 0 ? "disabled" : ""} aria-label="Pochettes plus petites">−</button><span>Pochettes</span><button type="button" data-thumb="+" ${si >= sizes.length - 1 ? "disabled" : ""} aria-label="Pochettes plus grandes">+</button></div>` : "";
+    return `${tools}${pagerHtml(page, pages, list.length)}
       ${list.length ? `<div class="grid" id="grid">${slice.map(c => card(c)).join("")}</div>` : `<div class="empty">${settings.profile.quality && settings.profile.quality !== "all" && view.children.length ? `Aucun album ${QUALITY_LABEL[settings.profile.quality]} ici (seuls les albums déjà mesurés sont classés). Filtre « Tout » dans le menu pour tout revoir.` : settings.profile.hide_read ? "Tout est lu ici (les albums lus sont masqués dans les réglages)." : "Dossier vide"}</div>`}
       ${pages > 1 ? pagerHtml(page, pages, list.length) : ""}`;
   }
@@ -1066,7 +1068,7 @@
     const osBtn = isAdmin() ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="oneshots" data-folder="${data.folder.id}" title="Ce dossier rassemble des albums sans rapport entre eux : chacun sera cherché comme sa propre série">Ce sont des one shots</button>` : "";
     if (!b) {
       return `<div class="bdt-panel" id="bdt-panel"><div class="bdt-row"><span class="bdt-logo">BD</span>
-        <span class="bdt-main">Comparer ce dossier avec <b>Bédéthèque</b> : tomes présents, manquants, auteurs.</span>
+        <div class="bdt-main"><span>Comparer ce dossier avec <b>Bédéthèque</b> : tomes présents, manquants, auteurs.</span></div>
         <div class="bdt-actions"><button class="btn" type="button" data-bdt="analyze" data-folder="${data.folder.id}">Analyser</button>${osBtn}</div></div>${extra || ""}</div>`;
     }
     const sr = b.series, pct = b.total ? Math.round((b.present / b.total) * 100) : 0;
@@ -2286,7 +2288,7 @@
       if (s.stopped) toast(s.stopped === "covers" ? `Couvertures arrêtées (${s.covers_done}/${s.covers_total}) : les autres se feront à l'ouverture des albums` : "Scan arrêté : la bibliothèque est restée comme avant");
       else if (s.aborted) toast(`${ICON.warn} Scan annulé par sécurité, rien n'a été effacé : ${esc(s.error)}.${isAdmin() ? ` <button class="btn mini" type="button" data-force-scan title="À faire seulement si vous avez vraiment supprimé ou déplacé ces albums">Scanner quand même</button>` : ""}`, { sticky: true });
       else if (s.error) toast(`${ICON.warn} Scan impossible : ${esc(s.error)}`);
-      else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.renamed ? `, ${s.renamed} renommés ou déplacés` : ""}${s.removed ? `, ${s.removed} disparus` : ""}`);
+      else toast(`Terminé : ${s.albums} albums${s.added ? `, ${s.added} nouveaux` : ""}${s.new_folders ? ` (${plural(s.new_folders, "nouvelle série", "nouvelles séries")})` : ""}${s.renamed ? `, ${s.renamed} renommés ou déplacés` : ""}${s.removed ? `, ${s.removed} disparus` : ""}`);
       if (!location.hash.startsWith("#/settings")) route();
       loadStats();
       setTimeout(() => pollQualityToast(), 1500);   // le scan enchaîne souvent sur la mesure HD / SD
@@ -2519,6 +2521,169 @@
   // ================================================================ routeur (#/, #/p2, #/f/<id>, #/f/<id>/p2, #/s/<q>, #/settings)
   const scrollMemory = new Map();
   let currentKey = null;
+  // ================================================================ taille des pochettes (− / + au-dessus de la grille)
+  document.addEventListener("click", e => {
+    const b = e.target.closest("[data-thumb]");
+    if (!b) return;
+    const sizes = ["s", "m", "l", "xl"];
+    const i = Math.max(0, Math.min(sizes.length - 1, sizes.indexOf(settings.profile.thumb_size || "m") + (b.dataset.thumb === "+" ? 1 : -1)));
+    if (sizes[i] === settings.profile.thumb_size) return;
+    const y = window.scrollY;
+    saveSettings({ thumb_size: sizes[i] }, null);
+    route().then(() => window.scrollTo(0, y));
+  });
+
+  // ================================================================ téléchargements : clic droit, panier, .zip
+  /* Clic droit sur une série ou un album : « Ajouter aux téléchargements » (+1 au compteur du panier) ou télécharger tout
+     de suite. Le panier est gardé dans ce navigateur ; « Tout télécharger » donne un seul .zip (une série = un dossier). */
+  const BASKET_KEY = "bulle:basket";
+  const basketGet = () => { try { return JSON.parse(localStorage.getItem(BASKET_KEY) || "[]"); } catch (_) { return []; } };
+  const basketSet = list => { try { localStorage.setItem(BASKET_KEY, JSON.stringify(list)); } catch (_) { /* ignore */ } updateBasketBtn(); };
+  const inBasket = (kind, id) => basketGet().some(x => x.kind === kind && x.id === id);
+  function updateBasketBtn(bump) {
+    const btn = $("#basket-btn"); if (!btn) return;
+    const n = basketGet().length;
+    btn.hidden = !n;
+    btn.querySelector(".cnt").textContent = n;
+    btn.title = `Téléchargements : ${plural(n, "élément", "éléments")} dans le panier`;
+    if (bump) { btn.classList.remove("bump"); void btn.offsetWidth; btn.classList.add("bump"); }
+  }
+  function plusOne(x, y, text) {
+    const el = document.createElement("div");
+    el.className = "plusone"; el.textContent = text;
+    el.style.left = x + "px"; el.style.top = y + "px";
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1000);
+  }
+  function basketAdd(item, x, y) {
+    const list = basketGet();
+    if (list.some(i => i.kind === item.kind && i.id === item.id)) { toast("Déjà dans les téléchargements"); return; }
+    list.push(item); basketSet(list);
+    updateBasketBtn(true);
+    if (x != null) plusOne(x, y, "+1");
+  }
+  const bundleUrl = list => `/api/download/bundle?f=${list.filter(i => i.kind === "folder").map(i => i.id).join(",")}&a=${list.filter(i => i.kind === "album").map(i => i.id).join(",")}`;
+  function startDownload(url) {
+    const a = document.createElement("a"); a.href = url; a.download = ""; document.body.appendChild(a); a.click(); a.remove();
+  }
+  let ctxEl = null;
+  function closeCtx() { if (ctxEl) { ctxEl.remove(); ctxEl = null; } }
+  main.addEventListener("contextmenu", e => {
+    const c = e.target.closest(".card.folder[data-id], .card.album[data-id]");
+    if (!c) return;
+    e.preventDefault();
+    closeCtx();
+    const kind = c.classList.contains("folder") ? "folder" : "album", id = +c.dataset.id;
+    const name = (c.querySelector(".title") || {}).textContent || "";
+    const has = inBasket(kind, id);
+    ctxEl = document.createElement("div");
+    ctxEl.className = "ctxmenu";
+    ctxEl.innerHTML = `<div class="ctxhead">${esc(name)}</div>
+      <button type="button" data-ctx="${has ? "remove" : "add"}">${has ? "Retirer des téléchargements" : "Ajouter aux téléchargements"}</button>
+      <button type="button" data-ctx="now">${kind === "folder" ? "Télécharger la série (.zip)" : "Télécharger l'album"}</button>
+      ${kind === "folder" ? `<button type="button" data-ctx="open">Ouvrir</button>` : `<button type="button" data-ctx="read">Lire</button>`}`;
+    document.body.appendChild(ctxEl);
+    const w = ctxEl.offsetWidth, h = ctxEl.offsetHeight;
+    ctxEl.style.left = Math.min(e.clientX, window.innerWidth - w - 8) + "px";
+    ctxEl.style.top = Math.min(e.clientY, window.innerHeight - h - 8) + "px";
+    ctxEl.addEventListener("click", ev => {
+      const b = ev.target.closest("[data-ctx]"); if (!b) return;
+      const act = b.dataset.ctx; closeCtx();
+      if (act === "add") basketAdd({ kind, id, name }, e.clientX, e.clientY);
+      else if (act === "remove") { basketSet(basketGet().filter(i => !(i.kind === kind && i.id === id))); toast("Retiré des téléchargements"); }
+      else if (act === "now") { startDownload(kind === "folder" ? `/api/download/folder/${id}` : `/api/download/${id}`); toast(kind === "folder" ? "Préparation du .zip de la série : le téléchargement démarre…" : "Téléchargement de l'album…"); }
+      else if (act === "open") location.hash = `#/f/${id}`;
+      else if (act === "read") location.href = `/read/${id}`;
+    });
+  });
+  document.addEventListener("click", e => { if (ctxEl && !e.target.closest(".ctxmenu")) closeCtx(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeCtx(); });
+  window.addEventListener("scroll", closeCtx, { passive: true });
+  async function openBasket() {
+    const list = basketGet();
+    modal.hidden = false;
+    modal.innerHTML = `<div class="backdrop"><div class="sheet basket" role="dialog" aria-modal="true">
+      <button class="iconbtn close" type="button" data-basket="close" title="Fermer">${ICON.close}</button>
+      <h3>Téléchargements</h3>
+      ${list.length ? `<ul class="blist">${list.map((i, k) => `<li><span>${i.kind === "folder" ? ICON.folder : ""} ${esc(i.name)}</span><button class="linkbtn" type="button" data-basket="del" data-k="${k}">retirer</button></li>`).join("")}</ul>
+        <p class="muted" id="basket-size">Calcul de la taille…</p>
+        <div class="actions"><button class="btn primary" type="button" data-basket="go">Tout télécharger (.zip)</button><button class="btn" type="button" data-basket="clear">Vider</button></div>
+        <p class="muted small">Un seul fichier .zip : chaque série dans son dossier, les fichiers tels quels (rien n'est recompressé ni modifié).</p>`
+        : `<p class="muted">Le panier est vide. Clic droit sur une série ou un album › « Ajouter aux téléchargements ».</p>`}
+    </div></div>`;
+    if (list.length) {
+      try {
+        const r = await api(bundleUrl(list).replace("/bundle", "/size"));
+        const el = $("#basket-size"); if (el) el.textContent = r.albums ? `${plural(r.albums, "album", "albums")} · ${fmtSize(r.bytes)}` : "Ces éléments ne sont plus dans la bibliothèque (renommés ou supprimés ?) : retirez-les.";
+        const go = modal.querySelector("[data-basket=go]"); if (go && !r.albums) go.disabled = true;
+      } catch (err) { const el = $("#basket-size"); if (el) el.textContent = err.message; }
+    }
+  }
+  document.addEventListener("click", e => {
+    if (e.target.closest("#basket-btn")) { openBasket(); return; }
+    const b = e.target.closest("[data-basket]");
+    if (!b) return;
+    const act = b.dataset.basket;
+    if (act === "close") closeModal();
+    else if (act === "del") { const l = basketGet(); l.splice(+b.dataset.k, 1); basketSet(l); openBasket(); }
+    else if (act === "clear") { basketSet([]); closeModal(); }
+    else if (act === "go") {
+      startDownload(bundleUrl(basketGet()));
+      modal.querySelector(".actions").innerHTML = `<span class="muted">Le téléchargement démarre (il peut mettre quelques secondes à apparaître).</span><button class="btn" type="button" data-basket="clear">Vider le panier</button>`;
+    }
+  });
+  modal.addEventListener("click", e => { if (e.target.classList.contains("backdrop") && modal.querySelector(".sheet.basket")) closeModal(); });
+  updateBasketBtn();
+
+  // ================================================================ pochette au survol des propositions Bédéthèque
+  let bdtPop = null, bdtPopTimer = null;
+  function hideBdtPop() { clearTimeout(bdtPopTimer); if (bdtPop) { bdtPop.remove(); bdtPop = null; } }
+  main.addEventListener("mouseover", e => {
+    const c = e.target.closest("[data-url][data-bdt$='pick']");
+    if (!c || !isAdmin() || (bdtPop && bdtPop.dataset.url === c.dataset.url)) return;
+    hideBdtPop();
+    bdtPopTimer = setTimeout(async () => {
+      bdtPop = document.createElement("div");
+      bdtPop.className = "bdtpop"; bdtPop.dataset.url = c.dataset.url;
+      bdtPop.innerHTML = `<div class="spinner"></div>`;
+      document.body.appendChild(bdtPop);
+      const place = () => {
+        if (!bdtPop) return;
+        const r = c.getBoundingClientRect(), w = bdtPop.offsetWidth, h = bdtPop.offsetHeight;
+        let x = r.left + r.width / 2 - w / 2, y = r.top - h - 8;
+        if (y < 8) y = r.bottom + 8;
+        bdtPop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x)) + "px";
+        bdtPop.style.top = Math.max(8, y) + "px";
+      };
+      place();
+      const url = c.dataset.url, still = () => bdtPop && bdtPop.dataset.url === url;
+      const show = (r, retry) => {   // miniature, sinon l'image en grand, sinon (nom deviné) la page de l'album est lue
+        if (!still()) return;
+        if (!r.thumb) { bdtPop.innerHTML = `<span class="muted">Pas de pochette</span>`; place(); return; }
+        bdtPop.innerHTML = `<img src="${esc(r.thumb)}" referrerpolicy="no-referrer" alt="">`;
+        const img = bdtPop.querySelector("img");
+        img.onload = place;
+        img.onerror = () => {
+          if (!still()) return;
+          if (r.image && img.getAttribute("src") !== r.image) { img.src = r.image; return; }
+          if (r.guess && retry) { bdtPop.innerHTML = `<div class="spinner"></div>`; place(); load(true); return; }
+          bdtPop.innerHTML = `<span class="muted">Pochette indisponible</span>`; place();
+        };
+        place();
+      };
+      const load = async page => {
+        try { show(await api(`/api/bdt/cover?url=${encodeURIComponent(url)}${page ? "&page=1" : ""}`), !page); }
+        catch (err) { if (still()) { bdtPop.innerHTML = `<span class="muted">${esc(err.message)}</span>`; place(); } }
+      };
+      load(false);
+    }, 400);
+  });
+  main.addEventListener("mouseout", e => {
+    const c = e.target.closest("[data-url][data-bdt$='pick']");
+    if (c && !(e.relatedTarget && c.contains(e.relatedTarget))) hideBdtPop();
+  });
+  window.addEventListener("hashchange", hideBdtPop);
+
   async function route() {
     if (currentKey !== null) scrollMemory.set(currentKey, window.scrollY);
     const h = location.hash || "#/";
