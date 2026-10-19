@@ -1033,17 +1033,20 @@
     html += lettersHtml(list);
     html += gridFor(id ? withGhosts(list, data.bdt) : list, page || 1);
     main.innerHTML = html;
+    if (data.bdt_oneshots && data.bdt_oneshots.running) pollOneshots(data.folder.id);
   }
 
   // ================================================================ Bédéthèque
   function bdtPanelHtml(data, extra) {
     const hasAlbums = data.children.some(c => c.kind === "album");
     if (!hasAlbums || data.bdt_enabled === false) return "";
+    if (data.bdt_oneshots) return oneshotsPanelHtml(data);
     const b = data.bdt;
+    const osBtn = isAdmin() ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="oneshots" data-folder="${data.folder.id}" title="Ce dossier rassemble des albums sans rapport entre eux : chacun sera cherché comme sa propre série">Ce sont des one shots</button>` : "";
     if (!b) {
       return `<div class="bdt-panel" id="bdt-panel"><div class="bdt-row"><span class="bdt-logo">BD</span>
-        <span>Comparer ce dossier avec <b>Bédéthèque</b> : tomes présents, manquants, auteurs.</span>
-        <button class="btn" type="button" data-bdt="analyze" data-folder="${data.folder.id}">Analyser</button></div>${extra || ""}</div>`;
+        <span class="bdt-main">Comparer ce dossier avec <b>Bédéthèque</b> : tomes présents, manquants, auteurs.</span>
+        <div class="bdt-actions"><button class="btn" type="button" data-bdt="analyze" data-folder="${data.folder.id}">Analyser</button>${osBtn}</div></div>${extra || ""}</div>`;
     }
     const sr = b.series, pct = b.total ? Math.round((b.present / b.total) * 100) : 0;
     const full = b.total && b.present >= b.total;
@@ -1065,8 +1068,55 @@
           <button class="btn" type="button" data-bdt="summaries" data-folder="${data.folder.id}" title="Lire le début du résumé de chaque album (une page Bédéthèque par album, en tâche de fond)">Résumés</button>
           <button class="btn" type="button" data-bdt="change" data-folder="${data.folder.id}">Changer de série</button>
           <button class="btn" type="button" data-bdt="forget" data-folder="${data.folder.id}">Oublier</button>
+          ${osBtn}
         </div>
       </div>${extra || ""}</div>`;
+  }
+
+  /* Dossier de one shots : chaque album est sa propre série sur Bédéthèque. */
+  function oneshotsPanelHtml(data) {
+    const o = data.bdt_oneshots, c = o.counts, fid = data.folder.id;
+    const done = c.ok + c.ambiguous + c.not_found, pct = c.total ? Math.round(done / c.total * 100) : 0;
+    const amb = o.albums.filter(a => a.status === "ambiguous"), nf = o.albums.filter(a => a.status === "not_found"), ok = o.albums.filter(a => a.status === "ok");
+    const admin = isAdmin();
+    const other = a => admin ? `<button class="btn mini" type="button" data-bdt="os-query" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Chercher sous un autre titre">Chercher…</button>` : "";
+    const ambHtml = amb.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}</div>
+        <div class="os-cands">${a.candidates.map(cd => `<button type="button" class="chip gray" ${admin ? `data-bdt="os-pick" data-album="${a.id}" data-url="${esc(cd.url)}"` : "disabled"} title="Choisir cette série">${esc(cd.name)}</button>`).join("")}${other(a)}</div></div>`).join("");
+    const nfHtml = nf.map(a => `<span class="os-nf"><span class="chip gray">${esc(a.name)}</span>${other(a)}</span>`).join("");
+    const okHtml = ok.map(a => `<li><span>${esc(a.name)}</span> → <a class="ext" href="${esc(a.series_url)}" target="_blank" rel="noopener">${esc(a.series_title || "")}</a>${a.manual ? "" : a.score != null && a.score < 0.95 ? ` <span class="warnlabel">à vérifier</span>` : ""}${admin ? ` <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Oublier ce lien (l'album sera recherché de nouveau)">oublier</button>` : ""}</li>`).join("");
+    return `<div class="bdt-panel oneshots ${c.total && c.ok === c.total ? "full" : ""}" id="bdt-panel" data-folder="${fid}">
+      <div class="bdt-row">
+        <span class="bdt-logo">BD</span>
+        <div class="bdt-main">
+          <div><b>One shots</b> · chaque album est cherché sur Bédéthèque comme sa propre série</div>
+          <div class="bdt-progress"><span>${plural(c.ok, "trouvé", "trouvés")} · ${c.ambiguous} à choisir · ${plural(c.not_found, "introuvable", "introuvables")}${c.todo ? ` · <b>${c.todo} pas encore cherchés</b>` : ""}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
+          <div id="os-job" class="muted">${o.running ? `<div class="spinner" style="margin:0;display:inline-block;vertical-align:middle;width:14px;height:14px"></div> Recherche en cours…` : ""}</div>
+        </div>
+        <div class="bdt-actions">
+          ${!admin ? "" : o.running ? `<button class="btn" type="button" data-bdt="os-stop" data-folder="${fid}">Arrêter</button>`
+            : c.todo ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Une requête Bédéthèque par album trouvé, au rythme prudent habituel, en tâche de fond">Chercher les ${c.todo} albums</button>` : ""}
+          ${c.ok ? `<button class="btn" type="button" data-bdt="summaries" data-folder="${fid}" title="Lire le début du résumé de chaque album trouvé (une page Bédéthèque par album, en tâche de fond)">Résumés</button>` : ""}
+          ${admin && !o.running ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="series" data-folder="${fid}" title="Traiter ce dossier comme une seule série">C'est une série</button>` : ""}
+        </div>
+      </div>
+      ${amb.length ? `<details class="os-sec" open><summary>${plural(amb.length, "album à choisir", "albums à choisir")} : plusieurs séries possibles</summary>${ambHtml}</details>` : ""}
+      ${nf.length ? `<details class="os-sec"${amb.length ? "" : " open"}><summary>${plural(nf.length, "album introuvable", "albums introuvables")} sous ce titre</summary><div class="os-nfs">${nfHtml}</div></details>` : ""}
+      ${ok.length ? `<details class="os-sec"><summary>${plural(ok.length, "album trouvé", "albums trouvés")}</summary><ul class="os-ok">${okHtml}</ul></details>` : ""}
+    </div>`;
+  }
+  let osTimer = null;
+  async function pollOneshots(fid) {
+    clearTimeout(osTimer);
+    let job;
+    try { job = await api("/api/bdt/batch"); } catch (_) { return; }
+    const el = $("#os-job"), panel = $("#bdt-panel");
+    if (!panel || +panel.dataset.folder !== fid) return;
+    if (job.running && job.folder_id === fid) {
+      if (el) el.innerHTML = `<div class="spinner" style="margin:0;display:inline-block;vertical-align:middle;width:14px;height:14px"></div> ${job.sub_done} / ${job.sub_total} — <i>${esc((job.current || "").split(" › ").pop())}</i> · ${job.os_found} trouvés, ${job.os_ambiguous} à choisir, ${job.os_not_found} introuvables`;
+      osTimer = setTimeout(() => pollOneshots(fid), 2500);
+    } else if (el && el.textContent.trim()) {
+      route();   // fini : on recharge la page (comptes, listes, fiches des albums)
+    }
   }
 
   function bdtChooserHtml(folderId, report) {
@@ -1095,9 +1145,32 @@
         const r = await api(`/api/bdt/analyze/${folderId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         if (r.status === "ok") { toast(`Bédéthèque : ${esc(r.series.title)} — ${r.present}/${r.total} tomes`); route(); return; }
         if (r.status === "no_albums") { toast(esc(r.message)); route(); return; }
+        if (r.status === "oneshots_started") { toast("Recherche des one shots lancée en tâche de fond"); await route(); pollOneshots(folderId); return; }
+        if (r.status === "busy") { toast(esc(r.message)); route(); return; }
         const data = { folder: { id: folderId }, children: [{ kind: "album" }], bdt: null, bdt_enabled: true };
         if (panel) { panel.outerHTML = bdtPanelHtml(data, bdtChooserHtml(folderId, r)); }
         return;
+      }
+      if (action === "os-mode") {
+        if (el.dataset.mode === "series" && !confirm("Traiter ce dossier comme une seule série ? Les liens trouvés pour chaque album seront oubliés.")) return;
+        await api(`/api/bdt/mode/${folderId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: el.dataset.mode }) });
+        toast(el.dataset.mode === "oneshots" ? "Dossier de one shots : chaque album sera cherché à part" : "Dossier traité comme une série");
+        route(); return;
+      }
+      if (action === "os-stop") { await api("/api/bdt/batch", { method: "DELETE" }); toast("Arrêt demandé (après l'album en cours)"); return; }
+      if (action === "os-forget") { await api(`/api/bdt/oneshot/${el.dataset.album}`, { method: "DELETE" }); route(); return; }
+      if (action === "os-pick" || action === "os-query") {
+        const body = {};
+        if (action === "os-pick") body.url = el.dataset.url;
+        else {
+          const q = prompt("Titre à chercher sur Bédéthèque :", el.dataset.q || "");
+          if (!q || q.trim().length < 2) return;
+          body.query = q.trim();
+        }
+        el.disabled = true;
+        const r = await api(`/api/bdt/oneshot/${el.dataset.album}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        toast(r.status === "ok" ? `Trouvé : ${esc(r.series.title)}` : r.status === "ambiguous" ? "Plusieurs séries possibles : choisissez dans la liste" : `Rien trouvé pour « ${esc(r.query)} »`);
+        route(); return;
       }
       if (action === "summaries") {
         const r = await fetch(`/api/bdt/summaries/${folderId}`, { method: "POST" });
@@ -1176,7 +1249,7 @@
     const job = st.job;
     const tab = (key, label) => `<a class="tab ${filter === key ? "on" : ""}" href="#/collection/${key}">${label}</a>`;
     main.innerHTML = `<h1>Collection <small class="muted h1sub">${plural(totals.series, "série liée à Bédéthèque", "séries liées à Bédéthèque")} · ${totals.full} complètes · ${plural(totals.missing, "tome manquant", "tomes manquants")}</small></h1>
-      <div class="bdt-panel" id="batch-panel">${batchHtml(job, col.unlinked.length, st)}</div>
+      <div class="bdt-panel" id="batch-panel">${batchHtml(job, col, st)}</div>
       <div class="tabs">${tab("all", "Toutes")}${tab("incomplete", "Incomplètes")}${tab("complete", "Complètes")}${tab("ongoing", "En cours de parution")}</div>
       ${shown.length ? `<table class="coltable"><thead><tr><th>Dossier</th><th>Série Bédéthèque</th><th>Statut</th><th>Tomes</th><th></th></tr></thead><tbody>
         ${shown.map(r => `<tr><td><a href="#/f/${r.folder_id}">${esc(r.folder_name)}</a></td><td><a class="ext" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "")}</a>${r.score != null && r.score < 0.9 && !r.manual ? ` <span class="warnlabel">à vérifier</span>` : ""}</td>
@@ -1184,19 +1257,26 @@
           <td class="num ${r.full ? "ok" : ""}">${r.present ?? "?"} / ${r.total ?? "?"}<div class="pbar"><i style="width:${r.pct}%"></i></div></td>
           <td>${r.full ? "✓" : plural(Math.max(0, (r.total || 0) - (r.present || 0)), "manquant", "manquants")}</td></tr>`).join("")}
       </tbody></table>` : `<div class="empty">${rows.length ? "Rien dans cette catégorie." : "Aucune série analysée pour l'instant. Ouvrez un dossier d'albums et cliquez « Analyser », ou lancez l'analyse de tous les dossiers ci-dessus."}</div>`}
+      ${(col.oneshots || []).length ? `<h2>One shots <small class="muted">chaque album est une série à part</small></h2><table class="coltable"><thead><tr><th>Dossier</th><th>Trouvés</th><th>À choisir</th><th>Introuvables</th><th>Pas encore cherchés</th></tr></thead><tbody>
+        ${col.oneshots.map(o => `<tr><td><a href="#/f/${o.folder_id}">${esc(o.folder_name)}</a></td><td class="num ${o.ok === o.total ? "ok" : ""}">${o.ok} / ${o.total}<div class="pbar"><i style="width:${o.total ? Math.round(o.ok / o.total * 100) : 0}%"></i></div></td><td class="num">${o.ambiguous || ""}</td><td class="num">${o.not_found || ""}</td><td class="num">${o.todo || ""}</td></tr>`).join("")}
+      </tbody></table>` : ""}
       ${col.unlinked.length ? `<details class="unlinked"><summary>${plural(col.unlinked.length, "dossier pas encore analysé", "dossiers pas encore analysés")}</summary><div class="chips">${col.unlinked.slice(0, 400).map(u => `<a class="chip gray" href="#/f/${u.id}">${esc(u.name)} <small>${u.albums}</small></a>`).join(" ")}</div></details>` : ""}`;
     if (job.running) pollBatch();
   }
-  function batchHtml(job, unlinkedCount, st) {
+  function batchHtml(job, col, st) {
+    const unlinkedCount = col.unlinked.length;
+    const osTodo = (col.oneshots || []).reduce((n, o) => n + (o.todo || 0), 0);
+    const osFolders = new Set((col.oneshots || []).filter(o => o.todo).map(o => o.folder_id));
+    const requests = col.unlinked.filter(u => !osFolders.has(u.id)).length + osTodo;
     if (!st.enabled) return `<div class="bdt-row"><span class="bdt-logo">BD</span><span>Les requêtes vers Bédéthèque sont désactivées dans les <a href="#/settings">réglages</a>.</span></div>`;
     if (job.running) {
-      return `<div class="bdt-row"><div class="spinner" style="margin:0"></div><div class="bdt-main">Analyse en cours : ${job.done} / ${job.total}${job.current ? ` — <i>${esc(job.current)}</i>` : ""}
+      return `<div class="bdt-row"><div class="spinner" style="margin:0"></div><div class="bdt-main">Analyse en cours : ${job.done} / ${job.total}${job.current ? ` — <i>${esc(job.current)}</i>` : ""}${job.sub_total ? ` <small class="muted">(one shot ${job.sub_done} / ${job.sub_total})</small>` : ""}
         <div class="pbar"><i style="width:${job.total ? Math.round(job.done / job.total * 100) : 0}%"></i></div>
-        <small class="muted">${job.linked} liées · ${job.ambiguous} à choisir · ${job.not_found} introuvables · ${job.errors.length} erreurs</small></div>
+        <small class="muted">${job.linked} liées · ${job.ambiguous} à choisir · ${job.not_found} introuvables${job.os_found + job.os_ambiguous + job.os_not_found ? ` · one shots : ${job.os_found} trouvés, ${job.os_ambiguous} à choisir, ${job.os_not_found} introuvables` : ""} · ${job.errors.length} erreurs</small></div>
         <button class="btn" type="button" data-batch="stop">Arrêter</button></div>`;
     }
     const last = job.total ? `<small class="muted">Dernière analyse groupée : ${job.done}/${job.total} dossiers — ${job.linked} liées, ${job.ambiguous} à choisir à la main, ${job.not_found} introuvables${job.errors.length ? `, ${job.errors.length} erreurs (${esc(job.errors[0].error)})` : ""}.</small>` : "";
-    return `<div class="bdt-row"><span class="bdt-logo">BD</span><div class="bdt-main">${unlinkedCount ? `${plural(unlinkedCount, "dossier d'albums n'est pas encore comparé", "dossiers d'albums ne sont pas encore comparés")} à Bédéthèque. L'analyse groupée fait une requête toutes les ${st.interval} s (environ ${Math.ceil(unlinkedCount * st.interval * 2 / 60)} min) et s'arrête quand vous voulez.` : "Tous les dossiers d'albums ont été comparés à Bédéthèque."}${last ? "<br>" + last : ""}</div>
+    return `<div class="bdt-row"><span class="bdt-logo">BD</span><div class="bdt-main">${unlinkedCount ? `${plural(unlinkedCount, "dossier d'albums n'est pas encore comparé", "dossiers d'albums ne sont pas encore comparés")} à Bédéthèque. ${osTodo ? ` Dont ${plural(osTodo, "one shot", "one shots")} à chercher un par un.` : ""} L'analyse groupée fait environ une requête par série, une toutes les ${st.interval} s (environ ${Math.max(1, Math.ceil(requests * st.interval * 1.15 / 60))} min, pauses comprises) et s'arrête quand vous voulez.` : "Tous les dossiers d'albums ont été comparés à Bédéthèque."}${last ? "<br>" + last : ""}</div>
       ${unlinkedCount ? `<button class="btn primary" type="button" data-batch="start">Analyser les ${unlinkedCount} dossiers</button>` : ""}</div>`;
   }
   async function pollBatch() {
@@ -1204,7 +1284,7 @@
     try {
       const [job, st, col] = await Promise.all([api("/api/bdt/batch"), api("/api/bdt/status"), api("/api/bdt/collection")]);
       const p = $("#batch-panel");
-      if (p) p.innerHTML = batchHtml(job, col.unlinked.length, st);
+      if (p) p.innerHTML = batchHtml(job, col, st);
       if (job.running) batchTimer = setTimeout(pollBatch, 2000);
       else if (location.hash.startsWith("#/collection")) route();
     } catch (_) { /* ignore */ }
@@ -1609,7 +1689,7 @@
           <dt>Progression</dt><dd>${p ? (p.completed ? "Lu ✓" : `Page ${p.page + 1} sur ${it.pages ?? "?"} — ${pct} %`) : "Non lu"}
             ${p && !p.completed && it.pages ? `<div class="pbar"><i style="width:${pct}%"></i></div>` : ""}</dd>
           <dt>Fichier</dt><dd class="path">${esc(it.path.split("/").pop())}</dd>
-          ${it.meta ? `<dt>Bédéthèque</dt><dd>${it.meta.number != null ? `<b>Tome ${it.meta.number}</b> · ` : ""}${esc(it.meta.title || "")}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">↗</a></dd>` : (it.series ? `<dt>Bédéthèque</dt><dd class="muted">tome non reconnu dans « ${esc(it.series.title)} »</dd>` : "")}
+          ${it.meta && it.meta.oneshot ? `<dt>Bédéthèque</dt><dd>${it.meta.url ? "" : `<span class="muted">album non repéré dans la série</span> `}<b>${esc(it.meta.series_title || it.meta.title || "")}</b>${it.meta.genre ? ` · ${esc(it.meta.genre)}` : ""}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url || it.meta.series_url)}" target="_blank" rel="noopener">↗</a></dd>` : it.meta ? `<dt>Bédéthèque</dt><dd>${it.meta.number != null ? `<b>Tome ${it.meta.number}</b> · ` : ""}${esc(it.meta.title || "")}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">↗</a></dd>` : (it.series ? `<dt>Bédéthèque</dt><dd class="muted">tome non reconnu dans « ${esc(it.series.title)} »</dd>` : "")}
           ${it.meta && it.meta.writers.length ? `<dt>Scénario</dt><dd>${esc(it.meta.writers.join(", "))}</dd>` : ""}
           ${it.meta && it.meta.pencillers.length ? `<dt>Dessin</dt><dd>${esc(it.meta.pencillers.join(", "))}</dd>` : ""}
           ${it.meta && it.meta.colorists.length ? `<dt>Couleurs</dt><dd>${esc(it.meta.colorists.join(", "))}</dd>` : ""}
