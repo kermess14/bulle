@@ -19,7 +19,7 @@
     reader_fit: "page", reader_manga: false, reader_bg: "black", reader_preload: 3, reader_quality: "normal",
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
-    reader_trim: false,
+    reader_trim: false, reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 0,
   };
   const prefs = Object.assign({}, DEFAULTS);
   function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
@@ -34,6 +34,7 @@
     body.classList.add("bg-" + (prefs.reader_bg || "black"));
     body.style.setProperty("--night", String((+prefs.reader_night || 0) / 100));
     body.classList.toggle("night", (+prefs.reader_night || 0) > 0);
+    body.style.setProperty("--dim", String(Math.max(0, Math.min(90, +prefs.reader_panels_dim || 0)) / 100));
     body.style.setProperty("--scroll-w", String(Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100))) + "%");
   }
   function loadAlbumMemory() {
@@ -218,7 +219,7 @@
       const data = await Promise.race([panelsP, new Promise(res => setTimeout(() => res(null), 350))]);
       if (token !== loadToken) return;
       single.hidden = false; spread.hidden = true;
-      img.classList.add("nofx");
+      fxOff(true);
       pendingSwap = null; endMove();
       if (a) { img.src = a.src; img.style.backgroundColor = tintOf(a, n); } else { img.removeAttribute("src"); img.style.transform = ""; reportError(n); }
       resetZoom(false);
@@ -226,12 +227,12 @@
       current = n; shown = list;
       fitImages();
       stage.scrollTop = 0; stage.scrollLeft = 0;
-      const count = data ? data.panels.length : 0;
+      const count = data ? viewsOf(data, n).length : 0;
       panelIdx = panel === "keep" ? Math.min(panelIdx, count - 1) : panel === "last" ? count - 1 : (prefs.reader_panels_full_first || !count ? -1 : 0);
       applyPanel(false);
       if (!data) panelsP.then(d => {        // cases arrivées après coup : on glisse sur la bonne case
         if (token !== loadToken || current !== n) return;
-        const c2 = d.panels.length;
+        const c2 = viewsOf(d, n).length;
         if (c2 && panelIdx < 0 && !prefs.reader_panels_full_first) { panelIdx = panel === "last" ? c2 - 1 : 0; applyPanel(true); }
         updateCounter();
         drainStep();
@@ -269,7 +270,8 @@
     let extra = "";
     if (mode === "panels") {
       const d = panelsCache.get(current);
-      if (d && d.panels instanceof Array && d.panels.length) extra = panelIdx < 0 ? ` · ${d.panels.length} cases` : ` · case ${panelIdx + 1}/${d.panels.length}`;
+      const v = d && d.panels instanceof Array && d.panels.length ? viewsOf(d)[panelIdx] : null;
+      if (d && d.panels instanceof Array && d.panels.length) extra = !v ? ` · ${d.panels.length} cases` : ` · case ${v.p + 1}/${d.panels.length}` + (v.parts > 1 ? ` (${v.part + 1}/${v.parts})` : "");
     }
     countEl.textContent = `${label} / ${pages}${extra}`;
     slider.value = current + 1;
@@ -284,9 +286,41 @@
     panelsCache.set(n, d);
     return d;
   }
-  function panelRect(d, i) {
-    const order = manga && d.rtl && d.rtl.length === d.panels.length ? d.rtl : null;
-    return d.panels[order ? order[i] : i];
+  const padOf = () => Math.max(0, Math.min(15, +prefs.reader_panels_margin || 0)) / 100;
+  /* Les « vues » d'une planche : une par case, dans l'ordre de lecture. Une case large (bandeau sur toute la
+     largeur) ne peut pas être agrandie sur un écran étroit : réduite pour tenir en largeur, elle reste petite.
+     Si l'option est active, elle est alors lue en deux ou trois temps (gauche → droite, l'inverse en manga),
+     chaque partie grossie comme une case normale. Calcul refait si l'écran, le sens ou les réglages changent. */
+  function viewsOf(d, n = current) {
+    if (!d || !(d.panels instanceof Array)) return [];
+    const vw = stage.clientWidth, vh = stage.clientHeight, asp = aspects[n] || 0.7, pad = padOf();
+    const key = `${vw}x${vh}|${asp.toFixed(3)}|${manga}|${prefs.reader_panels_wide}|${pad}`;
+    if (d._vkey === key) return d._views;
+    const ih = Math.min(vh, vw / asp), iw = ih * asp;
+    const order = manga && d.rtl && d.rtl.length === d.panels.length ? d.rtl : d.panels.map((_, i) => i);
+    const out = [];
+    order.forEach((pi, i) => {
+      const r = d.panels[pi];
+      const pw = Math.max(1, (r[2] - r[0]) * iw), ph = Math.max(1, (r[3] - r[1]) * ih);
+      const sw = vw * (1 - 2 * pad) / pw, sh = vh * (1 - 2 * pad) / ph, s = Math.max(1, Math.min(5, sw, sh));
+      let k = 1;
+      // bandeau : limité par la largeur, encore petit à l'écran (moins de 300 px de haut, soit un tiers d'un
+      // écran de téléphone) et nettement plus grand si on le coupait → le moins de parties possible (3 au plus)
+      const SMALL = 300;
+      if (prefs.reader_panels_wide !== "fit" && sw < sh && ph * s < SMALL && sh / sw >= 1.4) {
+        k = 2;
+        while (k < 3 && Math.min(k * sw, sh) * ph < SMALL) k++;
+      }
+      if (k === 1) { out.push({ r, p: i, part: 0, parts: 1 }); return; }
+      const ov = 0.05, w = r[2] - r[0];
+      for (let j = 0; j < k; j++) {
+        const part = manga ? k - 1 - j : j;
+        const x0 = r[0] + w * Math.max(0, part / k - ov), x1 = r[0] + w * Math.min(1, (part + 1) / k + ov);
+        out.push({ r: [x0, r[1], x1, r[3]], p: i, part: j, parts: k });   // numéroté dans l'ordre de lecture
+      }
+    });
+    d._vkey = key; d._views = out;
+    return out;
   }
   /* Cadre la case courante : l'image reste mise en page « page entière », on la déplace et on l'agrandit (transition CSS). */
   // Pendant qu'une case glisse vers la suivante (animation de la transformation), on ne change JAMAIS l'image
@@ -318,18 +352,31 @@
     tints.set(n, c);
     return c;
   }
+  // Reste de la planche assombri autour de la case (réglage) : un voile sur toute la scène, troué à la case ;
+  // le trou suit la case avec la même animation que l'image (clip-path, dessiné par la carte graphique).
+  const dimEl = $("#dim");
+  function placeDim(x0, y0, w, h) {
+    if (!(+prefs.reader_panels_dim > 0)) { dimEl.hidden = true; return; }
+    const f = v => v.toFixed(1) + "px";
+    dimEl.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, ${f(x0)} ${f(y0)}, ${f(x0 + w)} ${f(y0)}, ${f(x0 + w)} ${f(y0 + h)}, ${f(x0)} ${f(y0 + h)})`;
+    dimEl.hidden = false;
+  }
+  const fxOff = on => { img.classList.toggle("nofx", on); dimEl.classList.toggle("nofx", on); };
   function applyPanel(animate = true) {
     const d = panelsCache.get(current);
     zoomBounds = null;
-    img.classList.toggle("nofx", !animate);
+    fxOff(!animate);
     panelBox = null;
-    if (!d || !(d.panels instanceof Array) || panelIdx < 0 || !d.panels.length || !img.naturalWidth) {
+    const views = viewsOf(d);
+    if (panelIdx >= views.length) panelIdx = views.length - 1;
+    if (!views.length || panelIdx < 0 || !img.naturalWidth) {
       if (animate && img.style.transform) startMove();
       img.style.transform = "";
-      if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
+      dimEl.hidden = true;
+      if (!animate) requestAnimationFrame(() => fxOff(false));
       return;
     }
-    const r = panelRect(d, panelIdx);
+    const r = views[panelIdx].r;
     const sr = stage.getBoundingClientRect(), ir = img.getBoundingClientRect();
     // position de l'image sans transformation : on retire la transformation courante
     const cur = img.style.transform ? new DOMMatrix(getComputedStyle(img).transform) : null;
@@ -337,18 +384,18 @@
     const ix = (ir.left - sr.left) - (cur ? cur.e : 0), iy = (ir.top - sr.top) - (cur ? cur.f : 0);
     const iw = ir.width / scale0, ih = ir.height / scale0;
     const px = r[0] * iw, py = r[1] * ih, pw = Math.max(1, (r[2] - r[0]) * iw), ph = Math.max(1, (r[3] - r[1]) * ih);
-    const vw = sr.width, vh = sr.height, pad = 0.03;
+    const vw = sr.width, vh = sr.height, pad = padOf();
     let s = Math.min(vw * (1 - 2 * pad) / pw, vh * (1 - 2 * pad) / ph);
     s = Math.max(1, Math.min(5, s));
     const tx = vw / 2 - ix - s * (px + pw / 2), ty = vh / 2 - iy - s * (py + ph / 2);
     // recadrage à la main (glisser) : l'écart est oublié dès qu'on change de case ou de planche
     if (panelOff.page !== current || panelOff.idx !== panelIdx) Object.assign(panelOff, { x: 0, y: 0, page: current, idx: panelIdx });
-    panelFrame = { tx, ty, s, ix, iy, iw, ih, vw, vh };
+    panelFrame = { tx, ty, s, ix, iy, iw, ih, vw, vh, px, py, pw, ph };
     panelScale = s;
     const before = img.style.transform;
     placePanel();
     if (animate && img.style.transform !== before) startMove();
-    if (!animate) requestAnimationFrame(() => img.classList.remove("nofx"));
+    if (!animate) requestAnimationFrame(() => fxOff(false));
     scheduleRefine();   // une fois cadrée, la case est rechargée plus nette si besoin
   }
   let panelScale = 1, panelBox = null, pendingStep = 0;
@@ -368,9 +415,10 @@
   function placePanel() {
     if (!panelFrame) return;
     clampPanelOff();
-    const { tx, ty, s, ix, iy, iw, ih } = panelFrame;
+    const { tx, ty, s, ix, iy, iw, ih, px, py, pw, ph } = panelFrame;
     const fx = tx + panelOff.x, fy = ty + panelOff.y;
     img.style.transform = `translate(${fx.toFixed(1)}px, ${fy.toFixed(1)}px) scale(${s.toFixed(4)})`;
+    placeDim(ix + fx + s * px, iy + fy + s * py, s * pw, s * ph);
     panelBox = { x0: ix + fx, y0: iy + fy, x1: ix + fx + iw * s, y1: iy + fy + ih * s };   // position finale (après l'animation)
     zoomBounds = null;
   }
@@ -379,7 +427,7 @@
   function panelDragMove(x, y) {
     if (!panelDrag) return;
     const dx = x - panelDrag.x, dy = y - panelDrag.y;
-    if (!panelDrag.moved && Math.abs(dx) + Math.abs(dy) > 6) { panelDrag.moved = true; img.classList.add("nofx"); }
+    if (!panelDrag.moved && Math.abs(dx) + Math.abs(dy) > 6) { panelDrag.moved = true; fxOff(true); }
     if (!panelDrag.moved) return;
     panelOff.x = panelDrag.ox + dx; panelOff.y = panelDrag.oy + dy;
     placePanel();
@@ -387,7 +435,7 @@
   function panelDragEnd() {
     const moved = !!(panelDrag && panelDrag.moved);
     panelDrag = null;
-    if (moved) { dragMoved = true; requestAnimationFrame(() => img.classList.remove("nofx")); }
+    if (moved) { dragMoved = true; requestAnimationFrame(() => fxOff(false)); }
     return moved;
   }
   // Dépile un pas gardé pendant un chargement (appuis répétés) : un à la fois, dans l'ordre.
@@ -400,7 +448,7 @@
   async function panelStep(dir) {
     const d = panelsCache.get(current);
     if (d && typeof d.then === "function") { queueStep(dir); return; }   // cases pas encore connues : pas gardé
-    const count = d && d.panels instanceof Array ? d.panels.length : 0;
+    const count = d && d.panels instanceof Array ? viewsOf(d).length : 0;
     if (dir > 0) {
       if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); drainStep(); return; }
       go(current + 1);
@@ -569,7 +617,7 @@
     MODES.forEach(m => body.classList.toggle("mode-" + m, m === mode));
     modeBtn.textContent = MODE_LABEL[mode];
     single.hidden = mode !== "single" && mode !== "panels"; spread.hidden = mode !== "double"; scrollEl.hidden = mode !== "scroll";
-    if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; pendingStep = 0; }
+    if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; pendingStep = 0; dimEl.hidden = true; }
     if (mode === "scroll") buildScroll();
     applyFit();
   }

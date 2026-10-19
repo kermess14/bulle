@@ -555,6 +555,10 @@ body.mode-scroll #stage .wrap, body.mode-double #stage .wrap { display: none; }
 body.mode-panels #stage { overflow: hidden; }
 body.mode-panels #stage img { transform-origin: 0 0; will-change: transform; transition: transform .55s cubic-bezier(.22, .75, .25, 1); }
 body.mode-panels #stage img.nofx { transition: none; }
+/* voile autour de la case (réglage « assombrir le reste de la planche ») : troué à la case, le trou suit l'image */
+#stage .dim { position: absolute; inset: 0; z-index: 2; pointer-events: none; background: rgba(0, 0, 0, var(--dim, 0)); transition: clip-path .55s cubic-bezier(.22, .75, .25, 1); }
+#stage .dim.nofx { transition: none; }
+body:not(.mode-panels) #stage .dim, body.zoomed #stage .dim { display: none; }
 body.mode-panels:not(.zoomed) #stage { cursor: grab; }
 body.mode-panels:not(.zoomed) #stage:active { cursor: grabbing; }
 body.mode-panels .rbtn#panels, body.mode-panels #panels { color: var(--accent); }
