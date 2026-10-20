@@ -300,3 +300,26 @@ def album_candidates(hits: list[dict], limit: int = 8) -> list[dict]:
                     "score": h["score"], "album": True, "genre": f"album {NAME}", "tomes": None, "exact": False,
                     "source": "bdfugue", "cover": h.get("cover")})
     return out
+
+
+def product_from_url(url: str, fallback_title: Optional[str] = None) -> dict:
+    """Fiche « devinée » d'après l'adresse seule, quand la page ne peut pas être lue (site qui refuse les lecteurs
+    automatiques) : « /les-feux-d-askell-t-3-corail-sanglant » → les feux d'askell, tome 3, corail sanglant."""
+    u = canonical(url) or url
+    slug = u.rstrip("/").rsplit("/", 1)[-1]
+    slug = re.sub(r"-?97[89]\d{10}$", "", slug)                 # EAN en fin d'adresse
+    words = re.sub(r"-+", " ", slug).strip()
+    words = re.sub(r"\b([dlj]) (?=[aeiouyh])", r"\1'", words)     # « d askell » → « d'askell »
+    words = re.sub(r"\bt ?(\d{1,3}) a t ?(\d{1,3})\b", r"- tomes \1 à \2", words)   # intégrale « t 1 a t 3 »
+    words = re.sub(r"\bt ?(\d{1,3})\b(?! à)", r"tome \1 -", words, count=1)
+    words = words.strip(" -")
+    p = parse_title(words)
+    title = p["title"] or (fallback_title if p["number"] is None and fallback_title else None)
+    series = p["series"].strip(" -") or fallback_title or words
+    if fallback_title and p["number"] is None and not p["title"]:
+        series = fallback_title          # one shot : le nom du fichier est plus juste que l'adresse
+    return {"url": u, "name": words, "series": series[:1].upper() + series[1:], "number": p["number"],
+            "kind": p["kind"], "title": title, "date": None, "year": None, "summary": None, "cover": None,
+            "publisher": None, "collection": None, "isbn": None, "pages": None, "genre": None, "series_url": None,
+            "writers": [], "pencillers": [], "colorists": [], "guessed": True}
+
