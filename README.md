@@ -139,6 +139,11 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- Case par case : rangées séparées par autre chose que du fond (gouttière fine chevauchée par un cartouche, décor
+  peint entre les cases, couleur de fond qui change) : Bulle suit les bords de case bien droits qui traversent la
+  page, puis découpe chaque rangée normalement. Cases de biais (gouttières blanches en oblique) trouvées. Vérifié sur
+  132 planches (75 + 57 nouvelles, tirées au hasard dans la bibliothèque) : 7 mieux découpées, dont 2 qui n'avaient
+  aucune case, aucune moins bien.
 - Case par case, détection améliorée sur 75 planches d'essai (7 planches mieux découpées, aucune moins bien) :
   cases aux bords tracés à main levée (traits qui ondulent : aucune gouttière droite) trouvées comme des blocs de
   dessin séparés par le fond ; rangée de cases posée sur une grande image sans gouttière entre les deux (la rangée est
