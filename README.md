@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.31.1)
+# Bulle — lecteur de BD maison (v0.32.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,17 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **BDfugue en secours** (Réglages › Laboratoire › « Recherche BDfugue en secours », désactivé par défaut) : quand un
+  album ou une série n'est pas sur Bédéthèque (rien trouvé ou rien de sûr), Bulle cherche aussi sur BDfugue, la
+  librairie en ligne. Un one shot au titre identique est lié tout seul, avec ses auteurs, éditeur, date, résumé et
+  couverture ; sinon les albums trouvés s'ajoutent aux propositions (pochette au survol). Une série trouvée sur BDfugue
+  est comparée au dossier comme une série Bédéthèque (tomes présents, manquants). On peut aussi coller l'adresse d'une
+  fiche BDfugue dans « Chercher… » ou dans le panneau d'une série. Mêmes règles de politesse que pour Bédéthèque (une
+  requête à la fois, au même rythme, résultats gardés 7 jours, pages réservées du robots.txt jamais lues) ; un compte
+  lecteur ne déclenche jamais de requête.
+- Case par case : gouttières noires sur une page blanche (une colonne de cases encadrée de noir) reconnues, avec
+  prudence (gouttière mince, bordée de dessin) ; gouttières de deux pixels entre deux cadres très rapprochés acceptées
+  quand elles sont nettes. 153 planches d'essai : 4 changent (Pavillon noir, Expérience mort mieux découpées).
 - Case par case, d'après les pages corrigées à la main (série 3) : le blanc à l'intérieur d'une case (cartouche, bulle,
   ciel pâle) n'est plus pris pour une gouttière quand le cadre de la case le ferme des deux côtés (un cartouche en bas
   d'une case n'est plus lu à part, un manga à grandes bulles n'est plus coupé en morceaux) ; un cartouche large posé
