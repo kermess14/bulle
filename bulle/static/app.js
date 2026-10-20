@@ -1107,9 +1107,13 @@
     const amb = o.albums.filter(a => a.status === "ambiguous"), nf = o.albums.filter(a => a.status === "not_found"), ok = o.albums.filter(a => a.status === "ok");
     const admin = isAdmin();
     const other = a => admin ? `<button class="btn mini" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Chercher cet album sur Bédéthèque : autre titre, homonymes, ou adresse de la fiche">Chercher…</button>` : "";
-    const ambHtml = amb.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}</div>
+    // petite couverture de l'album à droite de son nom ; agrandie au survol (pour la comparer aux propositions)
+    const kids = new Map((data.children || []).map(ch => [ch.id, ch]));
+    const thumb = a => { const ch = kids.get(a.id) || { id: a.id, kind: "album", mtime: 0 };
+      return `<span class="os-thumb" data-os-thumb="${esc(coverUrl(ch, 260))}"><img src="${esc(coverUrl(ch, 40))}" alt="" loading="lazy"></span>`; };
+    const ambHtml = amb.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}${thumb(a)}</div>
         <div class="os-cands">${a.candidates.map(cd => `<button type="button" class="chip gray" ${admin ? `data-bdt="os-pick" data-album="${a.id}" data-url="${esc(cd.url)}"` : "disabled"} title="Choisir cette série">${esc(cd.name)}</button>`).join("")}${other(a)}</div></div>`).join("");
-    const nfHtml = nf.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}</div><div class="os-cands">${other(a)}</div></div>`).join("");
+    const nfHtml = nf.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}${thumb(a)}</div><div class="os-cands">${other(a)}</div></div>`).join("");
     const okHtml = ok.map(a => `<li><span>${esc(a.name)}</span> → <a class="ext" href="${esc(a.series_url)}" target="_blank" rel="noopener">${esc(a.series_title || "")}</a>${a.manual ? "" : a.score != null && a.score < 0.95 ? ` <span class="warnlabel">à vérifier</span>` : ""}${admin ? ` <button class="linkbtn" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Choisir une autre série">changer</button> <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Oublier ce lien (l'album sera recherché de nouveau)">oublier</button>` : ""}</li>`).join("");
     return `<div class="bdt-panel oneshots ${c.total && c.ok === c.total ? "full" : ""}" id="bdt-panel" data-folder="${fid}">
       <div class="bdt-row">
@@ -2690,6 +2694,33 @@
     if (c && !(e.relatedTarget && c.contains(e.relatedTarget))) hideBdtPop();
   });
   window.addEventListener("hashchange", hideBdtPop);
+  // couverture d'un one shot agrandie au survol de sa vignette
+  let osPop = null;
+  main.addEventListener("mouseover", e => {
+    const t = e.target.closest("[data-os-thumb]");
+    if (!t || (osPop && osPop.dataset.src === t.dataset.osThumb)) return;
+    if (osPop) osPop.remove();
+    osPop = document.createElement("div");
+    osPop.className = "bdtpop ospop"; osPop.dataset.src = t.dataset.osThumb;
+    osPop.innerHTML = `<img src="${esc(t.dataset.osThumb)}" alt="">`;
+    document.body.appendChild(osPop);
+    const place = () => {
+      if (!osPop) return;
+      const r = t.getBoundingClientRect(), w = osPop.offsetWidth, h = osPop.offsetHeight;
+      // à gauche de la vignette (sur le nom), pour ne pas cacher les propositions à droite
+      let x = r.left - w - 10, y = r.top + r.height / 2 - h / 2;
+      if (x < 8) x = r.right + 10;
+      osPop.style.left = Math.max(8, x) + "px";
+      osPop.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, y)) + "px";
+    };
+    osPop.querySelector("img").onload = place;
+    place();
+  });
+  main.addEventListener("mouseout", e => {
+    const t = e.target.closest("[data-os-thumb]");
+    if (t && osPop && !(e.relatedTarget && t.contains(e.relatedTarget))) { osPop.remove(); osPop = null; }
+  });
+  window.addEventListener("hashchange", () => { if (osPop) { osPop.remove(); osPop = null; } });
 
   async function route() {
     if (currentKey !== null) scrollMemory.set(currentKey, window.scrollY);
