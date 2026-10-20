@@ -28,11 +28,12 @@ from . import opds
 from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, compare, index_letter_for, norm_title,
                          album_url as bdt_album_url, album_year, is_oneshot_name, parse_album_name, pick_album, query_from_album,
                          query_from_folder)
+from . import bdfugue
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.31.1"
+VERSION = "0.32.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -86,6 +87,7 @@ def global_defaults() -> dict:
         "bdt_pause_minutes": 2.5,     # … de cette durée (± 20 %)
         "bdt_auto_summary": True,     # résumé lu sur la fiche Bédéthèque quand on ouvre la fiche d'un album
         "bdt_bdgest": False,          # laboratoire : si l'index ne trouve pas sûr, recherche « tout le site » BDGest (albums compris)
+        "bdt_bdfugue": False,         # laboratoire : si Bédéthèque ne trouve rien de sûr, recherche sur BDfugue (librairie)
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
         "account_login": False,       # se connecter avec un compte (nom + mot de passe) : pour mettre Bulle sur Internet
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
@@ -101,7 +103,7 @@ GLOBAL_TYPES = {
     "scan_interval_hours": (int, 0, 720), "scan_on_start": (bool,), "preload_covers": (bool,), "scan_mode": (str,), "preload_threads": (int, 1, 8),
     "page_cache": (bool,), "cache_max_gb": (float, 0, 1000), "quality": (str, tuple(QUALITY_PROFILES)),
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
-    "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,), "bdt_bdgest": (bool,),
+    "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,), "bdt_bdgest": (bool,), "bdt_bdfugue": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
     "require_profile": (bool,), "account_login": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
     "quality_auto": (bool,), "hd_min_px": (int, 800, 8000),
@@ -547,7 +549,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 "publisher": a.get("publisher"), "collection": a.get("collection"), "isbn": a.get("isbn"),
                 "pages": a.get("pages"), "date": a.get("date"), "summary": a.get("summary"),
                 "summary_at": a.get("summary_at"), "oneshot": m.get("how") == "oneshot",
-                "series_title": a.get("series_title"), "series_url": a.get("series_url"), "genre": a.get("series_genre")}
+                "series_title": a.get("series_title"), "series_url": a.get("series_url"), "genre": a.get("series_genre"),
+                "source": a.get("source") or ("bdfugue" if bdfugue.is_url(m.get("url") or "") else "bedetheque")}
 
     def resync_series(folder: dict, link: dict, children: list[dict]) -> None:
         """Refait la correspondance fichiers ↔ tomes sur la fiche de série déjà enregistrée, sans aucune requête : un
@@ -635,6 +638,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         cmp_ = compare(series, files)
         return {
             "series": {"id": series.get("id"), "url": series["url"], "title": series.get("title"),
+                       "source": "bdfugue" if bdfugue.is_url(series["url"]) else "bedetheque",
                        "genre": series.get("genre"), "status": series.get("status"), "years": series.get("years"),
                        "tomes_count": series.get("tomes_count"), "detailed": bool(link.get("detailed")),
                        "score": link.get("score"), "manual": bool(link.get("manual")),
@@ -1829,6 +1833,23 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             log.info("Recherche BDGest « %s » : %s", q, e)
             return None
 
+    bdf_covers: dict[str, str] = {}   # pochettes vues dans les résultats BDfugue (pour l'aperçu au survol, sans requête)
+
+    def bdfugue_hits(q: str, year: Optional[int] = None, always: bool = False) -> list[dict]:
+        """Recherche BDfugue (une requête, gardée 7 jours), si le laboratoire l'a activée. Une erreur de BDfugue n'arrête
+        jamais le travail sur Bédéthèque : elle est seulement notée."""
+        if not (always or settings().get("bdt_bdfugue")):
+            return []
+        try:
+            hits = bdt.bdf_search(q, year)
+        except BdtError as e:
+            log.info("Recherche BDfugue « %s » : %s", q, e)
+            return []
+        for h in hits:
+            if h.get("cover"):
+                bdf_covers[h["url"]] = h["cover"]
+        return hits
+
     def album_candidates(albums: list[dict], limit: int = 8) -> list[dict]:
         """Albums trouvés par la recherche du site, présentés comme des propositions : en choisir un lie directement
         la bonne fiche (l'adresse est celle de l'album)."""
@@ -1863,6 +1884,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             url = bdt.resolve_url(url)   # page BDGest → fiche Bédéthèque
             if bdt_album_url(url):   # adresse d'un album de la série (et non de la série) : on remonte à sa série
                 url = bdt.album_series_url(bdt_album_url(url))
+            elif bdfugue.product_url(url):   # fiche d'un album BDfugue : sa page de série (ou l'album seul)
+                url = bdt.album_series_url(bdfugue.product_url(url))
             series = bdt.series(url, details=details, force=force)
             manual = True
         elif existing and not force:
@@ -1883,6 +1906,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     full = bdgest_search(query)
                     if full:
                         candidates = merge_candidates(candidates, full["series"])
+                if not candidates or candidates[0]["score"] < 0.75:   # laboratoire : puis BDfugue
+                    hits = [h for h in bdfugue_hits(query) if h["kind"] in ("tome", "hs")]
+                    candidates = merge_candidates(candidates, bdfugue.series_candidates(hits, query))
                 if not candidates:
                     return {"status": "not_found", "query": query,
                             "message": f"Aucune série trouvée sur Bédéthèque pour « {query} »."}
@@ -1891,14 +1917,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     return {"status": "ambiguous", "query": query, "candidates": candidates[:8],
                             "message": "Plusieurs séries possibles : choisissez la bonne."}
                 score = best["score"]
-                series = bdt.series(best["url"], details=details)
+                if bdfugue.product_url(best["url"]):   # série trouvée sur BDfugue : sa page de série
+                    series = bdt.series(bdt.album_series_url(best["url"]))
+                else:
+                    series = bdt.series(best["url"], details=details)
         cmp_ = compare(series, files)
         lib.bdt_series_set(folder["id"], series, score, manual, present=cmp_["present"], total=cmp_["total"])
         lib.bdt_albums_set(folder["id"], cmp_["matches"])
         link = lib.bdt_series_get(folder["id"])
         report = bdt_report(folder, link, children)
         report["status"] = "ok"
-        report["candidates"] = [c for c in candidates[:6] if c["url"] != series["url"]]
+        report["candidates"] = [c for c in candidates[:6] if c["url"] != series["url"]
+                                and not (c.get("source") and norm_title(c["name"]) == norm_title(series.get("title") or ""))]
         report["query"] = query_from_folder(folder["name"])
         return report
 
@@ -1952,6 +1982,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                         series, score = bdt.series(s_url or bdt.album_series_url(h["url"])), h["score"]
                     else:
                         candidates = merge_candidates(candidates, site["series"] + album_candidates(site["albums"]))
+            if series is None and (not candidates or candidates[0]["score"] < 0.75):
+                # laboratoire : pas sur Bédéthèque, peut-être sur BDfugue (librairie) : un album au titre quasi identique
+                # (toutes ses éditions portent le même nom) est lié tout seul ; sinon il s'ajoute aux propositions
+                hits = bdfugue_hits(q, year)
+                good = [h for h in hits if h["score"] >= 0.86 and h["kind"] != "other"]
+                if good and len({norm_title(h["name"]) for h in good}) == 1 and not candidates:
+                    series, score, album_url = bdt.series(good[0]["url"]), good[0]["score"], good[0]["url"]
+                elif hits:
+                    candidates = merge_candidates(candidates, bdfugue.album_candidates(hits))
             if series is None:
                 if not candidates:
                     lib.bdt_oneshot_set(album["id"], folder["id"], "not_found", query=q)
@@ -1970,6 +2009,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         data = dict(alb) if alb else {"url": None, "title": series.get("title"), "number": None, "kind": None,
                                       "year": None, "fix_tried": bool(keep)}
         data.update(series_title=series.get("title"), series_url=series["url"], series_genre=series.get("genre"))
+        if series.get("source"):
+            data["source"] = series["source"]
+            if data.get("summary"):
+                data["summary_at"] = time.time()   # résumé déjà lu sur la fiche BDfugue : pas de requête de plus
         lib.bdt_oneshot_set(album["id"], folder["id"], "ok", query=q, score=score, manual=manual, series=series,
                             album=data)
         return {"status": "ok", "query": q, "series": {"title": series.get("title"), "url": series["url"]},
@@ -2055,7 +2098,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             results += album_candidates(full["albums"], 10)
         except BdtError as e:
             site_error = str(e)
-        return jsonify({"results": results[:30], "site_error": site_error,
+        if settings().get("bdt_bdfugue"):   # laboratoire : les albums trouvés sur BDfugue, à la suite
+            results += bdfugue.album_candidates(bdfugue_hits(q, year), 10)
+        return jsonify({"results": results[:40], "site_error": site_error,
                         "web": f"https://www.bedetheque.com/search/tout?RechTexte={urllib.parse.quote(q)}"})
 
     cover_memo: dict[str, Optional[str]] = {}
@@ -2069,6 +2114,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         require_admin()
         bdt_check_enabled()
         url = (request.args.get("url") or "").strip()
+        if bdfugue.is_url(url):
+            # BDfugue : la pochette vue dans les résultats de recherche, sinon celle de la fiche (une requête, gardée)
+            u = bdfugue.canonical(url)
+            img = bdf_covers.get(u)
+            if not img:
+                try:
+                    img = (bdt.bdf_product(u) if bdfugue.product_url(u) else {}).get("cover")
+                except BdtError as e:
+                    abort(502, description=str(e))
+                if img:
+                    bdf_covers[u] = img
+            return jsonify({"thumb": img, "image": img, "guess": False})
         if not url.startswith("https://www.bedetheque.com/"):
             abort(400, description="Adresse Bédéthèque attendue")
         read_page = request.args.get("page") == "1"
