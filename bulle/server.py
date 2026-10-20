@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.32.0"
+VERSION = "0.32.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -1946,7 +1946,20 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if bdt_album_url(url):
                 album_url = bdt_album_url(url)
                 url = bdt.album_series_url(album_url)   # fiche d'un album : on remonte à sa série
-            series, manual = bdt.series(url), True
+            if bdfugue.product_url(url):
+                try:
+                    series = bdt.series(url)
+                except BdtError as e:
+                    # BDfugue refuse les lecteurs automatiques : l'adresse collée suffit à lier l'album à sa fiche
+                    # (titre d'après l'adresse et le nom du fichier ; ni auteurs, ni résumé, ni couverture)
+                    log.info("Fiche BDfugue %s illisible (%s) : liée d'après l'adresse", url, e)
+                    prod = bdfugue.product_from_url(url, query_from_album(album["name"]))
+                    series = bdfugue.series_from_product(prod)
+                    series["guessed"] = True
+                album_url = bdfugue.product_url(url)
+                manual = True
+            else:
+                series, manual = bdt.series(url), True
             if keep:   # fiche complétée : on garde la façon dont l'album avait été lié
                 q, score, manual = keep.get("query") or q, keep.get("score"), bool(keep.get("manual"))
         else:
@@ -2011,8 +2024,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         data.update(series_title=series.get("title"), series_url=series["url"], series_genre=series.get("genre"))
         if series.get("source"):
             data["source"] = series["source"]
-            if data.get("summary"):
-                data["summary_at"] = time.time()   # résumé déjà lu sur la fiche BDfugue : pas de requête de plus
+            if data.get("summary") or series.get("guessed"):
+                # résumé déjà lu sur la fiche BDfugue, ou fiche illisible (site qui refuse) : pas de requête de plus
+                data["summary_at"] = time.time()
+                data["summary"] = data.get("summary") or ""
         lib.bdt_oneshot_set(album["id"], folder["id"], "ok", query=q, score=score, manual=manual, series=series,
                             album=data)
         return {"status": "ok", "query": q, "series": {"title": series.get("title"), "url": series["url"]},
@@ -2121,8 +2136,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if not img:
                 try:
                     img = (bdt.bdf_product(u) if bdfugue.product_url(u) else {}).get("cover")
-                except BdtError as e:
-                    abort(502, description=str(e))
+                except BdtError:
+                    img = None   # (BDfugue refuse : pas d'aperçu, sans message d'erreur)
                 if img:
                     bdf_covers[u] = img
             return jsonify({"thumb": img, "image": img, "guess": False})

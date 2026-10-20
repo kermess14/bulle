@@ -27,6 +27,10 @@ log = logging.getLogger("bulle.bedetheque")
 
 BASE = "https://www.bedetheque.com"
 BDFUGUE = "https://www.bdfugue.com"   # librairie en ligne : source de secours (laboratoire), voir bdfugue.py
+BDF_PAUSE = 6 * 3600               # après un refus de BDfugue : 6 heures sans lui redemander
+BDF_BLOCKED = ("BDfugue refuse les lecteurs automatiques (code 403) : Bulle ne peut pas lire ses pages. Une adresse "
+               "BDfugue collée est quand même acceptée : l'album est lié à la fiche (titre d'après l'adresse, sans "
+               "auteurs ni résumé).")
 BDGEST = "https://www.bdgest.com"   # site jumeau (critiques, previews) : ses pages renvoient vers la fiche Bédéthèque
 USER_AGENT = "Bulle (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
 PAGE_TTL = 30 * 24 * 3600          # fiches de séries : 30 jours
@@ -200,6 +204,7 @@ class BedethequeClient:
         self.last_error: Optional[str] = None
         self.requests_made = 0
         self.pausing_until = 0.0
+        self.bdf_blocked_until = 0.0        # BDfugue a refusé : plus de requête vers lui avant cet instant
         self._tl = threading.local()
 
     def mark_background(self, flag: bool = True) -> None:
@@ -236,11 +241,23 @@ class BedethequeClient:
                                           r"review|raf|repayments|marketplace|private|productalert|sendfriend)",
                                           url[len(BDFUGUE):], re.I):
             raise BdtError("Cette page de BDfugue est réservée (robots.txt) : non consultée")
+        if site == "BDfugue" and time.time() < self.bdf_blocked_until:
+            # BDfugue a refusé il y a peu : on ne redemande pas (ni requête inutile, ni insistance)
+            cached = self._cache_get(url)
+            if cached:
+                return zlib.decompress(cached[1]).decode("utf-8", "replace")
+            raise BdtError(BDF_BLOCKED)
         if not force:
             cached = self._cache_get(url)
             if cached and time.time() - cached[0] < ttl:
                 return zlib.decompress(cached[1]).decode("utf-8", "replace")
-        mock = _mock_page(url)  # tests hors ligne uniquement (variable BULLE_BDT_MOCK)
+        try:
+            mock = _mock_page(url)  # tests hors ligne uniquement (variable BULLE_BDT_MOCK)
+        except urllib.error.HTTPError as e:   # (test : refus simulé)
+            if site == "BDfugue":
+                self.bdf_blocked_until = time.time() + BDF_PAUSE
+                raise BdtError(BDF_BLOCKED) from e
+            raise BdtError(f"{site} refuse pour l'instant les requêtes de Bulle (code {e.code}).") from e
         if mock is not None:
             self.requests_made += 1
             self._cache_put(url, zlib.compress(mock.encode("utf-8"), 6))
@@ -260,6 +277,9 @@ class BedethequeClient:
                     html = raw.decode(charset, "replace")
             except urllib.error.HTTPError as e:
                 self.last_error = f"{site} a répondu {e.code} pour {path or url}"
+                if e.code in (403, 429, 503) and site == "BDfugue":
+                    self.bdf_blocked_until = time.time() + BDF_PAUSE
+                    raise BdtError(BDF_BLOCKED) from e
                 if e.code in (403, 429, 503):
                     raise BdtError(f"{site} refuse pour l'instant les requêtes de Bulle (code {e.code}). "
                                    "Réessayez plus tard ; si cela persiste, le site bloque les lecteurs automatiques.") from e
@@ -452,6 +472,8 @@ def _mock_page(url: str) -> Optional[str]:
         return None
     for key, fname in mapping.items():
         if key in urllib.parse.unquote(url):
+            if fname.startswith("HTTP"):
+                raise urllib.error.HTTPError(url, int(fname[4:]), "simulé", None, None)
             with open(os.path.join(d, fname), encoding="utf-8") as f:
                 return f.read()
     raise BdtError(f"(test) page simulée absente pour {url}")
