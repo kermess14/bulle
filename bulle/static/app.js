@@ -205,7 +205,7 @@
     bdt_ghosts: true, bdt_titles: false, quality: "all",
   };
   const THUMB = { s: 118, m: 156, l: 200, xl: 250 };
-  const SKINS = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso", "seasons"];   // « neon » retiré : retombe sur « bd »
+  const SKINS = ["bd", "sobre", "bling", "girly", "ocean", "stars", "riso", "seasons", "fetes"];   // « neon » retiré : retombe sur « bd »
   /* Onomatopées de la colonne de gauche et des petits éclats, par habillage */
   const ONO = {
     bd: ["WIZZ !", "Zzz…", "PAF !", "CLAC", "BOUM", "TADAM !", "ZOU !"],
@@ -218,6 +218,14 @@
     summer: ["Soleil !", "Glaces", "Farniente", "Plouf", "Cigales", "Sieste", "Été !"],
     autumn: ["Crounch", "Châtaignes", "Feuilles", "Bruine", "Champignons", "Cocooning", "Automne !"],
     winter: ["Brrr…", "Flocons", "Chocolat chaud", "Bonhomme", "Givre", "Plaid", "Hiver !"],
+    newyear: ["Bonne année !", "Pop !", "Champagne", "Minuit !", "Bonnes résolutions", "Cotillons", "Meilleurs vœux"],
+    valentine: ["♥ ♥ ♥", "Bisous", "Mon cœur", "Coup de foudre", "Je t'aime", "Mamour", "Saint-Valentin"],
+    easter: ["Cloches !", "Chocolat", "Chasse aux œufs", "Lapin !", "Cot cot", "Miam", "Joyeuses Pâques"],
+    music: ["Do ré mi", "Tchic boum", "Lalala", "Rock !", "Ouh ouh", "Bis !", "Fête de la musique"],
+    bastille: ["Boum !", "Bal !", "Cocarde", "Pschiii", "Défilé", "Lampions", "14 juillet"],
+    holidays: ["Vacances !", "Plouf", "Crème solaire", "Pétanque", "Sieste", "Glace !", "Farniente"],
+    halloween: ["Bouh !", "Mouahaha", "Des bonbons !", "Brrr…", "Sorcière", "Citrouille", "Halloween"],
+    christmas: ["Ho ho ho !", "Joyeux Noël", "Guirlandes", "Cadeaux !", "Sapin", "Papillotes", "Ding dong"],
   };
   const POWS = {
     bd: { fav: ["HOP !", "YES !", "TOP !"], list: ["PAF !", "TCHAC !", "HOP !"], read: ["FINI !", "BRAVO !"], random: ["ZOU !", "TADAM !"], adult: ["CHUT…", "PSSST"] },
@@ -228,6 +236,37 @@
     riso: { fav: ["COUP DE CŒUR", "TAMPONNÉ"], list: ["AGRAFÉ !", "CLAC !"], read: ["LU & APPROUVÉ", "FIN"], random: ["AU PIF !", "TIRAGE !"], adult: ["CENSURÉ", "X"] },
     seasons: { fav: ["Coup de cœur !", "Chouette !"], list: ["Rangé !", "Hop !"], read: ["Bravo !", "Fini !"], random: ["Surprise !", "Au hasard !"], adult: ["Chut…", "Psst"] },
   };
+  /* Habillage Fêtes : la fête du moment (sinon la prochaine), affichée avec la mise en page de « Quatre saisons »
+     (data-skin="seasons", data-season=<la fête>) ; chaque fête emprunte des motifs à une saison (FETE_BASE). */
+  const FETES = {
+    newyear: { label: "Jour de l'an", emoji: "🎆" }, valentine: { label: "Saint-Valentin", emoji: "💘" },
+    easter: { label: "Pâques", emoji: "🥚" }, music: { label: "Fête de la musique", emoji: "🎵" },
+    bastille: { label: "14 juillet", emoji: "🎇" }, holidays: { label: "Grandes vacances", emoji: "🏖️" },
+    halloween: { label: "Halloween", emoji: "🎃" }, christmas: { label: "Noël", emoji: "🎄" },
+  };
+  const FETE_ORDER = ["newyear", "valentine", "easter", "music", "bastille", "holidays", "halloween", "christmas"];
+  const FETE_BASE = { christmas: "winter", newyear: "winter", valentine: "spring", easter: "spring", music: "summer", holidays: "summer", bastille: "summer", halloween: "autumn" };
+  function easterDay(y) {   // dimanche de Pâques (calendrier grégorien)
+    const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(y, month - 1, day);
+  }
+  /* Périodes de chaque fête pour une année : [début, fin] inclus (le 14 juillet passe avant les grandes vacances). */
+  function feteRanges(y) {
+    const D = (m, d) => new Date(y, m - 1, d), e = easterDay(y), add = (dt, n) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + n);
+    return [["newyear", new Date(y - 1, 11, 27), D(1, 7)], ["valentine", D(2, 7), D(2, 15)], ["easter", add(e, -10), add(e, 1)],
+      ["music", D(6, 17), D(6, 22)], ["bastille", D(7, 10), D(7, 15)], ["holidays", D(7, 1), D(8, 31)],
+      ["halloween", D(10, 15), D(11, 2)], ["christmas", D(12, 1), D(12, 26)], ["newyear", D(12, 27), new Date(y + 1, 0, 7)]];
+  }
+  /* La fête en cours, sinon la prochaine : { key, now: vrai si on est dedans } */
+  function currentFete(d = new Date()) {
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    for (const [k, a, b] of feteRanges(d.getFullYear())) if (day >= a && day <= b) return { key: k, now: true };
+    const next = [...feteRanges(d.getFullYear()), ...feteRanges(d.getFullYear() + 1)].filter(([, a]) => a > day).sort((x, y) => x[1] - y[1])[0];
+    return { key: next ? next[0] : "christmas", now: false };
+  }
+  const feteMode = () => settings.profile.skin === "fetes";
   /* Saison du moment (hémisphère nord, dates des équinoxes et solstices arrondies) ; réglable à la main */
   function currentSeason(d = new Date()) {
     const md = (d.getMonth() + 1) * 100 + d.getDate();
@@ -273,6 +312,13 @@
      En revenant à la saison du calendrier, on repasse en « selon la date ». */
   function updateSeasonBtn() {
     const b = $("#season-btn"); if (!b) return;
+    if (feteMode()) {
+      const cur = document.documentElement.dataset.season, cf = currentFete();
+      const next = FETE_ORDER[(FETE_ORDER.indexOf(cur) + 1) % FETE_ORDER.length];
+      b.textContent = (FETES[cur] || FETES.christmas).emoji;
+      b.title = `Fête : ${(FETES[cur] || FETES.christmas).label}${!FETES[settings.profile.fete] ? (cf.now ? " (selon la date)" : " (la prochaine)") : ""} — cliquer pour voir : ${FETES[next].label}`;
+      return;
+    }
     const cur = document.documentElement.dataset.season || currentSeason();
     const next = SEASON_ORDER[(SEASON_ORDER.indexOf(cur) + 1) % 4];
     const auto = !["spring", "summer", "autumn", "winter"].includes(settings.profile.season);
@@ -281,10 +327,19 @@
   }
   document.addEventListener("click", e => {
     const b = e.target.closest("#season-btn"); if (!b) return;
+    if (feteMode()) {
+      const cur = document.documentElement.dataset.season, auto = currentFete().key;
+      const next = FETE_ORDER[(FETE_ORDER.indexOf(cur) + 1) % FETE_ORDER.length];
+      b.classList.remove("turn"); void b.offsetWidth; b.classList.add("turn");
+      saveSettings({ fete: next === auto ? "auto" : next }, null, { quiet: true });
+      toast(`${FETES[next].emoji} ${FETES[next].label}${next === auto ? (currentFete().now ? " (la fête du moment)" : " (la prochaine fête)") : ""}`);
+      if (location.hash.startsWith("#/settings")) route();
+      return;
+    }
     const cur = document.documentElement.dataset.season || currentSeason();
     const next = SEASON_ORDER[(SEASON_ORDER.indexOf(cur) + 1) % 4];
     b.classList.remove("turn"); void b.offsetWidth; b.classList.add("turn");
-    saveSettings({ season: next === currentSeason() ? "auto" : next });
+    saveSettings({ season: next === currentSeason() ? "auto" : next }, null, { quiet: true });
     toast(`${SEASON_EMOJI[next]} ${SEASON_LABEL[next][0].toUpperCase() + SEASON_LABEL[next].slice(1)}${next === currentSeason() ? " (la saison du calendrier)" : ""}`);
     if (location.hash.startsWith("#/settings")) route();
   });
@@ -301,9 +356,12 @@
     root.dataset.tabs = p.tabs_side === "top" || window.innerWidth <= 700 ? "top" : "left";
     root.dataset.phone = isPhone() ? "on" : "off";
     root.dataset.covers = ultraMode() ? "flat" : ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
-    root.dataset.skin = SKINS.includes(p.skin) ? p.skin : "bd";
-    const season = ["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason();
+    const fete = p.skin === "fetes";
+    root.dataset.skin = fete ? "seasons" : SKINS.includes(p.skin) ? p.skin : "bd";   // Fêtes : la mise en page de Quatre saisons
+    const season = fete ? (FETES[p.fete] ? p.fete : currentFete().key)
+      : ["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason();
     if (root.dataset.skin === "seasons") root.dataset.season = season; else delete root.dataset.season;
+    if (fete) root.dataset.fete = "on"; else delete root.dataset.fete;
     const words = root.dataset.skin === "seasons" ? ONO[season] : ONO[root.dataset.skin];
     if (words) document.querySelectorAll("#maintabs .ono").forEach((el, i) => { el.textContent = words[i % words.length]; });
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -431,35 +489,122 @@
       g.stroke();
     }
 
-    const sprites = { flakes: [], dots: [], petals: [], flowers: [], leaves: [], fly: null, seeds: [] };
-    if (kind === "winter") {
+    const sprites = { flakes: [], dots: [], petals: [], flowers: [], leaves: [], fly: null, seeds: [], fete: {} };
+    const base = FETE_BASE[kind] || kind;   // une fête emprunte les motifs d'une saison (neige à Noël, feuilles à Halloween…)
+    if (base === "winter") {
       for (let i = 0; i < 8; i++) sprites.flakes.push(sprite(40, (g, r) => flake(g, r)));
       sprites.dots.push(sprite(10, (g, r) => glow(g, r, light ? "130, 165, 205" : "255, 255, 255")));
-    } else if (kind === "spring") {
+    } else if (base === "spring") {
       for (const c of PETAL_COLORS) { sprites.petals.push(sprite(28, (g, r) => petal(g, r * .8, c))); sprites.petals.push(sprite(28, (g, r) => petal(g, r * .8, c))); }
       for (const c of PETAL_COLORS.slice(0, 6)) sprites.flowers.push(sprite(46, (g, r) => blossom(g, r * .9, c)));
-    } else if (kind === "autumn") {
+    } else if (base === "autumn") {
       for (const c of LEAF_COLORS) { sprites.leaves.push(sprite(48, (g, r) => maple(g, r * .85, c))); sprites.leaves.push(sprite(48, (g, r) => oak(g, r * .85, c))); sprites.leaves.push(sprite(40, (g, r) => birch(g, r * .85, c))); }
     } else {
       sprites.fly = sprite(36, (g, r) => glow(g, r, light ? "242, 159, 5" : "255, 214, 90"));
       for (let i = 0; i < 3; i++) sprites.seeds.push(sprite(30, (g, r) => seed(g, r)));
     }
 
+    // -------- motifs des fêtes (habillage Fêtes)
+    function bauble(g, r, c) {
+      const gr = g.createRadialGradient(-r * .3, -r * .2, r * .1, 0, r * .1, r * .85); gr.addColorStop(0, "#fff"); gr.addColorStop(.25, c); gr.addColorStop(1, "rgba(0, 0, 0, .55)");
+      g.fillStyle = gr; g.shadowColor = c; g.shadowBlur = r * .4; g.beginPath(); g.arc(0, r * .12, r * .78, 0, Math.PI * 2); g.fill(); g.shadowBlur = 0;
+      g.fillStyle = "#d9b44a"; g.fillRect(-r * .2, -r * .82, r * .4, r * .22);
+      g.strokeStyle = "#d9b44a"; g.lineWidth = Math.max(1, r * .07); g.beginPath(); g.arc(0, -r * .9, r * .1, 0, Math.PI * 2); g.stroke();
+    }
+    function star(g, r, c) {
+      g.fillStyle = c; g.shadowColor = c; g.shadowBlur = r * .5; g.beginPath();
+      for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + k * Math.PI / 5, q = k % 2 ? r * .42 : r * .95; g.lineTo(Math.cos(a) * q, Math.sin(a) * q); }
+      g.closePath(); g.fill();
+    }
+    function heart(g, r, [a, b]) {
+      const gr = g.createLinearGradient(0, -r, 0, r); gr.addColorStop(0, b); gr.addColorStop(1, a);
+      g.fillStyle = gr; g.shadowColor = "rgba(0, 0, 0, .2)"; g.shadowBlur = r * .3; g.beginPath(); g.moveTo(0, r * .85);
+      g.bezierCurveTo(-r * 1.1, r * .05, -r * .75, -r * .95, 0, -r * .38); g.bezierCurveTo(r * .75, -r * .95, r * 1.1, r * .05, 0, r * .85); g.fill();
+      g.shadowBlur = 0; g.fillStyle = "rgba(255, 255, 255, .45)"; g.beginPath(); g.ellipse(-r * .35, -r * .3, r * .15, r * .1, -.6, 0, Math.PI * 2); g.fill();
+    }
+    function egg(g, r, [a, b, c]) {
+      g.save(); g.beginPath(); g.ellipse(0, r * .05, r * .64, r * .88, 0, 0, Math.PI * 2); g.clip();
+      g.fillStyle = a; g.fillRect(-r, -r, 2 * r, 2 * r);
+      g.fillStyle = b; g.beginPath(); g.moveTo(-r, -r * .05);
+      for (let k = 0; k <= 8; k++) g.lineTo(-r + k * r / 4, k % 2 ? -r * .25 : -r * .05);
+      g.lineTo(r, r * .2); for (let k = 8; k >= 0; k--) g.lineTo(-r + k * r / 4, k % 2 ? r * .2 : r * .4); g.fill();
+      g.fillStyle = c; for (const [x, y] of [[-.3, -.55], [.25, -.6], [0, -.75], [-.25, .6], [.25, .62], [0, .78]]) { g.beginPath(); g.arc(x * r, y * r, r * .08, 0, Math.PI * 2); g.fill(); }
+      g.restore(); g.strokeStyle = "rgba(0, 0, 0, .18)"; g.lineWidth = 1; g.beginPath(); g.ellipse(0, r * .05, r * .64, r * .88, 0, 0, Math.PI * 2); g.stroke();
+    }
+    function note(g, r, ch, c) { g.fillStyle = c; g.shadowColor = c; g.shadowBlur = r * .4; g.font = `bold ${r * 1.7}px serif`; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(ch, 0, 0); }
+    function pumpkin(g, r, face) {
+      g.shadowColor = "rgba(255, 140, 0, .5)"; g.shadowBlur = r * .4;
+      for (const [dx, w, col] of [[-.42, .42, "#d9620f"], [.42, .42, "#d9620f"], [-.18, .45, "#f07c18"], [.18, .45, "#f07c18"], [0, .4, "#ff9324"]]) { g.fillStyle = col; g.beginPath(); g.ellipse(dx * r, r * .1, w * r, r * .68, 0, 0, Math.PI * 2); g.fill(); }
+      g.shadowBlur = 0; g.fillStyle = "#4d7a1f"; g.fillRect(-r * .07, -r * .78, r * .14, r * .26);
+      if (face) {
+        g.fillStyle = "#2a1200";
+        g.beginPath(); g.moveTo(-r * .38, -r * .05); g.lineTo(-r * .18, -r * .05); g.lineTo(-r * .28, -r * .25); g.fill();
+        g.beginPath(); g.moveTo(r * .38, -r * .05); g.lineTo(r * .18, -r * .05); g.lineTo(r * .28, -r * .25); g.fill();
+        g.beginPath(); g.moveTo(-r * .4, r * .2); for (let k = 0; k <= 6; k++) g.lineTo(-r * .4 + k * r * .8 / 6, r * (k % 2 ? .3 : .45)); g.lineTo(r * .4, r * .2); g.quadraticCurveTo(0, r * .55, -r * .4, r * .2); g.fill();
+      }
+    }
+    function ghost(g, r) {
+      g.fillStyle = light ? "rgba(255, 255, 255, .95)" : "rgba(245, 245, 255, .85)"; g.shadowColor = "rgba(200, 200, 255, .8)"; g.shadowBlur = r * .4;
+      g.beginPath(); g.moveTo(-r * .6, r * .8); g.lineTo(-r * .6, -r * .1); g.arc(0, -r * .1, r * .6, Math.PI, 0); g.lineTo(r * .6, r * .8);
+      for (let k = 0; k < 4; k++) g.quadraticCurveTo(r * (.45 - k * .3), r * (k % 2 ? .95 : .6), r * (.3 - k * .3), r * .8);
+      g.closePath(); g.fill(); g.shadowBlur = 0;
+      g.fillStyle = "#222"; g.beginPath(); g.ellipse(-r * .22, -r * .15, r * .09, r * .14, 0, 0, Math.PI * 2); g.ellipse(r * .22, -r * .15, r * .09, r * .14, 0, 0, Math.PI * 2); g.fill();
+    }
+    function ball(g, r) {
+      const cols = ["#ff4d4d", "#ffffff", "#2f8cff", "#ffffff", "#ffd23f", "#ffffff"];
+      for (let k = 0; k < 6; k++) { g.fillStyle = cols[k]; g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, r * .9, k * Math.PI / 3, (k + 1) * Math.PI / 3); g.fill(); }
+      const gr = g.createRadialGradient(-r * .3, -r * .35, r * .05, 0, 0, r * .9); gr.addColorStop(0, "rgba(255, 255, 255, .55)"); gr.addColorStop(1, "rgba(0, 0, 0, .25)");
+      g.fillStyle = gr; g.beginPath(); g.arc(0, 0, r * .9, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "#fff"; g.beginPath(); g.arc(0, 0, r * .14, 0, Math.PI * 2); g.fill();
+    }
+    function confetti(g, r, c) { g.fillStyle = c; g.fillRect(-r * .28, -r * .6, r * .56, r * 1.2); }
+    const F = sprites.fete, CONF = ["#ff4d6d", "#ffd23f", "#3ddc97", "#4dabff", "#b26bff", "#ff8c42", "#ffffff"];
+    if (kind === "christmas") {
+      F.fall = [...["#d62828", "#2a9d4b", "#e9c46a", "#4361ee", "#c0c0c0"].map(c => sprite(40, (g, r) => bauble(g, r * .9, c))), ...["#ffd84a", "#fff3b0"].map(c => sprite(36, (g, r) => star(g, r * .85, c)))];
+    } else if (kind === "newyear") {
+      F.fall = CONF.flatMap(c => [sprite(20, (g, r) => confetti(g, r, c)), sprite(20, (g, r) => confetti(g, r * .7, c))]);
+      F.fall.push(sprite(30, (g, r) => star(g, r * .8, "#ffd84a")));
+      F.colors = ["255, 210, 63", "255, 77, 109", "77, 171, 255", "61, 220, 151", "178, 107, 255", "255, 255, 255"];
+    } else if (kind === "valentine") {
+      F.rise = [["#e63973", "#ff8fb8"], ["#c9184a", "#ff4d6d"], ["#ff8fab", "#ffc2d1"], ["#b5179e", "#f72585"]].map(c => sprite(40, (g, r) => heart(g, r * .9, c)));
+    } else if (kind === "easter") {
+      F.fall = [["#ffd6e8", "#8fd3ff", "#ff8fb8"], ["#fff3b0", "#b5e48c", "#ff9f1c"], ["#cdb4db", "#ffffff", "#7b2cbf"], ["#a0e7e5", "#ffaebc", "#ffffff"], ["#ffcad4", "#ffd23f", "#4dabff"]].map(c => sprite(40, (g, r) => egg(g, r * .9, c)));
+    } else if (kind === "music") {
+      F.rise = ["♪", "♫", "♬", "♩"].flatMap(ch => ["#ffd23f", "#ff6b9e", "#5ce1e6", "#b388ff"].map(c => sprite(36, (g, r) => note(g, r * .8, ch, c))));
+    } else if (kind === "bastille") {
+      F.fall = ["#0055a4", "#ffffff", "#ef4135"].flatMap(c => [sprite(20, (g, r) => confetti(g, r, c)), sprite(20, (g, r) => confetti(g, r * .7, c))]);
+      F.colors = ["0, 85, 164", "255, 255, 255", "239, 65, 53", "120, 170, 255", "255, 120, 110"];
+    } else if (kind === "holidays") {
+      F.rise = [sprite(56, (g, r) => ball(g, r))];
+    } else if (kind === "halloween") {
+      F.fall = [sprite(48, (g, r) => pumpkin(g, r * .9, true)), sprite(48, (g, r) => pumpkin(g, r * .9, false)), sprite(48, (g, r) => pumpkin(g, r * .9, true))];
+      F.rise = [sprite(48, (g, r) => ghost(g, r * .9))];
+    }
+
     // -------- les éléments
     const BUTTERFLY = [["#ffb347", "#ff7a1a"], ["#7fc8ff", "#2f7fd6"], ["#ffe066", "#f2a900"], ["#ff8fc6", "#e64c9a"], ["#b6f08a", "#4fae3a"]];
     function make(initial, type) {
       const y0 = initial ? R(-fx.h * .1, fx.h) : R(-90, -30);
-      if (kind === "winter") {
+      const F = sprites.fete;
+      if (type === "fall") {
+        const conf = kind === "newyear" || kind === "bastille";   // confettis : petits, tournoient et se retournent
+        const s = conf ? R(12, 20) : R(26, 44);                  // boules, étoiles, œufs, citrouilles : plus gros, ne se retournent pas
+        return { t: "leaf", sp: pick(F.fall), x: R(0, fx.w), y: y0, s, vy: conf ? R(26, 55) : R(22, 40), vx: R(-12, 16), a: conf ? R(0, 6.3) : R(-.4, .4), va: conf ? R(-2, 2) : R(-.5, .5), flip: conf ? R(0, 6.3) : undefined, fs: R(1, 3), al: R(.85, 1), ph: R(0, 6.3) };
+      }
+      if (type === "rise") { const s = kind === "holidays" ? R(30, 50) : R(18, 38); return { t: "rise", sp: pick(F.rise), x: R(0, fx.w), y: initial ? R(0, fx.h) : fx.h + 40, s, vy: -R(14, 34), vx: R(-8, 8), a: R(-.3, .3), va: R(-.4, .4), al: R(.75, 1), ph: R(0, 6.3) }; }
+      if (type === "bat") return { t: "bat", x: R(0, fx.w), y: R(fx.h * .1, fx.h * .7), s: R(14, 26), vx: R(-40, 40) || 20, vy: R(-14, 14), ph: R(0, 6.3), turn: R(1.5, 4) };
+      if (type === "rocket") return { t: "rocket", wait: R(.3, 3) };
+      if (base === "winter") {
         if (type === "dot") return { t: "dot", x: R(0, fx.w), y: y0, s: R(3, 9), vy: R(20, 45), vx: R(-6, 6), al: R(.35, .8), ph: R(0, 6.3) };
         const s = R(10, 30);
         return { t: "flake", sp: pick(sprites.flakes), x: R(0, fx.w), y: y0, s, vy: R(14, 30) + s * .8, vx: R(-8, 8), a: R(0, 6.3), va: R(-.7, .7), al: R(.6, 1), ph: R(0, 6.3) };
       }
-      if (kind === "spring") {
+      if (base === "spring") {
         if (type === "flower") { const s = R(26, 42); return { t: "petal", sp: pick(sprites.flowers), x: R(0, fx.w), y: y0, s, vy: R(18, 34), vx: R(4, 18), a: R(0, 6.3), va: R(-1, 1), flip: R(0, 6.3), fs: R(.6, 1.2), al: .95, ph: R(0, 6.3) }; }
         const s = R(15, 28);
         return { t: "petal", sp: pick(sprites.petals), x: R(-fx.w * .2, fx.w), y: y0, s, vy: R(22, 44), vx: R(10, 34), a: R(0, 6.3), va: R(-2.4, 2.4), flip: R(0, 6.3), fs: R(1.5, 3), al: R(.8, 1), ph: R(0, 6.3) };
       }
-      if (kind === "autumn") {
+      if (base === "autumn") {
         const s = R(20, 42);
         return { t: "leaf", sp: pick(sprites.leaves), x: R(0, fx.w), y: y0, s, vy: R(30, 62), vx: R(-14, 22), a: R(0, 6.3), va: R(-1.8, 1.8), flip: R(0, 6.3), fs: R(1, 2.2), al: R(.85, 1), ph: R(0, 6.3) };
       }
@@ -473,8 +618,18 @@
       spring: [["petal", 85], ["flower", 12]],
       autumn: [["leaf", 70]],
       summer: [["fly", 65], ["seed", 20], ["butterfly", 9]],
-    }[kind];
-    for (const [type, n] of plan) for (let i = 0; i < Math.round(n * area); i++) { const p = make(true, type); p.kindType = type; fx.parts.push(p); }
+      christmas: [["flake", 45], ["dot", 70], ["fall", 16]],
+      newyear: [["fall", 90], ["rocket", 3]],
+      valentine: [["rise", 34], ["petal", 30]],
+      easter: [["fall", 22], ["flower", 12], ["petal", 30]],
+      music: [["rise", 40], ["fly", 25]],
+      bastille: [["fall", 60], ["rocket", 4]],
+      holidays: [["rise", 7], ["fly", 40], ["butterfly", 6]],
+      halloween: [["bat", 10], ["fall", 10], ["rise", 5], ["leaf", 22]],
+    }[kind] || [];
+    const spawn = (initial, type) => { const p = make(initial, type); p.kindType = type; return p; };
+    for (const [type, n] of plan) for (let i = 0; i < (type === "rocket" ? n : Math.max(1, Math.round(n * area))); i++) fx.parts.push(spawn(true, type));
+    fx.sparks = [];
 
     function drawSprite(p, t) {
       const sx = p.flip !== undefined ? Math.cos(t * p.fs + p.flip) : 1;   // pétales et feuilles se retournent en tombant
@@ -508,7 +663,7 @@
           p.x += (p.vx + Math.sin(t * .8 + p.ph) * 12) * dt; p.y += p.vy * dt;
           const on = Math.max(0, Math.sin(t * p.sp2 + p.ph)) ** 2;
           if (on > .02) { ctx.globalAlpha = on; ctx.drawImage(sprites.fly.c, p.x - p.s, p.y - p.s, p.s * 2, p.s * 2); ctx.globalAlpha = 1; }
-          if (p.y < -30) { fx.parts[i] = make(false, "fly"); }
+          if (p.y < -30) { fx.parts[i] = spawn(false, "fly"); }
           continue;
         }
         if (p.t === "bfly") {   // papillons : vol en zigzag qui change de cap de temps en temps
@@ -518,22 +673,62 @@
           if (p.x < -40) p.x = fx.w + 30; if (p.x > fx.w + 40) p.x = -30; if (p.y < 20) p.vy = Math.abs(p.vy); if (p.y > fx.h - 20) p.vy = -Math.abs(p.vy);
           butterfly(p, t); continue;
         }
+        if (p.t === "rise") {   // cœurs, notes, fantômes, ballons : montent en se balançant
+          p.x += (p.vx + Math.sin(t * .9 + p.ph) * 22) * dt; p.y += p.vy * dt; p.a = Math.sin(t * .8 + p.ph) * .25;
+          drawSprite(p, t);
+          if (p.y < -60) fx.parts[i] = spawn(false, "rise");
+          continue;
+        }
+        if (p.t === "bat") {   // chauves-souris : vol en zigzag, ailes qui battent
+          p.turn -= dt;
+          if (p.turn <= 0) { p.turn = R(1, 3.5); p.vx = R(-70, 70); p.vy = R(-30, 30); }
+          p.x += (p.vx + Math.sin(t * 4 + p.ph) * 25) * dt; p.y += (p.vy + Math.cos(t * 3 + p.ph) * 20) * dt;
+          if (p.x < -40) p.x = fx.w + 30; if (p.x > fx.w + 40) p.x = -30; if (p.y < 20) p.vy = Math.abs(p.vy); if (p.y > fx.h * .85) p.vy = -Math.abs(p.vy);
+          const flap = Math.sin(t * 14 + p.ph), s = p.s;
+          ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = light ? "#2b1f3a" : "#3a2452"; ctx.shadowColor = "rgba(255, 140, 40, .55)"; ctx.shadowBlur = 8; ctx.globalAlpha = .95;
+          for (const side of [-1, 1]) {
+            ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(side * s * .6, -s * (.2 + .5 * flap), side * s * 1.2, -s * .1 * flap);
+            ctx.quadraticCurveTo(side * s * .9, s * .25, side * s * .7, s * .15); ctx.quadraticCurveTo(side * s * .5, s * .35, side * s * .3, s * .15); ctx.quadraticCurveTo(side * s * .15, s * .3, 0, s * .2); ctx.fill();
+          }
+          ctx.beginPath(); ctx.ellipse(0, s * .05, s * .16, s * .24, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.moveTo(-s * .12, -s * .12); ctx.lineTo(-s * .06, -s * .3); ctx.lineTo(0, -s * .14); ctx.lineTo(s * .06, -s * .3); ctx.lineTo(s * .12, -s * .12); ctx.fill();
+          ctx.restore(); continue;
+        }
+        if (p.t === "rocket") {   // feux d'artifice : de temps en temps, une gerbe d'étincelles quelque part en haut
+          p.wait -= dt;
+          if (p.wait <= 0) {
+            p.wait = R(1.2, 3.5);
+            const cx = R(fx.w * .1, fx.w * .9), cy = R(fx.h * .1, fx.h * .45), col = pick(sprites.fete.colors), n = Math.round(R(36, 60)), sp = R(90, 170);
+            for (let k = 0; k < n; k++) { const a = k * Math.PI * 2 / n + R(-.05, .05), v = sp * R(.75, 1.05); fx.sparks.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: R(1.1, 1.8), age: 0, col }); }
+          }
+          continue;
+        }
         if (p.t === "dot") {
           p.x += (p.vx + Math.sin(t * .7 + p.ph) * 8) * dt; p.y += p.vy * dt;
           ctx.globalAlpha = p.al; ctx.drawImage(sprites.dots[0].c, p.x - p.s / 2, p.y - p.s / 2, p.s, p.s); ctx.globalAlpha = 1;
-          if (p.y > fx.h + 10) fx.parts[i] = make(false, "dot");
+          if (p.y > fx.h + 10) fx.parts[i] = spawn(false, "dot");
           continue;
         }
         if (p.t === "seed") {
           p.x += (p.vx + Math.sin(t * .6 + p.ph) * 14) * dt; p.y += (p.vy + Math.cos(t * .9 + p.ph) * 6) * dt; p.a += p.va * dt;
           drawSprite(p, t);
-          if (p.y < -40 || p.x > fx.w + 40) fx.parts[i] = make(false, "seed");
+          if (p.y < -40 || p.x > fx.w + 40) fx.parts[i] = spawn(false, "seed");
           continue;
         }
         const sway = Math.sin(t * (p.t === "flake" ? .8 : 1.3) + p.ph) * (p.t === "flake" ? 14 : 34);
         p.x += (p.vx + sway) * dt; p.y += p.vy * dt; p.a += p.va * dt;
         drawSprite(p, t);
-        if (p.y > fx.h + 50 || p.x < -80 || p.x > fx.w + 80) fx.parts[i] = make(false, p.kindType === "flower" ? "flower" : p.t);
+        if (p.y > fx.h + 50 || p.x < -80 || p.x > fx.w + 80) fx.parts[i] = spawn(false, p.kindType || p.t);
+      }
+      if (fx.sparks.length) {   // étincelles des feux d'artifice : freinées, retombent, s'éteignent
+        ctx.globalCompositeOperation = "lighter";
+        for (let i = fx.sparks.length - 1; i >= 0; i--) {
+          const k = fx.sparks[i]; k.age += dt;
+          if (k.age >= k.life) { fx.sparks.splice(i, 1); continue; }
+          k.vx *= 1 - 1.4 * dt; k.vy = k.vy * (1 - 1.4 * dt) + 55 * dt; k.x += k.vx * dt; k.y += k.vy * dt;
+          ctx.fillStyle = `rgba(${k.col}, ${(1 - k.age / k.life).toFixed(3)})`; ctx.beginPath(); ctx.arc(k.x, k.y, 2.6, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalCompositeOperation = "source-over";
       }
     }
     fx.raf = requestAnimationFrame(frame);
@@ -793,7 +988,9 @@
     } catch (_) { /* hors ligne : on garde la copie locale */ }
   }
   let saveTimer = null, pendingProfile = {}, pendingGlobal = {};
-  function saveSettings(profilePatch, globalPatch) {
+  let quietSave = false;   // pas de « Réglages enregistrés » (bouton saison / fête : son propre message suffit)
+  function saveSettings(profilePatch, globalPatch, { quiet = false } = {}) {
+    quietSave = quiet;
     if (profilePatch) { Object.assign(settings.profile, profilePatch); Object.assign(pendingProfile, profilePatch); }
     if (globalPatch) { Object.assign(settings.global, globalPatch); Object.assign(pendingGlobal, globalPatch); }
     try { localStorage.setItem("bulle:profile", JSON.stringify(settings.profile)); } catch (_) { /* ignore */ }
@@ -807,7 +1004,8 @@
       try {
         const s = await putJson("/api/settings", body);
         settings.global = s.global; settings.meta = s; updateShroom(); updateAdultTab();
-        toast("Réglages enregistrés");
+        if (!quietSave) toast("Réglages enregistrés");
+        quietSave = false;
       } catch (e) { toast(`${ICON.warn} Réglage non enregistré : ${esc(e.message)}`); }
     }, 500);
   }
@@ -818,7 +1016,10 @@
     toastEl.innerHTML = html;
     toastEl.hidden = false;
     clearTimeout(toastTimer);
-    if (!sticky) toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3500);
+    // un message d'erreur (⚠) s'en va tout seul au bout de 5 s, même s'il était prévu pour rester ; les messages de
+    // progression (scan, résumés…) restent jusqu'à la fin de leur tâche
+    const error = html.startsWith(ICON.warn);
+    if (!sticky || error) toastTimer = setTimeout(() => { toastEl.hidden = true; }, error ? 5000 : 3500);
   }
 
   // ================================================================ cartes
@@ -934,7 +1135,8 @@
       if (!sub) line2 = esc(item.name);
     }
     const tip = item.meta && item.meta.summary ? ` title="${esc(item.meta.summary.length > 320 ? item.meta.summary.slice(0, 320) + "…" : item.meta.summary)}"` : "";
-    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
+    const linked = item.meta && item.meta.oneshot ? " os-linked" : "";   // one shot trouvé : trait bleu sous la couverture
+    return `<a class="card album${linked}" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
       ${coverHtml(item, badge + qualityBadge(item) + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>${item.meta ? `<button class="info sum" type="button" data-sum="${item.id}" title="Résumé" aria-label="Résumé">…</button>` : ""}`)}
       <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;
@@ -1432,8 +1634,9 @@
     const cacheLine = cache.total != null ? `pages ${fmtSize(cache.pages)} · couvertures ${fmtSize(cache.covers)} · archives décompressées ${fmtSize(cache.extract)}` : "—";
     const sections = {
       look: () => `
-        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["ocean", "Aquarium (grand bleu, poissons, bulles qui éclatent)"], ["stars", "Nuit étoilée (bleu nuit qui respire, étoiles filantes)"], ["riso", "Fanzine (papier, deux encres risographie, scotch, tampons)"], ["seasons", "Quatre saisons (suit la date : pétales, lucioles, feuilles mortes, neige)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
+        ${field("Habillage", sel("p", "skin", [["bd", "Bande dessinée (ligne claire : contours, bulles, lettrage)"], ["bling", "Bling-bling (noir et or, paillettes)"], ["girly", "Girly (rose pastel, cœurs, tout en rondeur)"], ["ocean", "Aquarium (grand bleu, poissons, bulles qui éclatent)"], ["stars", "Nuit étoilée (bleu nuit qui respire, étoiles filantes)"], ["riso", "Fanzine (papier, deux encres risographie, scotch, tampons)"], ["seasons", "Quatre saisons (suit la date : pétales, lucioles, feuilles mortes, neige)"], ["fetes", "Fêtes (suit le calendrier : jour de l'an, Saint-Valentin, Pâques, fête de la musique, 14 juillet, vacances, Halloween, Noël)"], ["sobre", "Sobre"]], p.skin), "Pour tout le site ; le lecteur reste sobre.")}
         ${field("Thème", sel("p", "theme", [["dark", "Sombre"], ["light", "Clair"], ["auto", "Comme l'appareil"]], p.theme))}
+        ${p.skin === "fetes" ? field("Fête", sel("p", "fete", [["auto", `Selon la date (${currentFete().now ? "en ce moment" : "la prochaine"} : ${FETES[currentFete().key].label})`], ...FETE_ORDER.map(k => [k, `${FETES[k].emoji} ${FETES[k].label}`])], p.fete || "auto"), "Habillage Fêtes : couleurs et décor de la fête (le bouton à côté du champignon les fait défiler). Entre deux fêtes, c'est la prochaine qui s'affiche.") : ""}
         ${p.skin === "seasons" ? field("Saison", sel("p", "season", [["auto", `Selon la date (en ce moment : ${SEASON_LABEL[currentSeason()]})`], ["spring", "Printemps (pétales)"], ["summer", "Été (lucioles)"], ["autumn", "Automne (feuilles mortes)"], ["winter", "Hiver (neige)"]], p.season || "auto"), "Habillage Quatre saisons : couleurs et ce qui flotte dans l'air changent avec la saison.") : ""}
         ${field("Réglages : présentation", sel("p", "settings_layout", [["tabs", "Signets (une rubrique à la fois)"], ["bricks", "Briques (tout sur une page)"]], p.settings_layout), "Cette page.")}
         ${field("Style des pochettes", sel("p", "cover_style", [["book", "Livre (dos, tranche, bordure colorée, piles pour les séries)"], ["glow", "Halo coloré"], ["flat", "Simple"]], p.cover_style), "La couleur vient de la couverture elle-même.")}
@@ -1860,7 +2063,7 @@
       ${custom.length ? `<div class="mrow" style="padding-top:4px;border-top:0"><span class="muted" style="font-weight:500;font-size:13px">Mes listes</span></div>
         <div class="mgrid">${custom.slice(0, 8).map(l => tile(`#/list/${l.id}`, SVG.lists, esc(l.name), `title="${esc(l.name)}"`)).join("")}</div>` : ""}
       <div class="mrow"><span>Qualité des albums</span><span class="right">${["all", "hd", "sd"].map(k => `<button type="button" data-more-quality="${k}" class="${q === k ? "on" : ""}">${k === "all" ? "Tout" : k.toUpperCase()}</button>`).join("")}</span></div>
-      ${skinSeasons ? `<div class="mrow"><span>Saison</span><span class="right"><button type="button" data-more="season">${SEASON_EMOJI[["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason()]} Changer</button></span></div>` : ""}
+      ${skinSeasons ? `<div class="mrow"><span>${feteMode() ? "Fête" : "Saison"}</span><span class="right"><button type="button" data-more="season">${feteMode() ? (FETES[document.documentElement.dataset.season] || FETES.christmas).emoji : SEASON_EMOJI[["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason()]} Changer</button></span></div>` : ""}
       ${isAdmin() ? `<button class="mrow" type="button" data-more="scan">${SVG.scan}<span>Rechercher les nouveaux albums</span></button>` : ""}
       ${shroom && !shroom.hidden ? `<button class="mrow" type="button" data-more="lab">${SVG.lab}<span>Le laboratoire (BDConverter)</span></button>` : ""}
     </div>`;
