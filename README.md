@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.33.0)
+# Bulle — lecteur de BD maison (v0.33.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,13 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- One shots : bouton **« 📚 Tome d'une série »** sur la ligne d'un album qui n'est pas un one shot mais le tome d'une
+  série : il est mis de côté (plus cherché ici), rangé dans « tomes de série mis de côté » avec « remettre ». Le
+  bouton du haut s'appelle maintenant « Tout le dossier est une série » (il concerne tout le dossier, pas un album).
+- **Recherche par auteur** : la barre de recherche trouve aussi les albums par leurs auteurs (scénario, dessin,
+  couleurs), sans accents ni majuscules, dans l'ordre qu'on veut (« van hamme », « moebius », « mourier jean »). Les
+  résultats sont regroupés par auteur, en tête de page. Seuls les albums liés à Bédéthèque (ou BDfugue) dont les
+  auteurs sont connus sont concernés : pour une série, bouton « Auteurs et détails » du panneau Bédéthèque.
 - **Habillage Fêtes** (Réglages › Apparence › Habillage) : couleurs et décor de la fête du calendrier, avec ce qui
   flotte dans l'air : jour de l'an (confettis et feux d'artifice), Saint-Valentin (cœurs qui montent), Pâques (œufs
   décorés et fleurs), fête de la musique (notes), 14 juillet (feux d'artifice bleu-blanc-rouge), grandes vacances

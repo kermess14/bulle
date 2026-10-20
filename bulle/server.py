@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.33.0"
+VERSION = "0.33.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -671,7 +671,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         albums = [c for c in children if c["kind"] == "album"]
         rows = lib.bdt_oneshots_for(folder["id"])
         metas = lib.bdt_albums_for_folder(folder["id"])
-        counts = {"ok": 0, "ambiguous": 0, "not_found": 0, "skip": 0, "todo": 0, "total": len(albums), "incomplete": 0}
+        counts = {"ok": 0, "ambiguous": 0, "not_found": 0, "skip": 0, "series": 0, "todo": 0, "total": len(albums), "incomplete": 0}
         items = []
         for a in albums:
             r = rows.get(a["id"])
@@ -682,7 +682,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if st in ("ambiguous", "not_found"):
                 items.append({"id": a["id"], "name": a["name"], "status": st, "query": r.get("query"),
                               "candidates": r.get("candidates") or []})
-            elif st == "skip":
+            elif st in ("skip", "series"):
                 items.append({"id": a["id"], "name": a["name"], "status": st})
             elif st == "ok":
                 items.append({"id": a["id"], "name": a["name"], "status": st, "series_title": r.get("series_title"),
@@ -887,7 +887,17 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         q = (request.args.get("q") or "").strip()
         if len(q) < 2:
             return jsonify([])
-        return jsonify(with_folder(lib.search(q, profile_id=current_profile())))
+        res = with_folder(lib.search(q, profile_id=current_profile()))
+        # et par auteur (albums liés à Bédéthèque ou BDfugue : scénario, dessin, couleurs)
+        raw = lib.search_authors(q, profile_id=current_profile())
+        by = {r["id"]: r["by"] for r in raw}
+        for a in res:
+            if a["id"] in by:
+                a["by"] = by.pop(a["id"])
+        extra = with_folder([r for r in raw if r["id"] in by])
+        for a in extra:
+            a["by"] = by[a["id"]]
+        return jsonify(res + extra)
 
     # ------------------------------------------------------------------ API : réglages, profils, cache
     @app.route("/api/settings", methods=["GET"])
@@ -2038,7 +2048,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         albums = [c for c in lib.children(folder["id"]) if c["kind"] == "album"]
         done = lib.bdt_oneshots_for(folder["id"])
         # un album « pas sur Bédéthèque » (écarté à la main) n'est plus jamais cherché, même en relançant tout
-        todo = [a for a in albums if (force or a["id"] not in done) and (done.get(a["id"]) or {}).get("status") != "skip"]
+        todo = [a for a in albums if (force or a["id"] not in done) and (done.get(a["id"]) or {}).get("status") not in ("skip", "series")]
         # albums liés à leur série mais sans fiche d'album (auteurs, résumé) : la page de la série est relue,
         # depuis le cache la plupart du temps (pas de requête), pour y retrouver l'album
         metas = lib.bdt_albums_for_folder(folder["id"])
@@ -2168,10 +2178,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/bdt/oneshot/<int:node_id>/skip", methods=["POST"])
     def api_bdt_oneshot_skip(node_id: int):
-        """« Pas sur Bédéthèque » : l'album n'est plus proposé ni cherché (« remettre » l'annule)."""
+        """« Pas sur Bédéthèque » (ou « album d'une série », body {"why": "series"}) : l'album est mis de côté, plus
+        proposé ni cherché (« remettre » l'annule)."""
         require_admin()
         album = get_node(node_id, "album")
-        lib.bdt_oneshot_set(node_id, album["parent_id"], "skip")
+        body = request.get_json(force=True, silent=True) or {}
+        lib.bdt_oneshot_set(node_id, album["parent_id"], "series" if body.get("why") == "series" else "skip")
         return jsonify(None)
 
     @app.route("/api/bdt/oneshot/<int:node_id>", methods=["DELETE"])
@@ -2374,7 +2386,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             mode = modes.get(f["id"]) or ("oneshots" if is_oneshot_name(f["name"]) else "series")
             if mode == "oneshots":
                 c = counts.get(f["id"], {"ok": 0, "ambiguous": 0, "not_found": 0})
-                done = c["ok"] + c["ambiguous"] + c["not_found"] + c.get("skip", 0)
+                done = c["ok"] + c["ambiguous"] + c["not_found"] + c.get("skip", 0) + c.get("series", 0)
                 oneshots.append({"folder_id": f["id"], "folder_name": f["name"], "total": f["direct"], **c,
                                  "todo": max(0, f["direct"] - done)})
                 if done < f["direct"]:

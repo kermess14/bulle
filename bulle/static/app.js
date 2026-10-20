@@ -1317,12 +1317,13 @@
   /* Dossier de one shots : chaque album est sa propre série sur Bédéthèque. */
   function oneshotsPanelHtml(data) {
     const o = data.bdt_oneshots, c = o.counts, fid = data.folder.id;
-    const done = c.ok + c.ambiguous + c.not_found + (c.skip || 0), pct = c.total ? Math.round(done / c.total * 100) : 0;
+    const done = c.ok + c.ambiguous + c.not_found + (c.skip || 0) + (c.series || 0), pct = c.total ? Math.round(done / c.total * 100) : 0;
     const amb = o.albums.filter(a => a.status === "ambiguous"), nf = o.albums.filter(a => a.status === "not_found"), ok = o.albums.filter(a => a.status === "ok");
-    const skipped = o.albums.filter(a => a.status === "skip");
+    const skipped = o.albums.filter(a => a.status === "skip"), aside = o.albums.filter(a => a.status === "series");
     const admin = isAdmin();
     const other = a => admin ? `<button class="btn mini" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Chercher cet album sur Bédéthèque : autre titre, homonymes, ou adresse de la fiche">Chercher…</button>
-      <button class="btn mini os-skip" type="button" data-bdt="os-skip" data-album="${a.id}" title="Cet album n'existe pas sur Bédéthèque : l'enlever de la liste (il ne sera plus cherché ; « remettre » plus bas pour annuler)">✕ Pas sur Bédéthèque</button>` : "";
+      <button class="btn mini os-skip" type="button" data-bdt="os-skip" data-album="${a.id}" title="Cet album n'existe pas sur Bédéthèque : l'enlever de la liste (il ne sera plus cherché ; « remettre » plus bas pour annuler)">✕ Pas sur Bédéthèque</button>
+      <button class="btn mini os-skip" type="button" data-bdt="os-aside" data-album="${a.id}" title="Cet album n'est pas un one shot mais le tome d'une série : le mettre de côté (il ne sera plus cherché ici ; à ranger dans le dossier de sa série ; « remettre » plus bas pour annuler)">📚 Tome d'une série</button>` : "";
     // petite couverture de l'album à droite de son nom ; agrandie au survol (pour la comparer aux propositions)
     const kids = new Map((data.children || []).map(ch => [ch.id, ch]));
     const thumb = a => { const ch = kids.get(a.id) || { id: a.id, kind: "album", mtime: 0 };
@@ -1336,7 +1337,7 @@
         <span class="bdt-logo">BD</span>
         <div class="bdt-main">
           <div><b>One shots</b> · chaque album est cherché sur Bédéthèque comme sa propre série</div>
-          <div class="bdt-progress"><span>${plural(c.ok, "trouvé", "trouvés")} · ${c.ambiguous} à choisir · ${plural(c.not_found, "introuvable", "introuvables")}${c.skip ? ` · ${plural(c.skip, "écarté", "écartés")}` : ""}${c.todo ? ` · <b>${c.todo} pas encore cherchés</b>` : ""}${c.incomplete ? ` · ${plural(c.incomplete, "fiche à compléter", "fiches à compléter")}` : ""}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
+          <div class="bdt-progress"><span>${plural(c.ok, "trouvé", "trouvés")} · ${c.ambiguous} à choisir · ${plural(c.not_found, "introuvable", "introuvables")}${c.skip ? ` · ${plural(c.skip, "écarté", "écartés")}` : ""}${c.series ? ` · ${plural(c.series, "tome de série mis de côté", "tomes de série mis de côté")}` : ""}${c.todo ? ` · <b>${c.todo} pas encore cherchés</b>` : ""}${c.incomplete ? ` · ${plural(c.incomplete, "fiche à compléter", "fiches à compléter")}` : ""}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
           <div id="os-job" class="muted">${o.running ? `<div class="spinner" style="margin:0;display:inline-block;vertical-align:middle;width:14px;height:14px"></div> Recherche en cours…` : ""}</div>
         </div>
         <div class="bdt-actions">
@@ -1344,12 +1345,13 @@
             : c.todo ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Une requête Bédéthèque par album trouvé, au rythme prudent habituel, en tâche de fond">Chercher les ${c.todo} albums</button>`
             : c.incomplete ? `<button class="btn primary" type="button" data-bdt="analyze" data-folder="${fid}" title="Ces albums sont liés à leur série mais leur fiche (auteurs, éditeur, résumé) n'a pas été lue : la page de la série est relue, le plus souvent depuis la mémoire de Bulle, sans requête">Compléter ${plural(c.incomplete, "fiche", "fiches")}</button>` : ""}
           ${c.ok && admin ? `<button class="btn" type="button" data-bdt="summaries" data-folder="${fid}" title="Lire le début du résumé de chaque album trouvé (une page Bédéthèque par album, en tâche de fond)">Résumés</button>` : ""}
-          ${admin && !o.running ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="series" data-folder="${fid}" title="Traiter ce dossier comme une seule série">C'est une série</button>` : ""}
+          ${admin && !o.running ? `<button class="btn" type="button" data-bdt="os-mode" data-mode="series" data-folder="${fid}" title="Tout ce dossier est une seule série (pas un album en particulier : pour un album, bouton « 📚 Tome d'une série » sur sa ligne)">Tout le dossier est une série</button>` : ""}
         </div>
       </div>
       ${amb.length && admin ? `<details class="os-sec" open><summary>${plural(amb.length, "album à choisir", "albums à choisir")} : plusieurs séries possibles</summary>${ambHtml}</details>` : ""}
       ${nf.length && admin ? `<details class="os-sec"${amb.length ? "" : " open"}><summary>${plural(nf.length, "album introuvable", "albums introuvables")} sous ce titre</summary>${nfHtml}</details>` : ""}
       ${ok.length ? `<details class="os-sec"><summary>${plural(ok.length, "album trouvé", "albums trouvés")}</summary><ul class="os-ok">${okHtml}</ul></details>` : ""}
+      ${aside.length && admin ? `<details class="os-sec"><summary>${plural(aside.length, "tome de série mis de côté", "tomes de série mis de côté")} (à ranger dans le dossier de leur série)</summary><ul class="os-ok">${aside.map(a => `<li><span>${esc(a.name)}</span> <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Le remettre dans les albums à chercher">remettre</button></li>`).join("")}</ul></details>` : ""}
       ${skipped.length && admin ? `<details class="os-sec"><summary>${plural(skipped.length, "album écarté", "albums écartés")} (pas sur Bédéthèque)</summary><ul class="os-ok">${skipped.map(a => `<li><span>${esc(a.name)}</span> <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Le remettre dans les albums à chercher">remettre</button></li>`).join("")}</ul></details>` : ""}
     </div>`;
   }
@@ -1401,13 +1403,19 @@
         return;
       }
       if (action === "os-mode") {
-        if (el.dataset.mode === "series" && !confirm("Traiter ce dossier comme une seule série ? Les liens trouvés pour chaque album seront oubliés.")) return;
+        if (el.dataset.mode === "series" && !confirm("TOUT ce dossier est une seule série ? Les liens trouvés pour TOUS ses albums seront oubliés.\n\n(Pour un seul album qui est le tome d'une série, annulez et utilisez le bouton « 📚 Tome d'une série » sur sa ligne.)")) return;
         await api(`/api/bdt/mode/${folderId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: el.dataset.mode }) });
         toast(el.dataset.mode === "oneshots" ? "Dossier de one shots : chaque album sera cherché à part" : "Dossier traité comme une série");
         route(); return;
       }
       if (action === "os-stop") { await api("/api/bdt/batch", { method: "DELETE" }); toast("Arrêt demandé (après l'album en cours)"); return; }
       if (action === "os-forget") { await api(`/api/bdt/oneshot/${el.dataset.album}`, { method: "DELETE" }); route(); return; }
+      if (action === "os-aside") {
+        await api(`/api/bdt/oneshot/${el.dataset.album}/skip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ why: "series" }) });
+        const y = window.scrollY; await route(); window.scrollTo(0, y);
+        toast("Mis de côté : tome d'une série, il n'est plus cherché ici (« remettre » dans « tomes de série mis de côté » pour annuler)");
+        return;
+      }
       if (action === "os-skip") {
         await api(`/api/bdt/oneshot/${el.dataset.album}/skip`, { method: "POST" });
         const y = window.scrollY; await route(); window.scrollTo(0, y);
@@ -1591,9 +1599,18 @@
     document.title = `« ${q} » — Bulle`;
     main.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
     const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
-    if (!res.length) { main.innerHTML = `<div class="empty"><strong>Rien trouvé pour « ${esc(q)} »</strong><p>La recherche ignore les accents et les majuscules et porte sur les noms des dossiers et des fichiers.</p></div>`; return; }
-    const folders = qf(res).filter(r => r.kind === "folder"), albums = qf(res).filter(r => r.kind === "album");
+    if (!res.length) { main.innerHTML = `<div class="empty"><strong>Rien trouvé pour « ${esc(q)} »</strong><p>La recherche ignore les accents et les majuscules et porte sur les noms des dossiers et des fichiers, et sur les auteurs des albums liés à Bédéthèque.</p></div>`; return; }
+    const all = qf(res);
+    const byAuthor = all.filter(r => r.kind === "album" && r.by && r.by.length);
+    const folders = all.filter(r => r.kind === "folder"), albums = all.filter(r => r.kind === "album" && !(r.by && r.by.length));
     let html = "";
+    if (byAuthor.length) {
+      // regroupés par auteur : « Jean Van Hamme (scénario) — 12 albums »
+      const groups = new Map();
+      for (const a of byAuthor) { const k = a.by[0]; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(a); }
+      html += `<h2>Par auteur <small class="muted">${byAuthor.length}</small></h2>`;
+      for (const [who, list] of groups) html += `<h3 class="byauthor">${esc(who)} <small class="muted">${plural(list.length, "album", "albums")}</small></h3><div class="grid">${list.map(a => card(a, { sub: a.folder })).join("")}</div>`;
+    }
     if (folders.length) html += `<h2>Séries / dossiers <small class="muted">${folders.length}</small></h2><div class="grid">${folders.map(f => card(f, {})).join("")}</div>`;
     if (albums.length) html += `<h2>Albums <small class="muted">${albums.length}</small></h2><div class="grid">${albums.map(a => card(a, { sub: a.folder })).join("")}</div>`;
     main.innerHTML = html;
