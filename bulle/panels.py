@@ -29,12 +29,13 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 10       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 11       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
 PARTIAL_GUTTER = 0.55     # gouttière « barrée » (bulle, cartouche ou décor qui déborde dessus) : lignes candidates…
 PARTIAL_MIN = 0.6         # … part de fond minimale sur toute l'épaisseur…
+PARTIAL_MIN_PX = 4        # … épaisseur minimale en pixels (à la largeur de travail)
 PARTIAL_MAX = 0.05        # … épaisseur maximale (fraction de la longueur coupée)…
 EDGE_ALIGN = 0.8          # … et part de ses colonnes de fond bordées de dessin des deux côtés (bords de cases rectilignes)
 BG_TOLERANCE = 46         # écart de gris toléré autour de la couleur de fond
@@ -218,9 +219,14 @@ def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: in
         if sa is not None and sb - sa >= min_gutter:
             cuts.append((sa, sb))
             continue
-        if b - a > max(min_gutter, PARTIAL_MAX * length):
-            continue
+        if b - a > max(min_gutter, PARTIAL_MAX * length) or b - a < PARTIAL_MIN_PX:
+            continue   # (trop mince : un trait clair du décor, une ligne de plafond, pas une gouttière)
         frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, a, b, blockers=True)
+        if not blocked_ok:
+            # les bords de la bande sont parfois mordus par le trait de cadre (anticrénelage) : on regarde son cœur
+            core = [i for i in range(a, b) if prof[i] >= 0.9]
+            if len(core) >= PARTIAL_MIN_PX - 1 and core[-1] - core[0] + 1 == len(core):
+                f2, u2, d2, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
         if frac >= PARTIAL_MIN and up >= EDGE_ALIGN and down >= EDGE_ALIGN and blocked_ok:
             if _text_strip(mask, box, axis, a, b, length):
                 continue
@@ -347,14 +353,36 @@ def _edges(ink: Image.Image) -> tuple[bytes, bytes]:
     return top.tobytes(), bottom.tobytes()
 
 
-def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: int, h: int) -> list[tuple]:
+def _join_segments(items: list[tuple[int, int, int]], gap: int) -> list[tuple[int, int, int]]:
+    """Bords d'un même trait coupés en morceaux (une bulle posée sur le cadre, une lettre qui le touche) : les morceaux
+    alignés (à 2 px près) et séparés de moins de `gap` sont réunis en un seul bord, pour chercher les rectangles. La
+    couverture de chaque côté reste mesurée sur les vrais morceaux."""
+    out: list[tuple[int, int, int]] = []
+    for p, s0, s1 in sorted(items, key=lambda t: (t[1], t[0])):
+        for i, (q, a, b) in enumerate(out):
+            if abs(q - p) <= 2 and s0 <= b + gap and s1 >= a - gap:
+                out[i] = (q, min(a, s0), max(b, s1))
+                break
+        else:
+            out.append((p, s0, s1))
+    return out + list(items)
+
+
+def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: int, h: int, cov: float = 0.85,
+                      join: int = 0) -> list[tuple]:
     """Rectangles fermés : bord haut, bord bas, bord gauche, bord droit, chacun couvrant ≥ 85 % de son côté (à FRAME_TOL près).
     On part des paires de bords verticaux (gauche/droite), puis des paires horizontaux (haut/bas) : une bulle qui coupe un trait
     ne l'empêche pas d'être reconnu, ses morceaux s'additionnent."""
     min_w, min_h = FRAME_MIN_W * w, FRAME_MIN_H * h
-    COV = 0.85
+    COV = cov
     found: list[tuple] = []
+    if join:
+        pairs_src = [_join_segments(list(x), join) for x in (tops, bottoms, lefts, rights)]
     tops, bottoms, lefts, rights = (x if isinstance(x, _Segs) else _Segs(x) for x in (tops, bottoms, lefts, rights))
+    if join:
+        p_tops, p_bottoms, p_lefts, p_rights = pairs_src
+    else:
+        p_tops, p_bottoms, p_lefts, p_rights = tops, bottoms, lefts, rights
     budget = [FRAME_BUDGET]
 
     def spent() -> bool:
@@ -366,10 +394,10 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
         return {p for p, s0, s1 in segs if s1 > a and s0 < b}
 
     # 1) paires gauche / droite
-    for lx, ly0, ly1 in lefts:
+    for lx, ly0, ly1 in p_lefts:
         if spent():
             break
-        for rx, ry0, ry1 in rights:
+        for rx, ry0, ry1 in p_rights:
             if rx - lx < min_w:
                 continue
             y0, y1 = max(ly0, ry0), min(ly1, ry1)
@@ -389,10 +417,10 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
                         continue
                     found.append((lx, ty, rx + 1, by + 1))
     # 2) paires haut / bas
-    for ty, tx0, tx1 in tops:
+    for ty, tx0, tx1 in p_tops:
         if spent():
             break
-        for by, bx0, bx1 in bottoms:
+        for by, bx0, bx1 in p_bottoms:
             if by - ty < min_h:
                 continue
             x0, x1 = max(tx0, bx0), min(tx1, bx1)
@@ -503,7 +531,8 @@ def detect_boxes(mask: Image.Image) -> list[tuple]:
     left, right = _edges(content.transpose(Image.Transpose.TRANSPOSE))
     min_h, min_v = max(8, int(FRAME_MIN_LEN * w)), max(8, int(FRAME_MIN_LEN * h * 0.7))
     rects = _rects_from_edges(_edge_segments(top, w, h, min_h), _edge_segments(bottom, w, h, min_h),
-                              _edge_segments(left, h, w, min_v), _edge_segments(right, h, w, min_v), w, h)
+                              _edge_segments(left, h, w, min_v), _edge_segments(right, h, w, min_v), w, h,
+                              join=max(20, w // 20))
     # une case est surtout du dessin ; un cartouche ou une bulle (intérieur clair, couleur du fond) n'en est pas une
     from PIL import ImageStat
     return [r for r in rects if ImageStat.Stat(mask.crop(r)).mean[0] <= 0.45 * 255]
@@ -1182,7 +1211,14 @@ def detect_panels(img: Image.Image) -> dict:
             out.extend(parts)
         return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 
-    ltr = leaves(False)
+    def flat_sliver(b: tuple) -> bool:
+        """Bande étroite collée au bord de la page : le fond de la planche qui dépasse à côté d'une case, pas une case."""
+        bw_, bh_ = b[2] - b[0], b[3] - b[1]
+        narrow = (bw_ < 0.15 * w and (b[0] <= 3 or b[2] >= w - 3)) or (bh_ < 0.08 * h and (b[1] <= 3 or b[3] >= h - 3))
+        # d'une seule teinte, ou surtout du fond (marge de la page prise avec un bout de décor)
+        return narrow and (ImageStat.Stat(gray.crop(b)).stddev[0] < 14 or ImageStat.Stat(mask.crop(b)).mean[0] >= 0.7 * 255)
+
+    ltr = [b for b in leaves(False) if not flat_sliver(b)]
     empty = {"panels": [], "rtl": [], "v": PANELS_VERSION}
     if len(ltr) < 2:
         return empty
@@ -1190,7 +1226,7 @@ def detect_panels(img: Image.Image) -> dict:
         return empty
     if sum(_area(b) for b in ltr) < 0.35 * page_area:
         return empty   # couverture, page de titre, crédits : quelques blocs isolés sur du vide, pas des cases
-    rtl = leaves(True)
+    rtl = [b for b in leaves(True) if not flat_sliver(b)]
     pad_x, pad_y = PAD * w, PAD * h
 
     def rel(b: tuple) -> list[float]:
