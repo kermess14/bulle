@@ -29,7 +29,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 11       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 12       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
@@ -153,6 +153,12 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
     # ce qui barre la gouttière doit être une bulle ou un cartouche : au milieu, et court. Un obstacle qui touche un bout
     # de la bande est une case qui la traverse (grande case sur deux rangées) : alors ce n'est pas une gouttière.
     end = max(2, round(0.03 * w))
+    # part de fond dans la bande, colonne par colonne : un cartouche (lettres sur du blanc) en garde beaucoup, une case
+    # dessinée qui traverse presque pas
+    mean = [0] * w
+    for y in range(a, b):
+        row = data[y * w:(y + 1) * w]
+        mean = [m + (v == 255) for m, v in zip(mean, row)]
     ok, i = True, 0
     big = 0
     while i < w:
@@ -161,8 +167,9 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
             while j < w and band[j] != 255:
                 j += 1
             at_end = i < end or j > w - end
-            big += (j - i) > 0.1 * w
-            if j - i > (0.12 if at_end else 0.25) * w or big > 1:   # deux gros obstacles : des cases qui traversent
+            caption = not at_end and sum(mean[i:j]) >= 0.5 * (j - i) * (b - a)
+            big += (j - i) > 0.1 * w and not caption
+            if j - i > (0.12 if at_end else 0.4 if caption else 0.25) * w or big > 1:   # deux gros obstacles : des cases qui traversent
                 ok = False
                 break
             i = j
@@ -183,6 +190,28 @@ def _text_strip(mask: Image.Image, box: tuple, axis: int, a: int, b: int, length
         if whole and ImageStat.Stat(mask.crop(side)).mean[0] >= 0.55 * 255:
             return True
     return False
+
+
+def _walled(mask: Image.Image, box: tuple, axis: int, a: int, b: int) -> bool:
+    """La bande blanche [a, b) est-elle fermée aux deux bouts par un trait continu (le cadre d'une case qui la traverse) ?
+    C'est alors l'intérieur d'une bulle ou d'un ciel blanc, coupé par le cadre de la case, pas une gouttière : une vraie
+    gouttière reste ouverte à ses bouts (elle rejoint la marge ou une autre gouttière)."""
+    x0, y0, x1, y1 = box
+    band = (x0, y0 + a, x1, y0 + b) if axis == 0 else (x0 + a, y0, x0 + b, y1)
+    cols = _profile(mask, band, 1 - axis)   # part de fond dans chaque colonne de la bande (en travers)
+    if len(cols) < 12:
+        return False
+    def wall(seq) -> bool:
+        return any(v <= 0.2 for v in seq)
+    # (au bord même de la page, un trait sombre est un défaut de numérisation, pas un cadre)
+    lo_edge, hi_edge = (x0, x1) if axis == 0 else (y0, y1)
+    size = mask.width if axis == 0 else mask.height
+    if not (lo_edge > 1 and hi_edge < size - 1 and wall(cols[:4]) and wall(cols[-4:])):
+        return False
+    # une gouttière entre deux cases est bordée de leurs bords (du dessin juste au-dessus et juste au-dessous sur presque
+    # toute sa longueur), même quand le cadre d'une case voisine la ferme à un bout ; le blanc d'une bulle non
+    _, up, down = _edge_ratios(mask, box, axis, a, b)
+    return min(up, down) < 0.5
 
 
 def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: int) -> list[tuple]:
@@ -217,7 +246,8 @@ def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: in
             else:
                 i += 1
         if sa is not None and sb - sa >= min_gutter:
-            cuts.append((sa, sb))
+            if not _walled(mask, box, axis, sa, sb):
+                cuts.append((sa, sb))
             continue
         if b - a > max(min_gutter, PARTIAL_MAX * length) or b - a < PARTIAL_MIN_PX:
             continue   # (trop mince : un trait clair du décor, une ligne de plafond, pas une gouttière)
@@ -227,6 +257,12 @@ def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: in
             core = [i for i in range(a, b) if prof[i] >= 0.9]
             if len(core) >= PARTIAL_MIN_PX - 1 and core[-1] - core[0] + 1 == len(core):
                 f2, u2, d2, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
+        elif frac < PARTIAL_MIN:
+            # une colonne d'anticrénelage au bord de la bande (moins claire que la gouttière) : la bande sans elle
+            top = max(prof[a:b])
+            core = [i for i in range(a, b) if prof[i] >= top - 0.08]
+            if len(core) >= PARTIAL_MIN_PX and core[-1] - core[0] + 1 == len(core) and len(core) < b - a:
+                frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
         if frac >= PARTIAL_MIN and up >= EDGE_ALIGN and down >= EDGE_ALIGN and blocked_ok:
             if _text_strip(mask, box, axis, a, b, length):
                 continue
@@ -1152,6 +1188,73 @@ def text_bridges(img: Image.Image, gray: Image.Image, mask: Image.Image, boxes: 
     return join, grown
 
 
+BUBBLE_REACH = 0.3        # une bulle qui dépasse du cadre : on élargit la case d'au plus 30 % de sa taille…
+BUBBLE_PAGE = 0.06        # … et d'au plus 6 % de la page
+
+
+def overflow_grow(mask: Image.Image, boxes: list[tuple], grown: dict) -> dict:
+    """Élargit une case pour montrer en entier une bulle (ou un cartouche) qui dépasse un peu de son cadre dans la
+    gouttière : la vue se dézoome juste ce qu'il faut. On cherche, le long de chaque côté, ce qui traverse le bord ;
+    ce morceau doit s'arrêter dans la gouttière (sinon c'est la case voisine) et être surtout clair (l'intérieur blanc
+    d'une bulle, pas du dessin)."""
+    w, h = mask.size
+    out = dict(grown)
+    for k, b in enumerate(boxes):
+        cur = list(out.get(k, b))
+        changed = False
+        for side in range(4):
+            horiz = side in (1, 3)              # 1 : haut, 3 : bas (des lignes) ; 0 : gauche, 2 : droite (des colonnes)
+            dim = (b[3] - b[1]) if horiz else (b[2] - b[0])
+            limit = round(min(BUBBLE_REACH * dim, BUBBLE_PAGE * (h if horiz else w)))
+            if limit < 4:
+                continue
+            x0, y0, x1, y1 = cur
+            strip = {0: (x0 - limit, y0, x0, y1), 1: (x0, y0 - limit, x1, y0),
+                     2: (x1, y0, x1 + limit, y1), 3: (x0, y1, x1, y1 + limit)}[side]
+            if strip[0] < 0 or strip[1] < 0 or strip[2] > w or strip[3] > h:
+                continue
+            reg = mask.crop(strip)
+            # ligne 0 = la plus proche du cadre, colonnes = le long du bord
+            reg = {0: lambda r: r.transpose(Image.Transpose.ROTATE_90), 1: lambda r: r.transpose(Image.Transpose.FLIP_TOP_BOTTOM),
+                   2: lambda r: r.transpose(Image.Transpose.ROTATE_270), 3: lambda r: r}[side](reg)
+            n, L = reg.size
+            d = reg.tobytes()
+            cross = [c for c in range(n) if not d[c] or not d[n + c]]
+            segs, cs = [], []
+            for c in cross:
+                if cs and c - cs[-1] > 3:
+                    segs.append((cs[0], cs[-1] + 1)); cs = []
+                cs.append(c)
+            if cs:
+                segs.append((cs[0], cs[-1] + 1))
+            reach = 0
+            for s0, s1 in segs:
+                if s1 - s0 < 6 or s1 - s0 > 0.6 * n:
+                    continue
+                m = max(3, (s1 - s0) // 4)
+                lo, hi = max(0, s0 - m), min(n, s1 + m)
+                depth = None
+                for r in range(L):
+                    if all(d[r * n + c] for c in range(lo, hi)):
+                        depth = r
+                        break
+                if depth is None or depth < 3:
+                    continue   # ne s'arrête pas avant la case voisine, ou trop peu pour compter
+                light = sum(1 for r in range(depth) for c in range(s0, s1) if d[r * n + c]) / (depth * (s1 - s0))
+                if light >= 0.45:
+                    reach = max(reach, depth)
+            if not reach:
+                continue
+            new = list(cur)
+            new[side] = cur[side] - reach if side in (0, 1) else cur[side] + reach
+            if any(j != k and _inter(tuple(new), o) > _inter(tuple(cur), o) + 0.02 * _area(o) for j, o in enumerate(boxes)):
+                continue
+            cur, changed = new, True
+        if changed:
+            out[k] = tuple(cur)
+    return out
+
+
 def detect_panels(img: Image.Image) -> dict:
     """Cases d'une planche : {"panels": [[x0, y0, x1, y1], …] (fractions, ordre occidental), "rtl": [indices, ordre manga]}."""
     gray = ImageOps.grayscale(img)
@@ -1244,6 +1347,10 @@ def detect_panels(img: Image.Image) -> dict:
             join, grown = text_bridges(img, gray, mask, ltr)
         except Exception:  # noqa: BLE001
             join, grown = [], {}
+        try:
+            grown = overflow_grow(mask, ltr, grown)
+        except Exception:  # noqa: BLE001
+            pass
         if join:
             out["join"] = join
         if grown:   # cases élargies pour ne pas couper une bulle qui déborde (même ordre, mêmes indices)
