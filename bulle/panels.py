@@ -29,12 +29,13 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 10       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 11       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
 PARTIAL_GUTTER = 0.55     # gouttière « barrée » (bulle, cartouche ou décor qui déborde dessus) : lignes candidates…
 PARTIAL_MIN = 0.6         # … part de fond minimale sur toute l'épaisseur…
+PARTIAL_MIN_PX = 4        # … épaisseur minimale en pixels (à la largeur de travail)
 PARTIAL_MAX = 0.05        # … épaisseur maximale (fraction de la longueur coupée)…
 EDGE_ALIGN = 0.8          # … et part de ses colonnes de fond bordées de dessin des deux côtés (bords de cases rectilignes)
 BG_TOLERANCE = 46         # écart de gris toléré autour de la couleur de fond
@@ -218,8 +219,8 @@ def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: in
         if sa is not None and sb - sa >= min_gutter:
             cuts.append((sa, sb))
             continue
-        if b - a > max(min_gutter, PARTIAL_MAX * length):
-            continue
+        if b - a > max(min_gutter, PARTIAL_MAX * length) or b - a < PARTIAL_MIN_PX:
+            continue   # (trop mince : un trait clair du décor, une ligne de plafond, pas une gouttière)
         frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, a, b, blockers=True)
         if frac >= PARTIAL_MIN and up >= EDGE_ALIGN and down >= EDGE_ALIGN and blocked_ok:
             if _text_strip(mask, box, axis, a, b, length):
@@ -1182,7 +1183,14 @@ def detect_panels(img: Image.Image) -> dict:
             out.extend(parts)
         return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 
-    ltr = leaves(False)
+    def flat_sliver(b: tuple) -> bool:
+        """Bande étroite collée au bord de la page : le fond de la planche qui dépasse à côté d'une case, pas une case."""
+        bw_, bh_ = b[2] - b[0], b[3] - b[1]
+        narrow = (bw_ < 0.15 * w and (b[0] <= 3 or b[2] >= w - 3)) or (bh_ < 0.08 * h and (b[1] <= 3 or b[3] >= h - 3))
+        # d'une seule teinte, ou surtout du fond (marge de la page prise avec un bout de décor)
+        return narrow and (ImageStat.Stat(gray.crop(b)).stddev[0] < 14 or ImageStat.Stat(mask.crop(b)).mean[0] >= 0.7 * 255)
+
+    ltr = [b for b in leaves(False) if not flat_sliver(b)]
     empty = {"panels": [], "rtl": [], "v": PANELS_VERSION}
     if len(ltr) < 2:
         return empty
@@ -1190,7 +1198,7 @@ def detect_panels(img: Image.Image) -> dict:
         return empty
     if sum(_area(b) for b in ltr) < 0.35 * page_area:
         return empty   # couverture, page de titre, crédits : quelques blocs isolés sur du vide, pas des cases
-    rtl = leaves(True)
+    rtl = [b for b in leaves(True) if not flat_sliver(b)]
     pad_x, pad_y = PAD * w, PAD * h
 
     def rel(b: tuple) -> list[float]:
