@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.32.0)
+# Bulle — lecteur de BD maison (v0.32.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,10 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- BDfugue refuse les lecteurs automatiques (code 403) : Bulle ne peut pas lire ses pages depuis le serveur. Une adresse
+  BDfugue collée dans « Chercher… » est quand même acceptée : l'album est lié à la fiche, titre d'après l'adresse et le
+  nom du fichier (sans auteurs, résumé ni couverture). Après un refus, Bulle ne redemande rien à BDfugue pendant
+  6 heures (la recherche automatique continue sur Bédéthèque sans lui).
 - **BDfugue en secours** (Réglages › Laboratoire › « Recherche BDfugue en secours », désactivé par défaut) : quand un
   album ou une série n'est pas sur Bédéthèque (rien trouvé ou rien de sûr), Bulle cherche aussi sur BDfugue, la
   librairie en ligne. Un one shot au titre identique est lié tout seul, avec ses auteurs, éditeur, date, résumé et
