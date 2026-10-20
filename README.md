@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.31.0)
+# Bulle — lecteur de BD maison (v0.31.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,13 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- Case par case, d'après les pages corrigées à la main (série 3) : le blanc à l'intérieur d'une case (cartouche, bulle,
+  ciel pâle) n'est plus pris pour une gouttière quand le cadre de la case le ferme des deux côtés (un cartouche en bas
+  d'une case n'est plus lu à part, un manga à grandes bulles n'est plus coupé en morceaux) ; un cartouche large posé
+  sur une gouttière n'empêche plus de la voir ; une gouttière bordée d'un liseré gris est reconnue. **Bulle qui
+  déborde un peu du cadre** : la case est agrandie juste assez pour la montrer en entier (la vue se dézoome
+  légèrement) ; ce n'est fait que pour ce qui est clair (bulle, cartouche) et s'arrête dans la gouttière. 153
+  planches d'essai : 23 changent, presque toutes mieux découpées, aucune nettement moins bien.
 - **Mode « BD seules »** : le bouton planche (à côté du champignon) a maintenant trois crans, un clic passe au suivant :
   complet → léger → **BD seules** → complet. « BD seules » est le plus économe : plus de menu ni de barre de boutons
   (seuls restent l'accueil, la recherche et ce bouton), plus de « Reprendre la lecture » ni d'« Ajouts récents » (rien
