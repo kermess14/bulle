@@ -475,7 +475,10 @@ body:has(.letters.rail.right) .toast { right: 72px; }   /* à gauche de la barre
 .os-sec summary { cursor: pointer; font-weight: 600; font-size: 14px; }
 .os-item { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .os-item:last-child { border-bottom: 0; }
-.os-name { flex: 0 1 260px; min-width: 0; font-size: 13.5px; }
+.os-name { flex: 0 1 260px; min-width: 0; font-size: 13.5px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.os-thumb { flex: none; display: inline-block; line-height: 0; cursor: zoom-in; }
+.os-thumb img { height: 42px; width: auto; max-width: 34px; object-fit: cover; border-radius: 3px; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
+.bdtpop.ospop img { width: 220px; }
 .os-cands { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; flex: 1 1 300px; }
 .os-cands .chip { cursor: pointer; }
 .os-search { flex: 1 1 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 4px; }

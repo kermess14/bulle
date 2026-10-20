@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.30.0)
+# Bulle — lecteur de BD maison (v0.30.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,19 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- One shots à choisir ou introuvables (panneau Bédéthèque) : petite couverture de l'album à droite de son nom,
+  agrandie au survol, pour la comparer aux propositions (dont la pochette s'affiche aussi au survol).
+- Case par case : rangées séparées par autre chose que du fond (gouttière fine chevauchée par un cartouche, décor
+  peint entre les cases, couleur de fond qui change) : Bulle suit les bords de case bien droits qui traversent la
+  page, puis découpe chaque rangée normalement. Cases de biais (gouttières blanches en oblique) trouvées. Vérifié sur
+  132 planches (75 + 57 nouvelles, tirées au hasard dans la bibliothèque) : 7 mieux découpées, dont 2 qui n'avaient
+  aucune case, aucune moins bien. Ordre de lecture : une grande case haute à droite de deux cases empilées est lue
+  après elles (coupes successives, haut puis gauche).
+- Case par case, détection améliorée sur 75 planches d'essai (7 planches mieux découpées, aucune moins bien) :
+  cases aux bords tracés à main levée (traits qui ondulent : aucune gouttière droite) trouvées comme des blocs de
+  dessin séparés par le fond ; rangée de cases posée sur une grande image sans gouttière entre les deux (la rangée est
+  découpée, le reste devient une case, et une autre rangée plus bas est traitée pareil). Cases recalculées au fil de
+  la lecture.
 - **Case par case, texte à cheval sur deux cases** : quand un cartouche ou une bulle passe par-dessus la gouttière,
   le lire case par case le coupait en deux. Bulle repère maintenant ces passages (un cadre caché sous du papier, avec
   des lignes de lettres) : si le texte est vraiment partagé entre les deux cases, elles sont montrées **ensemble** ;
