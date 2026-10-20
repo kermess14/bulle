@@ -29,7 +29,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 9        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 10       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
@@ -695,7 +695,29 @@ def _inter(a: tuple, b: tuple) -> int:
     return max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
 
 
+ORDER_TOL = 0.2           # une case peut déborder de 20 % de sa taille au-delà d'une coupe (cases de biais)
+
+
 def _reading_order(rects: list[tuple], rtl: bool) -> list[tuple]:
+    """Ordre de lecture par coupes successives : d'abord une coupe horizontale que presque aucune case ne traverse (le
+    haut avant le bas), sinon une coupe verticale (la gauche avant la droite, l'inverse en manga). Une grande case haute
+    à droite de deux cases empilées est ainsi lue après elles. Sans coupe possible : lignes de cases."""
+    if len(rects) <= 2:
+        return _row_order(rects, rtl)
+    for axis in (1, 0):   # 1 : coupe horizontale (y), 0 : verticale (x)
+        lo, hi = (1, 3) if axis == 1 else (0, 2)
+        for cut in sorted({r[hi] for r in rects}):
+            above = [r for r in rects if r[hi] <= cut + ORDER_TOL * (r[hi] - r[lo])]
+            below = [r for r in rects if r not in above]
+            if not above or not below:
+                continue
+            if all(r[lo] >= cut - ORDER_TOL * (r[hi] - r[lo]) for r in below):
+                first, second = (below, above) if (axis == 0 and rtl) else (above, below)
+                return _reading_order(first, rtl) + _reading_order(second, rtl)
+    return _row_order(rects, rtl)
+
+
+def _row_order(rects: list[tuple], rtl: bool) -> list[tuple]:
     """Lignes de cases (chevauchement vertical), de haut en bas ; dans une ligne de gauche à droite (ou l'inverse)."""
     rows: list[list[tuple]] = []
     for r in sorted(rects, key=lambda r: (r[1], r[0])):
