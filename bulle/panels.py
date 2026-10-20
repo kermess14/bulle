@@ -29,7 +29,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 12       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 13       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
@@ -257,6 +257,12 @@ def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: in
             core = [i for i in range(a, b) if prof[i] >= 0.9]
             if len(core) >= PARTIAL_MIN_PX - 1 and core[-1] - core[0] + 1 == len(core):
                 f2, u2, d2, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
+            elif len(core) == 2 and core[1] == core[0] + 1:
+                # gouttière de deux pixels entre deux cadres très rapprochés : acceptée seulement si elle est nette
+                # (presque entièrement blanche) et bordée de dessin sur presque toute sa longueur
+                f2, u2, d2, ok2 = _edge_ratios(mask, box, axis, core[0], core[1] + 1, blockers=True)
+                if ok2 and f2 >= 0.95 and min(u2, d2) >= 0.85:
+                    frac, up, down, blocked_ok = f2, u2, d2, True
         elif frac < PARTIAL_MIN:
             # une colonne d'anticrénelage au bord de la bande (moins claire que la gouttière) : la bande sans elle
             top = max(prof[a:b])
@@ -281,6 +287,42 @@ def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: in
     if axis == 0:
         return [(x0, y0 + a, x1, y0 + b) for a, b in parts]
     return [(x0 + a, y0, x0 + b, y1) for a, b in parts]
+
+
+def _dark_split(mask: Image.Image, box: tuple, depth: int, min_gutter: int, min_side: int, rtl: bool) -> list[tuple]:
+    """Découpage par les gouttières d'un masque où le noir pur compte aussi pour du fond, mais prudent : une gouttière
+    noire doit être mince et bordée de dessin (ni noir ni blanc) des deux côtés sur presque toute sa longueur ; une
+    grande zone noire à l'intérieur d'une case (nuit, silhouette) ne coupe rien."""
+    box = _trim(mask, box)
+    if box is None:
+        return []
+    if depth >= 4:
+        return [box]
+    for axis in (0, 1):
+        parts = _cut(mask, box, axis, min_gutter, min_side)
+        if len(parts) < 2:
+            continue
+        length = (box[3] - box[1]) if axis == 0 else (box[2] - box[0])
+        ok = True
+        for p, q in zip(parts, parts[1:]):
+            a = (p[3] - box[1]) if axis == 0 else (p[2] - box[0])
+            b = (q[1] - box[1]) if axis == 0 else (q[0] - box[0])
+            if b - a > max(12, 0.03 * length):
+                ok = False
+                break
+            _, up, down = _edge_ratios(mask, box, axis, a, b)
+            if min(up, down) < 0.8:
+                ok = False
+                break
+        if not ok:
+            continue
+        if axis == 1 and rtl:
+            parts = parts[::-1]
+        out = []
+        for p in parts:
+            out.extend(_dark_split(mask, p, depth + 1, min_gutter, min_side, rtl))
+        return out
+    return [box]
 
 
 def _split(mask: Image.Image, box: tuple, axis: int, depth: int, min_gutter: int, min_side: int, rtl: bool) -> list[tuple]:
@@ -1286,6 +1328,8 @@ def detect_panels(img: Image.Image) -> dict:
             frames_cache.append(found)
         return frames_cache[0]
 
+    dark = ImageChops.lighter(mask, gray.point([255 if i <= 24 else 0 for i in range(256)], "L")) if bg >= 200 else mask
+
     def leaves(rtl: bool) -> list[tuple]:
         # fond ni blanc ni noir (dessin jusqu'aux bords) : les gouttières n'ont pas de sens, seuls les cadres comptent
         res = (_split(mask, full, 0, 0, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [full]) or [full]
@@ -1311,6 +1355,20 @@ def detect_panels(img: Image.Image) -> dict:
                         for r in sub:
                             parts.extend(_refine_leaf(r, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None,
                                                       min_gutter, min_side))
+            if bg >= 200:
+                # gouttières noires sur une page blanche (une colonne de cases encadrée de noir, une rangée posée sur
+                # un bandeau noir) : chaque grande case encore entière est redécoupée en prenant aussi le noir pur
+                # pour du fond ; seulement si les morceaux couvrent presque toute la case
+                again = []
+                for p_ in parts:
+                    if _area(p_) >= 0.1 * page_area:
+                        sub = [r for r in _dark_split(dark, p_, 0, min_gutter, min_side, rtl)
+                               if _area(r) >= MIN_AREA * page_area and (r[2] - r[0]) >= MIN_PANEL * w and (r[3] - r[1]) >= MIN_PANEL * h]
+                        if len(sub) >= 2 and sum(_area(r) for r in sub) >= 0.8 * _area(p_):
+                            again.extend(sub)
+                            continue
+                    again.append(p_)
+                parts = again
             out.extend(parts)
         return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 

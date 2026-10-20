@@ -1094,7 +1094,7 @@
         <span class="bdt-logo">BD</span>
         <div class="bdt-main">
           <div><b>${esc(sr.title || "Série")}</b>${sr.genre ? ` · ${esc(sr.genre)}` : ""}${sr.status ? ` · ${esc(sr.status)}` : ""}${sr.years ? ` · ${esc(sr.years)}` : ""}
-            <a class="ext" href="${esc(sr.url)}" target="_blank" rel="noopener">voir sur Bédéthèque ↗</a>
+            <a class="ext" href="${esc(sr.url)}" target="_blank" rel="noopener">voir sur ${siteOf(sr.url)} ↗</a>
             ${sr.score != null && sr.score < 0.9 && !sr.manual ? `<span class="warnlabel" title="La correspondance automatique n'est pas certaine">à vérifier</span>` : ""}</div>
           <div class="bdt-progress"><span>${full ? "Série complète" : `${b.present} / ${b.total} tomes présents`}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
           ${b.missing.length ? `<div class="bdt-missing">Manquants : ${b.missing.slice(0, 40).map(m => `<a href="${esc(m.url)}" target="_blank" rel="noopener" class="chip">T${m.number}${m.title ? " · " + esc(m.title) : ""}${m.year ? ` <small>${m.year}</small>` : ""}</a>`).join(" ")}${b.missing.length > 40 ? ` … (+${b.missing.length - 40})` : ""}</div>` : ""}
@@ -1128,7 +1128,7 @@
     const ambHtml = amb.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}${thumb(a)}</div>
         <div class="os-cands">${a.candidates.map(cd => `<button type="button" class="chip gray" ${admin ? `data-bdt="os-pick" data-album="${a.id}" data-url="${esc(cd.url)}"` : "disabled"} title="Choisir cette série">${esc(cd.name)}</button>`).join("")}${other(a)}</div></div>`).join("");
     const nfHtml = nf.map(a => `<div class="os-item"><div class="os-name">${esc(a.name)}${thumb(a)}</div><div class="os-cands">${other(a)}</div></div>`).join("");
-    const okHtml = ok.map(a => `<li><span>${esc(a.name)}</span> → <a class="ext" href="${esc(a.series_url)}" target="_blank" rel="noopener">${esc(a.series_title || "")}</a>${a.manual ? "" : a.score != null && a.score < 0.95 ? ` <span class="warnlabel">à vérifier</span>` : ""}${admin ? ` <button class="linkbtn" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Choisir une autre série">changer</button> <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Oublier ce lien (l'album sera recherché de nouveau)">oublier</button>` : ""}</li>`).join("");
+    const okHtml = ok.map(a => `<li><span>${esc(a.name)}</span> → <a class="ext" href="${esc(a.series_url)}" target="_blank" rel="noopener">${esc(a.series_title || "")}</a>${siteOf(a.series_url) === "BDfugue" ? ` <span class="srctag">BDfugue</span>` : ""}${a.manual ? "" : a.score != null && a.score < 0.95 ? ` <span class="warnlabel">à vérifier</span>` : ""}${admin ? ` <button class="linkbtn" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Choisir une autre série">changer</button> <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Oublier ce lien (l'album sera recherché de nouveau)">oublier</button>` : ""}</li>`).join("");
     return `<div class="bdt-panel oneshots ${c.total && c.ok === c.total ? "full" : ""}" id="bdt-panel" data-folder="${fid}">
       <div class="bdt-row">
         <span class="bdt-logo">BD</span>
@@ -1173,7 +1173,7 @@
       ${cands.length ? `<div class="cands">${cands.map(c => `<button type="button" class="cand" data-bdt="pick" data-folder="${folderId}" data-url="${esc(c.url)}">
           <b>${esc(c.name)}</b><small>${[c.genre, c.tomes ? plural(c.tomes, "tome", "tomes") : "", c.exact ? "correspondance exacte" : ""].filter(Boolean).join(" · ")}</small></button>`).join("")}</div>` : ""}
       <form class="bdt-search" data-bdt="search" data-folder="${folderId}"><input type="search" name="q" placeholder="Chercher une série sur Bédéthèque…" value="${esc(report && report.query || "")}"><button class="btn" type="submit">Chercher</button></form>
-      <form class="bdt-search" data-bdt="url" data-folder="${folderId}"><input type="url" name="url" placeholder="…ou coller l'adresse Bédéthèque de la série ou d'un de ses albums"><button class="btn" type="submit">Utiliser</button></form>
+      <form class="bdt-search" data-bdt="url" data-folder="${folderId}"><input type="url" name="url" placeholder="…ou coller l'adresse de la série ou d'un de ses albums (Bédéthèque, ou BDfugue)"><button class="btn" type="submit">Utiliser</button></form>
       <div class="bdt-results" id="bdt-results"></div>
     </div>`;
   }
@@ -1219,7 +1219,7 @@
         const box = document.createElement("div");
         box.className = "os-search";
         box.innerHTML = `<form class="bdt-search" data-os="q" data-album="${el.dataset.album}"><input type="search" name="q" value="${esc(el.dataset.q || "")}" placeholder="Titre de l'album ou de la série"><button class="btn" type="submit">Chercher</button></form>
-          <form class="bdt-search" data-os="url" data-album="${el.dataset.album}"><input type="url" name="url" placeholder="…ou coller l'adresse Bédéthèque de l'album ou de la série (https://www.bedetheque.com/…)"><button class="btn" type="submit">Utiliser</button></form>
+          <form class="bdt-search" data-os="url" data-album="${el.dataset.album}"><input type="url" name="url" placeholder="…ou coller l'adresse de la fiche (Bédéthèque, ou BDfugue si l'album n'est pas sur Bédéthèque)"><button class="btn" type="submit">Utiliser</button></form>
           <div class="os-results"></div>`;
         item.appendChild(box);
         box.querySelector("form").requestSubmit();
@@ -1267,7 +1267,7 @@
       const album = osf.dataset.album, box = osf.closest(".os-search"), res = box.querySelector(".os-results");
       if (osf.dataset.os === "url") {
         const url = osf.elements.url.value.trim();
-        if (!/bedetheque\.com\/(serie-\d+-BD|BD-)|bdgest\.com\//.test(url)) { toast("Collez l'adresse d'une série (…/serie-1234-BD-…) ou d'un album (…/BD-…-1234.html) de Bédéthèque, ou une page BDGest"); return; }
+        if (!/bedetheque\.com\/(serie-\d+-BD|BD-)|bdgest\.com\/|bdfugue\.com\/./.test(url)) { toast("Collez l'adresse d'une série (…/serie-1234-BD-…) ou d'un album (…/BD-…-1234.html) de Bédéthèque, une page BDGest, ou la fiche d'un album sur BDfugue"); return; }
         bdtAction("os-pick", { dataset: { album, url } });
         return;
       }
@@ -1549,7 +1549,8 @@
         <p class="muted"><a href="#/adult">Ouvrir la rubrique Adulte</a> (aussi dans la colonne de gauche dès qu'une série y est).</p>`,
       lab: () => `
         ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}
-        ${field("Recherche BDGest en secours", chk("g", "bdt_bdgest", g.bdt_bdgest), "Quand l'index de Bédéthèque ne trouve rien de sûr (nom approchant, homonymes), Bulle cherche aussi « dans tout le site » BDGest : c'est la même base, mais cette recherche trouve aussi les albums par leur titre, et l'année du fichier départage les homonymes (« Là-bas (2003) »). Une requête de plus, au rythme prudent, pour chaque album ou série concerné. La recherche à la main (« Chercher… ») l'utilise toujours.")}`,
+        ${field("Recherche BDGest en secours", chk("g", "bdt_bdgest", g.bdt_bdgest), "Quand l'index de Bédéthèque ne trouve rien de sûr (nom approchant, homonymes), Bulle cherche aussi « dans tout le site » BDGest : c'est la même base, mais cette recherche trouve aussi les albums par leur titre, et l'année du fichier départage les homonymes (« Là-bas (2003) »). Une requête de plus, au rythme prudent, pour chaque album ou série concerné. La recherche à la main (« Chercher… ») l'utilise toujours.")}
+        ${field("Recherche BDfugue en secours", chk("g", "bdt_bdfugue", g.bdt_bdfugue), "Quand un album ou une série n'est pas sur Bédéthèque (rien trouvé, ou rien de sûr), Bulle cherche aussi sur BDfugue, la librairie en ligne : titre, auteurs, éditeur, date, résumé et couverture. Un album au titre identique est lié tout seul ; sinon il s'ajoute aux propositions. Une requête de plus par album ou série concerné, au même rythme prudent. On peut aussi coller l'adresse d'une fiche BDfugue dans « Chercher… ».")}`,
       about: () => `
         <p class="muted">Bulle ${esc(settings.meta.version || "")} · ${plural(stats.albums || 0, "album", "albums")} dans ${plural(stats.folders || 0, "dossier", "dossiers")} (${fmtSize(stats.size || 0)}) · dernier scan : ${fmtDate(stats.last_scan)}<br>
         Dossier des BD : <code>${esc(settings.meta.library_root || "")}</code> · <a href="https://github.com/kermess14/bulle" target="_blank" rel="noopener">github.com/kermess14/bulle</a></p>
@@ -1560,7 +1561,7 @@
     if (isPhone()) {
       // téléphone : d'abord la liste des rubriques (comme les réglages d'Android), puis la rubrique seule
       const ICONS = { look: "🎨", library: "📚", reader: "📖", account: "👤", images: "🖼️", bdt: "🏷️", access: "🔐", adult: "🔞", lab: "🍄", about: "ℹ️" };
-      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter, recherche BDGest", about: `Bulle ${esc(settings.meta.version || "")}` };
+      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter, recherche BDGest et BDfugue", about: `Bulle ${esc(settings.meta.version || "")}` };
       if (!openedGroup) {
         setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
         main.innerHTML = `<h1>Réglages</h1><nav class="smenu">${SETTINGS_GROUPS.map(([k, name]) => `<a href="#/settings/${k}"><span class="ico">${ICONS[k] || "•"}</span><span>${name}<small>${HELP[k] || ""}</small></span></a>`).join("")}</nav>`;
@@ -1783,7 +1784,7 @@
           <dt>Progression</dt><dd>${p ? (p.completed ? "Lu ✓" : `Page ${p.page + 1} sur ${it.pages ?? "?"} — ${pct} %`) : "Non lu"}
             ${p && !p.completed && it.pages ? `<div class="pbar"><i style="width:${pct}%"></i></div>` : ""}</dd>
           <dt>Fichier</dt><dd class="path">${esc(it.path.split("/").pop())}</dd>
-          ${it.meta && it.meta.oneshot ? `<dt>Bédéthèque</dt><dd>${it.meta.url ? "" : `<span class="muted">album non repéré dans la série</span> `}<b>${esc(it.meta.series_title || it.meta.title || "")}</b>${it.meta.genre ? ` · ${esc(it.meta.genre)}` : ""}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url || it.meta.series_url)}" target="_blank" rel="noopener">↗</a></dd>` : it.meta ? `<dt>Bédéthèque</dt><dd>${it.meta.number != null ? `<b>Tome ${it.meta.number}</b> · ` : ""}${esc(it.meta.title || "")}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">↗</a></dd>` : (it.series ? `<dt>Bédéthèque</dt><dd class="muted">tome non reconnu dans « ${esc(it.series.title)} »</dd>` : "")}
+          ${it.meta && it.meta.oneshot ? `<dt>${siteOf(it.meta.url || it.meta.series_url)}</dt><dd>${it.meta.url ? "" : `<span class="muted">album non repéré dans la série</span> `}<b>${esc(it.meta.series_title || it.meta.title || "")}</b>${it.meta.genre ? ` · ${esc(it.meta.genre)}` : ""}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url || it.meta.series_url)}" target="_blank" rel="noopener">↗</a></dd>` : it.meta ? `<dt>${siteOf(it.meta.url)}</dt><dd>${it.meta.number != null ? `<b>Tome ${it.meta.number}</b> · ` : ""}${esc(it.meta.title || "")}${it.meta.year ? ` (${it.meta.year})` : ""} <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">↗</a></dd>` : (it.series ? `<dt>Bédéthèque</dt><dd class="muted">tome non reconnu dans « ${esc(it.series.title)} »</dd>` : "")}
           ${it.meta && it.meta.writers.length ? `<dt>Scénario</dt><dd>${esc(it.meta.writers.join(", "))}</dd>` : ""}
           ${it.meta && it.meta.pencillers.length ? `<dt>Dessin</dt><dd>${esc(it.meta.pencillers.join(", "))}</dd>` : ""}
           ${it.meta && it.meta.colorists.length ? `<dt>Couleurs</dt><dd>${esc(it.meta.colorists.join(", "))}</dd>` : ""}
@@ -1942,26 +1943,28 @@
     renderOffline($("#sheet-offline"));
   });
   offlineCount(); updateTabbarOffline();
+  /* Nom du site d'où vient une fiche : Bédéthèque, ou BDfugue (source de secours du laboratoire). */
+  const siteOf = url => /bdfugue\.com/.test(url || "") ? "BDfugue" : "Bédéthèque";
   function summaryHtml(text, url) {
-    if (!text) return `<p class="summary muted">Pas de résumé sur Bédéthèque pour cet album.</p>`;
-    const cut = /[.…]$/.test(text) ? text : text + "…";
-    return `<p class="summary">${esc(cut)} ${url ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener">lire la suite sur Bédéthèque ↗</a>` : ""}</p>`;
+    if (!text) return `<p class="summary muted">Pas de résumé sur ${siteOf(url)} pour cet album.</p>`;
+    const cut = /[.…!?»]$/.test(text) ? text : text + "…";
+    return `<p class="summary">${esc(cut)} ${url ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener">${siteOf(url) === "BDfugue" ? "voir la fiche sur BDfugue" : "lire la suite sur Bédéthèque"} ↗</a>` : ""}</p>`;
   }
   async function renderSummary(slot, it) {
     if (!slot || !it.meta || !it.meta.url) return;
     if (it.meta.summary_at) { slot.innerHTML = summaryHtml(it.meta.summary, it.meta.url); return; }
     if (!isAdmin()) {   // un lecteur ne déclenche jamais de requête vers Bédéthèque
-      slot.innerHTML = `<p class="summary muted">Résumé pas encore récupéré. <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">Voir la fiche sur Bédéthèque ↗</a></p>`;
+      slot.innerHTML = `<p class="summary muted">Résumé pas encore récupéré. <a class="ext" href="${esc(it.meta.url)}" target="_blank" rel="noopener">Voir la fiche sur ${siteOf(it.meta.url)} ↗</a></p>`;
       return;
     }
     if (!settings.global.bdt_enabled || settings.global.bdt_auto_summary === false) {
-      slot.innerHTML = `<p class="summary muted"><button class="btn mini" type="button" data-summary="${it.id}">Lire le résumé sur Bédéthèque</button></p>`;
+      slot.innerHTML = `<p class="summary muted"><button class="btn mini" type="button" data-summary="${it.id}">Lire le résumé sur ${siteOf(it.meta.url)}</button></p>`;
       return;
     }
     fetchSummary(slot, it);
   }
   async function fetchSummary(slot, it) {
-    slot.innerHTML = `<p class="summary muted"><span class="spinner" style="display:inline-block;width:14px;height:14px;border-width:2px;margin:0 6px -2px 0"></span>Résumé en cours de lecture sur Bédéthèque…</p>`;
+    slot.innerHTML = `<p class="summary muted"><span class="spinner" style="display:inline-block;width:14px;height:14px;border-width:2px;margin:0 6px -2px 0"></span>Résumé en cours de lecture sur ${siteOf(it.meta.url)}…</p>`;
     try {
       const r = await api(`/api/bdt/album/${it.id}/summary`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       if (+slot.dataset.id === +it.id) slot.innerHTML = summaryHtml(r.summary, it.meta.url);

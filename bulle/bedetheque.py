@@ -26,6 +26,7 @@ from bs4 import BeautifulSoup
 log = logging.getLogger("bulle.bedetheque")
 
 BASE = "https://www.bedetheque.com"
+BDFUGUE = "https://www.bdfugue.com"   # librairie en ligne : source de secours (laboratoire), voir bdfugue.py
 BDGEST = "https://www.bdgest.com"   # site jumeau (critiques, previews) : ses pages renvoient vers la fiche Bédéthèque
 USER_AGENT = "Bulle (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
 PAGE_TTL = 30 * 24 * 3600          # fiches de séries : 30 jours
@@ -225,11 +226,16 @@ class BedethequeClient:
             time.sleep(wait)
 
     def fetch(self, url: str, ttl: float = PAGE_TTL, force: bool = False) -> str:
-        if not (url.startswith(BASE + "/") or url.startswith(BDGEST + "/")):
+        if not (url.startswith(BASE + "/") or url.startswith(BDGEST + "/") or url.startswith(BDFUGUE + "/")):
             raise BdtError("Adresse hors de bedetheque.com")
+        site = "BDfugue" if url.startswith(BDFUGUE + "/") else "Bédéthèque"
         path = url[len(BASE):] if url.startswith(BASE + "/") else ""
         if re.match(r"^/(ajax|api|images|Couvertures|thb_couv|Planches|Versos|fiche|admin)", path, re.I):
             raise BdtError("Cette page de Bédéthèque est réservée (robots.txt) : non consultée")
+        if site == "BDfugue" and re.match(r"^/(index\.php|checkout|wishlist|catalog/|customer|sales|oldorders|amrewards|"
+                                          r"review|raf|repayments|marketplace|private|productalert|sendfriend)",
+                                          url[len(BDFUGUE):], re.I):
+            raise BdtError("Cette page de BDfugue est réservée (robots.txt) : non consultée")
         if not force:
             cached = self._cache_get(url)
             if cached and time.time() - cached[0] < ttl:
@@ -253,16 +259,16 @@ class BedethequeClient:
                     charset = resp.headers.get_content_charset() or "utf-8"
                     html = raw.decode(charset, "replace")
             except urllib.error.HTTPError as e:
-                self.last_error = f"Bédéthèque a répondu {e.code} pour {path}"
+                self.last_error = f"{site} a répondu {e.code} pour {path or url}"
                 if e.code in (403, 429, 503):
-                    raise BdtError(f"Bédéthèque refuse pour l'instant les requêtes de Bulle (code {e.code}). "
+                    raise BdtError(f"{site} refuse pour l'instant les requêtes de Bulle (code {e.code}). "
                                    "Réessayez plus tard ; si cela persiste, le site bloque les lecteurs automatiques.") from e
                 if e.code == 404:
-                    raise BdtError("Page Bédéthèque introuvable (adresse changée ?)") from e
-                raise BdtError(f"Erreur Bédéthèque (code {e.code})") from e
+                    raise BdtError(f"Page {site} introuvable (adresse changée ?)") from e
+                raise BdtError(f"Erreur {site} (code {e.code})") from e
             except (urllib.error.URLError, TimeoutError, OSError) as e:
-                self.last_error = f"Bédéthèque injoignable : {e}"
-                raise BdtError(f"Bédéthèque injoignable : {getattr(e, 'reason', e)}") from e
+                self.last_error = f"{site} injoignable : {e}"
+                raise BdtError(f"{site} injoignable : {getattr(e, 'reason', e)}") from e
             finally:
                 self._last = time.time()
                 self._times.append(self._last)
@@ -270,7 +276,7 @@ class BedethequeClient:
                 self.requests_made += 1
         if re.search(r"<title>\s*Just a moment|cf-browser-verification|Attention Required", html, re.I):
             self.last_error = "Page de vérification (anti-robot) renvoyée"
-            raise BdtError("Bédéthèque a renvoyé une page de vérification au lieu du contenu : "
+            raise BdtError(f"{site} a renvoyé une page de vérification au lieu du contenu : "
                            "le site n'accepte pas les lecteurs automatiques en ce moment.")
         self.last_error = None
         self._cache_put(url, zlib.compress(html.encode("utf-8"), 6))
@@ -344,6 +350,9 @@ class BedethequeClient:
         « chronique-42-BD-La-bas… »), est lue une fois pour y prendre le lien vers la fiche Bédéthèque (série de
         préférence, sinon album). Toute autre adresse est rendue telle quelle."""
         u = (url or "").strip()
+        if re.match(r"https?://(?:www\.)?bdfugue\.com/", u):
+            from . import bdfugue
+            return bdfugue.canonical(u) or u   # BDfugue : gardée telle quelle (sans paramètres)
         m = re.match(r"https?://(?:www\.)?bdgest\.com(/[^\s#]*)", u)
         if not m:
             return u
@@ -356,7 +365,10 @@ class BedethequeClient:
         return link.group(0)
 
     def album_series_url(self, url: str) -> str:
-        """Adresse d'une fiche album (…/BD-Titre-1234.html) → adresse de sa série (lien présent sur la fiche)."""
+        """Adresse d'une fiche album (…/BD-Titre-1234.html) → adresse de sa série (lien présent sur la fiche). Pour une
+        fiche BDfugue : sa page de série, ou la fiche elle-même si l'album n'en a pas (one shot)."""
+        if url.startswith(BDFUGUE + "/"):
+            return self.bdf_product(url).get("series_url") or url
         html = self.fetch(url)
         m = re.search(r'href="((?:https?://www\.bedetheque\.com)?/serie-\d+-BD[^"]*?\.html)"', html)
         if not m:
@@ -364,10 +376,49 @@ class BedethequeClient:
         return m.group(1) if m.group(1).startswith("http") else BASE + m.group(1)
 
     def album_summary(self, url: str, force: bool = False) -> Optional[str]:
-        """Résumé (début) d'un album d'après sa fiche Bédéthèque."""
+        """Résumé (début) d'un album d'après sa fiche Bédéthèque (ou sa fiche BDfugue)."""
+        if url.startswith(BDFUGUE + "/"):
+            return self.bdf_product(url, force=force).get("summary")
         return parse_album_summary(self.fetch(url, force=force))
 
+    # -- BDfugue (laboratoire : source de secours) ----------------------------
+    def bdf_search(self, query: str, year: Optional[int] = None) -> list[dict]:
+        """Recherche sur BDfugue (une page, gardée 7 jours) : les albums trouvés, les plus proches d'abord."""
+        from . import bdfugue
+        q = query.strip()
+        if len(q) < 2:
+            return []
+        hits = bdfugue.parse_search(self.fetch(bdfugue.search_url(q), ttl=SEARCH_TTL), q, year)
+        return [h for h in hits if h["kind"] != "other"] + [h for h in hits if h["kind"] == "other"]
+
+    def bdf_product(self, url: str, force: bool = False) -> dict:
+        from . import bdfugue
+        u = bdfugue.product_url(url)
+        if not u:
+            raise BdtError("Adresse BDfugue non reconnue : collez celle de la fiche d'un album (https://www.bdfugue.com/…)")
+        return bdfugue.parse_product(self.fetch(u, force=force), u)
+
+    def bdf_series(self, url: str, force: bool = False, max_pages: int = 5) -> dict:
+        """Page de série BDfugue (et ses pages suivantes, 5 au plus)."""
+        from . import bdfugue
+        data, nxt = bdfugue.parse_series_page(self.fetch(url, force=force), url)
+        seen = {url}
+        while nxt and nxt not in seen and len(seen) < max_pages:
+            seen.add(nxt)
+            more, nxt = bdfugue.parse_series_page(self.fetch(nxt, force=force), nxt)
+            known = {a["url"] for a in data["albums"]}
+            data["albums"] += [a for a in more["albums"] if a["url"] not in known]
+        data["albums"].sort(key=lambda a: (a["kind"] != "tome", a["number"] if a["number"] is not None else 999))
+        if not data["albums"]:
+            raise BdtError("Page de série BDfugue vide ou illisible")
+        return data
+
     def series(self, url_or_id, details: bool = False, force: bool = False) -> dict:
+        if str(url_or_id).startswith(BDFUGUE + "/"):
+            from . import bdfugue
+            if bdfugue.series_url(str(url_or_id)):
+                return self.bdf_series(bdfugue.series_url(str(url_or_id)), force=force)
+            return bdfugue.series_from_product(self.bdf_product(str(url_or_id), force=force))
         url = series_url(url_or_id)
         html = self.fetch(url, force=force)
         data = parse_series(html, url)
