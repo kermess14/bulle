@@ -32,7 +32,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import DEFAULT_PROFILE, Library
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.30.3"
+VERSION = "0.31.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -667,7 +667,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         albums = [c for c in children if c["kind"] == "album"]
         rows = lib.bdt_oneshots_for(folder["id"])
         metas = lib.bdt_albums_for_folder(folder["id"])
-        counts = {"ok": 0, "ambiguous": 0, "not_found": 0, "todo": 0, "total": len(albums), "incomplete": 0}
+        counts = {"ok": 0, "ambiguous": 0, "not_found": 0, "skip": 0, "todo": 0, "total": len(albums), "incomplete": 0}
         items = []
         for a in albums:
             r = rows.get(a["id"])
@@ -678,6 +678,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if st in ("ambiguous", "not_found"):
                 items.append({"id": a["id"], "name": a["name"], "status": st, "query": r.get("query"),
                               "candidates": r.get("candidates") or []})
+            elif st == "skip":
+                items.append({"id": a["id"], "name": a["name"], "status": st})
             elif st == "ok":
                 items.append({"id": a["id"], "name": a["name"], "status": st, "series_title": r.get("series_title"),
                               "series_url": r.get("series_url"), "manual": bool(r.get("manual")), "query": r.get("query"),
@@ -1977,7 +1979,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         """Tous les albums pas encore cherchés d'un dossier de one shots (tâche de fond, avec le compteur du lot)."""
         albums = [c for c in lib.children(folder["id"]) if c["kind"] == "album"]
         done = lib.bdt_oneshots_for(folder["id"])
-        todo = [a for a in albums if force or a["id"] not in done]
+        # un album « pas sur Bédéthèque » (écarté à la main) n'est plus jamais cherché, même en relançant tout
+        todo = [a for a in albums if (force or a["id"] not in done) and (done.get(a["id"]) or {}).get("status") != "skip"]
         # albums liés à leur série mais sans fiche d'album (auteurs, résumé) : la page de la série est relue,
         # depuis le cache la plupart du temps (pas de requête), pour y retrouver l'album
         metas = lib.bdt_albums_for_folder(folder["id"])
@@ -2090,6 +2093,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         return jsonify({"thumb": f"https://www.bedetheque.com/cache/thb_couv/{couv}",
                         "image": f"https://www.bedetheque.com/media/Couvertures/{couv}",
                         "guess": bool(m and not read_page)})
+
+    @app.route("/api/bdt/oneshot/<int:node_id>/skip", methods=["POST"])
+    def api_bdt_oneshot_skip(node_id: int):
+        """« Pas sur Bédéthèque » : l'album n'est plus proposé ni cherché (« remettre » l'annule)."""
+        require_admin()
+        album = get_node(node_id, "album")
+        lib.bdt_oneshot_set(node_id, album["parent_id"], "skip")
+        return jsonify(None)
 
     @app.route("/api/bdt/oneshot/<int:node_id>", methods=["DELETE"])
     def api_bdt_oneshot_forget(node_id: int):
@@ -2291,7 +2302,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             mode = modes.get(f["id"]) or ("oneshots" if is_oneshot_name(f["name"]) else "series")
             if mode == "oneshots":
                 c = counts.get(f["id"], {"ok": 0, "ambiguous": 0, "not_found": 0})
-                done = c["ok"] + c["ambiguous"] + c["not_found"]
+                done = c["ok"] + c["ambiguous"] + c["not_found"] + c.get("skip", 0)
                 oneshots.append({"folder_id": f["id"], "folder_name": f["name"], "total": f["direct"], **c,
                                  "todo": max(0, f["direct"] - done)})
                 if done < f["direct"]:

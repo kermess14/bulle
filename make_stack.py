@@ -19,7 +19,7 @@ TEMPLATE = """\
 #  Bulle — lecteur de BD maison — stack Docker Compose à coller telle quelle
 #  (Dockhand : Stacks → Create → coller ce fichier → Create). Rien d'autre à copier.
 #
-#  Variante AUTONOME (sans image) : le code de Bulle est embarqué ci-dessous (BULLE_SRC + BULLE_SRC2, archive tar.xz en base64) et
+#  Variante AUTONOME (sans image) : le code de Bulle est embarqué ci-dessous (BULLE_SRC, BULLE_SRC2, BULLE_SRC3 : archive tar.xz en base64) et
 #  décompressé au démarrage dans un conteneur Python standard : pas d'image à construire.
 #  Au premier démarrage le conteneur installe « unar » (pour les CBR) et les dépendances
 #  Python : comptez 1 à 3 minutes, puis http://192.168.0.213:__PORT__
@@ -56,7 +56,9 @@ services:
 __BLOB__
       BULLE_SRC2: >-
 __BLOB2__
-    command: ["sh", "-c", "mkdir -p /app && python3 -c \\"import os,io,base64,tarfile; d=base64.b64decode(''.join(c for c in os.environ['BULLE_SRC']+os.environ.get('BULLE_SRC2','') if c.isalnum() or c in '+/=')); tarfile.open(fileobj=io.BytesIO(d), mode='r:xz').extractall('/app', filter='data')\\" && exec sh /app/start.sh"]
+      BULLE_SRC3: >-
+__BLOB3__
+    command: ["sh", "-c", "mkdir -p /app && python3 -c \\"import os,io,base64,tarfile; d=base64.b64decode(''.join(c for c in os.environ['BULLE_SRC']+os.environ.get('BULLE_SRC2','')+os.environ.get('BULLE_SRC3','') if c.isalnum() or c in '+/=')); tarfile.open(fileobj=io.BytesIO(d), mode='r:xz').extractall('/app', filter='data')\\" && exec sh /app/start.sh"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:__PORT__/api/stats', timeout=4)"]
       interval: 60s
@@ -87,20 +89,21 @@ def build_blob() -> str:
         add(os.path.join(HERE, "start.sh"), "start.sh")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     fold = lambda t: "\n".join("        " + t[i:i + 76] for i in range(0, len(t), 76))
-    half = (len(b64) // 2) // 76 * 76        # deux variables : la limite est de 128 Ko par variable d'environnement
-    return fold(b64[:half]), fold(b64[half:])
+    third = -(-len(b64) // 3 // 76) * 76     # trois variables : la limite est de 128 Ko par variable d'environnement
+    return fold(b64[:third]), fold(b64[third:2 * third]), fold(b64[2 * third:])
 
 
 def main() -> None:
-    blob, blob2 = build_blob()
-    out = (TEMPLATE.replace("__PORT__", str(PORT)).replace("__LIBRARY__", LIBRARY).replace("__BLOB__", blob).replace("__BLOB2__", blob2))
+    blob, blob2, blob3 = build_blob()
+    out = (TEMPLATE.replace("__PORT__", str(PORT)).replace("__LIBRARY__", LIBRARY).replace("__BLOB__", blob)
+           .replace("__BLOB2__", blob2).replace("__BLOB3__", blob3))
     if "$" in out:
         raise SystemExit("Le fichier généré contient un « $ » : Docker Compose l'interpréterait, abandon.")
     dest = os.path.join(HERE, "stack-autonome.yml")
     with open(dest, "w", encoding="utf-8") as f:
         f.write(out)
-    size = max(sum(len(line.strip()) + 1 for line in b.split("\n")) for b in (blob, blob2))   # taille réelle par variable
-    print(f"{dest} écrit : code embarqué en deux variables de {size // 1024} Ko en base64 (limite 128 Ko chacune), port {PORT}")
+    size = max(sum(len(line.strip()) + 1 for line in b.split("\n")) for b in (blob, blob2, blob3))   # taille réelle par variable
+    print(f"{dest} écrit : code embarqué en trois variables de {size // 1024} Ko au plus en base64 (limite 128 Ko chacune), port {PORT}")
     if size > 125_000:
         raise SystemExit("Trop gros pour une variable d'environnement : passer par une image Docker.")
 

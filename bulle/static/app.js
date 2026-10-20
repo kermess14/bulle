@@ -236,7 +236,13 @@
   /* Mode léger (bouton « planche de BD » à côté du champignon) : coupe tout ce qui bouge en arrière-plan (mosaïque,
      verre dépoli, couvertures au hasard, bulles, saisons, petits mots animés). Mémorisé sur l'appareil, pas sur le
      profil : léger sur la tablette, complet sur le PC. */
-  function liteMode() { try { return localStorage.getItem("bulle:lite") === "1"; } catch (_) { return false; } }
+  /* Trois niveaux, un clic passe au suivant : complet → léger → « BD seules » → complet.
+     « BD seules » (le plus économe) : en plus du mode léger, plus de menu ni de barre de boutons, plus de « Reprendre
+     la lecture » ni d'« Ajouts récents » (rien n'est demandé au serveur pour eux), plus de panneau Bédéthèque ni de
+     boutons de série : juste le fil d'Ariane, la recherche et les couvertures, sur un fond uni, sans ombre ni effet. */
+  function liteLevel() { try { const v = localStorage.getItem("bulle:lite"); return v === "2" ? 2 : v === "1" ? 1 : 0; } catch (_) { return 0; } }
+  function liteMode() { return liteLevel() > 0; }
+  function ultraMode() { return liteLevel() === 2; }
   // Présentation téléphone : barre d'onglets en bas, pochettes à trois, fiche qui monte du bas, réglages en liste,
   // rien qui bouge en arrière-plan. SEULEMENT dans l'appli « Bulle pour Android » (elle se signale dans son
   // identifiant de navigateur) et sur un écran de 700 px ou moins. Dans un navigateur, même sur téléphone, et sur
@@ -245,16 +251,21 @@
   const isPhone = () => inApp && window.innerWidth <= 700;
   function updateLiteBtn() {
     const b = $("#lite-btn"); if (!b) return;
-    const on = liteMode();
-    b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
-    b.title = on ? "Mode léger activé : rien ne bouge en arrière-plan (cliquer pour revenir au mode complet)" : "Mode léger : couper les animations et effets de fond pour un affichage plus fluide";
+    const lvl = liteLevel();
+    b.classList.toggle("on", lvl > 0); b.classList.toggle("ultra", lvl === 2); b.setAttribute("aria-pressed", lvl ? "true" : "false");
+    b.title = lvl === 2 ? "Mode « BD seules » : rien que les albums, le plus économe (cliquer pour revenir au mode complet)"
+      : lvl === 1 ? "Mode léger : rien ne bouge en arrière-plan (cliquer pour le mode « BD seules », encore plus économe)"
+      : "Mode léger : couper les animations et effets de fond pour un affichage plus fluide";
   }
   document.addEventListener("click", e => {
     if (!e.target.closest("#lite-btn")) return;
-    const on = !liteMode();
-    try { localStorage.setItem("bulle:lite", on ? "1" : "0"); } catch (_) { /* ignore */ }
+    const next = (liteLevel() + 1) % 3;
+    try { localStorage.setItem("bulle:lite", String(next)); } catch (_) { /* ignore */ }
     applyAppearance(); updateLiteBtn();
-    toast(on ? "Mode léger : animations et effets de fond coupés sur cet appareil" : "Mode complet : animations et effets de fond rétablis");
+    toast(next === 2 ? "Mode « BD seules » : rien que les albums, le plus économe (le même bouton pour revenir)"
+      : next === 1 ? "Mode léger : animations et effets de fond coupés sur cet appareil"
+      : "Mode complet : menus, animations et effets rétablis");
+    if (!location.hash.startsWith("#/settings")) route();
   });
   const SEASON_LABEL = { spring: "printemps", summer: "été", autumn: "automne", winter: "hiver" };
   const SEASON_ORDER = ["spring", "summer", "autumn", "winter"], SEASON_EMOJI = { spring: "🌸", summer: "☀️", autumn: "🍂", winter: "❄️" };
@@ -289,7 +300,7 @@
     root.dataset.theme = theme === "light" ? "light" : "dark";
     root.dataset.tabs = p.tabs_side === "top" || window.innerWidth <= 700 ? "top" : "left";
     root.dataset.phone = isPhone() ? "on" : "off";
-    root.dataset.covers = ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
+    root.dataset.covers = ultraMode() ? "flat" : ["book", "glow", "flat"].includes(p.cover_style) ? p.cover_style : "book";
     root.dataset.skin = SKINS.includes(p.skin) ? p.skin : "bd";
     const season = ["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason();
     if (root.dataset.skin === "seasons") root.dataset.season = season; else delete root.dataset.season;
@@ -298,6 +309,7 @@
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const lite = liteMode() || isPhone();   // sur téléphone, le décor animé est toujours coupé
     root.dataset.lite = liteMode() ? "on" : "off";
+    root.dataset.ultra = ultraMode() ? "on" : "off";
     root.dataset.mosaic = lite || p.mosaic === "off" ? "off" : (p.mosaic === "fixed" || reduce) ? "fixed" : "drift";
     root.dataset.glass = !lite && p.mosaic_glass !== false && root.dataset.mosaic !== "off" ? "on" : "off";
     root.style.setProperty("--mosaic-opacity", String(Math.max(5, Math.min(100, +p.mosaic_opacity || 45)) / 100));
@@ -1033,8 +1045,8 @@
     const p = settings.profile;
     const [data, cont, recent] = await Promise.all([
       api(id ? `/api/browse/${id}` : "/api/browse"),
-      id || !p.show_continue ? null : api("/api/continue"),
-      id || !p.show_recent ? null : api(`/api/recent?n=${+p.recent_count || 18}`),
+      id || !p.show_continue || ultraMode() ? null : api("/api/continue"),
+      id || !p.show_recent || ultraMode() ? null : api(`/api/recent?n=${+p.recent_count || 18}`),
     ]);
     if (data.empty) return renderEmpty(data.scan);
     setCrumbs(data.breadcrumb);
@@ -1054,10 +1066,10 @@
         <button class="btn" type="button" data-addlist="${data.folder.id}" title="Ajouter cette série à une liste">+ Liste</button>
         ${!isAdmin() ? "" : settings.global.adult_hide_tab && settings.global.adult_pin_set && !settings.global.adult_unlocked ? "" : `<button class="btn ${data.folder.adult ? "adult-on" : ""}" type="button" data-action="adult-toggle" data-id="${data.folder.id}" data-adult="${data.folder.adult ? 1 : 0}" title="${data.folder.adult ? "Retirer de la rubrique Adulte" : "Mettre cette série dans la rubrique Adulte (cachée tant que le code n'est pas entré)"}">18+</button>`}
         ${isAdmin() ? `<button class="btn" type="button" data-action="rebuild-folder" data-id="${data.folder.id}" data-name="${esc(data.folder.name)}" title="Relire cette série sur le disque : fichiers ajoutés ou jetés, format, pages, couvertures">↻ Rescanner</button>` : ""}</span></h1>`;
-      html += bdtPanelHtml(data);
+      if (!ultraMode()) html += bdtPanelHtml(data);
     }
     html += lettersHtml(list);
-    html += gridFor(id ? withGhosts(list, data.bdt) : list, page || 1);
+    html += gridFor(id && !ultraMode() ? withGhosts(list, data.bdt) : list, page || 1);
     main.innerHTML = html;
     if (data.bdt_oneshots && data.bdt_oneshots.running) pollOneshots(data.folder.id);
   }
@@ -1103,10 +1115,12 @@
   /* Dossier de one shots : chaque album est sa propre série sur Bédéthèque. */
   function oneshotsPanelHtml(data) {
     const o = data.bdt_oneshots, c = o.counts, fid = data.folder.id;
-    const done = c.ok + c.ambiguous + c.not_found, pct = c.total ? Math.round(done / c.total * 100) : 0;
+    const done = c.ok + c.ambiguous + c.not_found + (c.skip || 0), pct = c.total ? Math.round(done / c.total * 100) : 0;
     const amb = o.albums.filter(a => a.status === "ambiguous"), nf = o.albums.filter(a => a.status === "not_found"), ok = o.albums.filter(a => a.status === "ok");
+    const skipped = o.albums.filter(a => a.status === "skip");
     const admin = isAdmin();
-    const other = a => admin ? `<button class="btn mini" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Chercher cet album sur Bédéthèque : autre titre, homonymes, ou adresse de la fiche">Chercher…</button>` : "";
+    const other = a => admin ? `<button class="btn mini" type="button" data-bdt="os-open" data-album="${a.id}" data-q="${esc(a.query || "")}" title="Chercher cet album sur Bédéthèque : autre titre, homonymes, ou adresse de la fiche">Chercher…</button>
+      <button class="btn mini os-skip" type="button" data-bdt="os-skip" data-album="${a.id}" title="Cet album n'existe pas sur Bédéthèque : l'enlever de la liste (il ne sera plus cherché ; « remettre » plus bas pour annuler)">✕ Pas sur Bédéthèque</button>` : "";
     // petite couverture de l'album à droite de son nom ; agrandie au survol (pour la comparer aux propositions)
     const kids = new Map((data.children || []).map(ch => [ch.id, ch]));
     const thumb = a => { const ch = kids.get(a.id) || { id: a.id, kind: "album", mtime: 0 };
@@ -1120,7 +1134,7 @@
         <span class="bdt-logo">BD</span>
         <div class="bdt-main">
           <div><b>One shots</b> · chaque album est cherché sur Bédéthèque comme sa propre série</div>
-          <div class="bdt-progress"><span>${plural(c.ok, "trouvé", "trouvés")} · ${c.ambiguous} à choisir · ${plural(c.not_found, "introuvable", "introuvables")}${c.todo ? ` · <b>${c.todo} pas encore cherchés</b>` : ""}${c.incomplete ? ` · ${plural(c.incomplete, "fiche à compléter", "fiches à compléter")}` : ""}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
+          <div class="bdt-progress"><span>${plural(c.ok, "trouvé", "trouvés")} · ${c.ambiguous} à choisir · ${plural(c.not_found, "introuvable", "introuvables")}${c.skip ? ` · ${plural(c.skip, "écarté", "écartés")}` : ""}${c.todo ? ` · <b>${c.todo} pas encore cherchés</b>` : ""}${c.incomplete ? ` · ${plural(c.incomplete, "fiche à compléter", "fiches à compléter")}` : ""}</span><div class="pbar"><i style="width:${pct}%"></i></div></div>
           <div id="os-job" class="muted">${o.running ? `<div class="spinner" style="margin:0;display:inline-block;vertical-align:middle;width:14px;height:14px"></div> Recherche en cours…` : ""}</div>
         </div>
         <div class="bdt-actions">
@@ -1134,6 +1148,7 @@
       ${amb.length && admin ? `<details class="os-sec" open><summary>${plural(amb.length, "album à choisir", "albums à choisir")} : plusieurs séries possibles</summary>${ambHtml}</details>` : ""}
       ${nf.length && admin ? `<details class="os-sec"${amb.length ? "" : " open"}><summary>${plural(nf.length, "album introuvable", "albums introuvables")} sous ce titre</summary>${nfHtml}</details>` : ""}
       ${ok.length ? `<details class="os-sec"><summary>${plural(ok.length, "album trouvé", "albums trouvés")}</summary><ul class="os-ok">${okHtml}</ul></details>` : ""}
+      ${skipped.length && admin ? `<details class="os-sec"><summary>${plural(skipped.length, "album écarté", "albums écartés")} (pas sur Bédéthèque)</summary><ul class="os-ok">${skipped.map(a => `<li><span>${esc(a.name)}</span> <button class="linkbtn" type="button" data-bdt="os-forget" data-album="${a.id}" title="Le remettre dans les albums à chercher">remettre</button></li>`).join("")}</ul></details>` : ""}
     </div>`;
   }
   let osTimer = null;
@@ -1191,6 +1206,12 @@
       }
       if (action === "os-stop") { await api("/api/bdt/batch", { method: "DELETE" }); toast("Arrêt demandé (après l'album en cours)"); return; }
       if (action === "os-forget") { await api(`/api/bdt/oneshot/${el.dataset.album}`, { method: "DELETE" }); route(); return; }
+      if (action === "os-skip") {
+        await api(`/api/bdt/oneshot/${el.dataset.album}/skip`, { method: "POST" });
+        const y = window.scrollY; await route(); window.scrollTo(0, y);
+        toast("Album écarté : il n'est plus cherché sur Bédéthèque (« remettre » dans « albums écartés » pour annuler)");
+        return;
+      }
       if (action === "os-open") {
         const item = el.closest(".os-item, .os-ok li");
         const old = item.querySelector(".os-search");
