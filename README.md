@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.32.1)
+# Bulle — lecteur de BD maison (v0.33.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,16 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Habillage Fêtes** (Réglages › Apparence › Habillage) : couleurs et décor de la fête du calendrier, avec ce qui
+  flotte dans l'air : jour de l'an (confettis et feux d'artifice), Saint-Valentin (cœurs qui montent), Pâques (œufs
+  décorés et fleurs), fête de la musique (notes), 14 juillet (feux d'artifice bleu-blanc-rouge), grandes vacances
+  (ballons de plage, papillons), Halloween (chauves-souris, citrouilles, fantômes, feuilles), Noël (neige, boules et
+  étoiles). Entre deux fêtes, c'est la prochaine qui s'affiche. Le petit bouton à côté du champignon (comme pour
+  Quatre saisons) les fait défiler ; revenir sur la fête du moment repasse en « selon la date ». La date de Pâques
+  est calculée chaque année. Coupé en mode léger, sur téléphone et si l'appareil demande moins d'animations.
+- One shots : un **trait bleu** sous la couverture d'un album déjà trouvé sur Bédéthèque (ou BDfugue).
+- Les messages d'erreur (⚠) disparaissent tout seuls au bout de 5 secondes ; leur icône garde la taille d'une lettre
+  (dans l'habillage Fanzine elle prenait tout l'écran).
 - BDfugue refuse les lecteurs automatiques (code 403) : Bulle ne peut pas lire ses pages depuis le serveur. Une adresse
   BDfugue collée dans « Chercher… » est quand même acceptée : l'album est lié à la fiche, titre d'après l'adresse et le
   nom du fichier (sans auteurs, résumé ni couverture). Après un refus, Bulle ne redemande rien à BDfugue pendant
