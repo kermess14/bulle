@@ -1534,3 +1534,17 @@ img.pavatar { object-fit: cover; padding: 0; }
 .bdtpop { position: fixed; z-index: 65; pointer-events: none; padding: 6px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); min-width: 60px; min-height: 40px; display: flex; align-items: center; justify-content: center; font-size: 12.5px; }
 .bdtpop img { display: block; width: 150px; height: auto; border-radius: 4px; }
 .bdtpop .spinner { margin: 6px; width: 18px; height: 18px; }
+
+/* Mode « BD seules » (troisième clic sur le bouton planche) : rien que les albums, le plus économe possible */
+:root[data-ultra="on"] .sidebar, :root[data-ultra="on"] .tabbar, :root[data-ultra="on"] #side-covers,
+:root[data-ultra="on"] .topbar > :not(.brand):not(#lite-btn):not(.search),
+:root[data-ultra="on"] .h1tools, :root[data-ultra="on"] .gridtools, :root[data-ultra="on"] .bdt-panel,
+:root[data-ultra="on"] .ono, :root[data-ultra="on"] #seasonfx, :root[data-ultra="on"] .mosaic { display: none !important; }
+:root[data-ultra="on"] body { background: var(--bg) !important; background-image: none !important; }
+:root[data-ultra="on"] body::before, :root[data-ultra="on"] body::after { display: none !important; }
+:root[data-ultra="on"] .layout { display: block; }
+:root[data-ultra="on"] .content { margin-left: 0 !important; max-width: none; }
+:root[data-ultra="on"] *, :root[data-ultra="on"] *::before, :root[data-ultra="on"] *::after {
+  animation: none !important; transition: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important; }
+:root[data-ultra="on"] .card:hover .cover, :root[data-ultra="on"] .card .cover { transform: none !important; }
+#lite-btn.ultra { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
