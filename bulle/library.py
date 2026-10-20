@@ -1004,6 +1004,54 @@ class Library:
 
         return [dict(r) for r in sorted(rows, key=rank)[:limit]]
 
+    def search_authors(self, query: str, limit: int = 200, profile_id: int = DEFAULT_PROFILE) -> list[dict]:
+        """Albums dont un auteur (scénario, dessin, couleurs, d'après Bédéthèque ou BDfugue) correspond à la recherche :
+        tous les mots, sans accents ni majuscules, dans le nom d'un même auteur (« moebius », « jean van hamme »,
+        « van hamme »). Chaque album porte `by` : [« Nom (rôle) », …] pour les auteurs trouvés."""
+        words = [w for w in normalize(query).split(" ") if w]
+        if not words:
+            return []
+        sig = tuple(self.conn.execute("SELECT COUNT(*), MAX(updated_at) FROM bdt_albums").fetchone())
+        cache = getattr(self, "_authors_cache", None)
+        if not cache or cache[0] != sig:
+            idx = []
+            for r in self.conn.execute("SELECT node_id, data FROM bdt_albums"):
+                try:
+                    d = json.loads(r["data"] or "{}")
+                except ValueError:
+                    continue
+                people = []
+                for key, role in (("writers", "scénario"), ("pencillers", "dessin"), ("colorists", "couleurs")):
+                    for name in d.get(key) or []:
+                        if isinstance(name, str) and name.strip():
+                            people.append((normalize(name), name.strip(), role))
+                if people:
+                    idx.append((r["node_id"], people))
+            cache = self._authors_cache = (sig, idx)
+        hits: dict[int, list[str]] = {}
+        for node_id, people in cache[1]:
+            found: dict[str, list[str]] = {}
+            for norm, name, role in people:
+                if all(w in norm for w in words):
+                    found.setdefault(name, []).append(role)
+            if found:
+                hits[node_id] = [f"{n} ({', '.join(dict.fromkeys(rs))})" for n, rs in found.items()]
+        if not hits:
+            return []
+        ids = list(hits)[:2000]
+        out = []
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            rows = self.conn.execute(
+                self._ALBUM_WITH_PROGRESS + f"WHERE n.id IN ({','.join('?' * len(chunk))}) AND n.kind='album'",
+                (profile_id, *chunk)).fetchall()
+            for r in rows:
+                d = dict(r)
+                d["by"] = hits[d["id"]]
+                out.append(d)
+        out.sort(key=lambda d: (d["by"][0].casefold(), d["sort_key"]))
+        return out[:limit]
+
     def node_by_path(self, path: str) -> Optional[dict]:
         r = self.conn.execute("SELECT * FROM nodes WHERE path=?", (path.strip("/"),)).fetchone()
         return dict(r) if r else None
