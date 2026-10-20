@@ -29,7 +29,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 7        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 8        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
@@ -509,6 +509,99 @@ def detect_boxes(mask: Image.Image) -> list[tuple]:
     return [r for r in rects if ImageStat.Stat(mask.crop(r)).mean[0] <= 0.45 * 255]
 
 
+def detect_blobs(mask: Image.Image, leaf: tuple) -> list[tuple]:
+    """Cases aux bords dessinés à main levée (traits qui ondulent, cases de biais) : aucune gouttière n'est droite, mais
+    chaque case reste un bloc de dessin séparé des autres par le fond. On cherche ces blocs (taches connexes), après avoir
+    rompu les ponts d'un ou deux pixels (deux cadres qui se frôlent). Liste vide si la zone ne se découpe pas ainsi."""
+    from collections import deque
+    from PIL import ImageFilter
+    x0, y0, x1, y1 = leaf
+    lw, lh = x1 - x0, y1 - y0
+    if lw < 40 or lh < 40:
+        return []
+    sw, sh = max(1, lw // 2), max(1, lh // 2)
+    content = mask.crop(leaf).point([255 if i < 128 else 0 for i in range(256)], "L")
+    # réduit de moitié en gardant les traits fins (un cadre tracé à la plume fait un ou deux pixels)
+    content = content.resize((sw, sh), Image.Resampling.BOX).point([255 if i >= 64 else 0 for i in range(256)], "L")
+    data = bytearray(content.tobytes())
+    seen = bytearray(len(data))
+    comps = []
+    for start in range(len(data)):
+        if not data[start] or seen[start]:
+            continue
+        seen[start] = 1
+        q = deque([start])
+        n = 0
+        bx0, by0, bx1, by1 = sw, sh, 0, 0
+        while q:
+            i = q.popleft()
+            n += 1
+            y, x = divmod(i, sw)
+            if x < bx0: bx0 = x
+            if x > bx1: bx1 = x
+            if y < by0: by0 = y
+            if y > by1: by1 = y
+            for j in ((i - 1) if x > 0 else -1, (i + 1) if x < sw - 1 else -1, i - sw, i + sw):
+                if 0 <= j < len(data) and data[j] and not seen[j]:
+                    seen[j] = 1
+                    q.append(j)
+        comps.append((n, (bx0, by0, bx1 + 1, by1 + 1), start))
+    page = mask.size[0] * mask.size[1]
+    W, H = mask.size
+    big = []
+    for n, (a, b, c, d), seed in sorted(comps, reverse=True):
+        box = (x0 + 2 * a - 2, y0 + 2 * b - 2, x0 + 2 * c + 2, y0 + 2 * d + 2)
+        box = (max(x0, box[0]), max(y0, box[1]), min(x1, box[2]), min(y1, box[3]))
+        if _area(box) < MIN_AREA * page or (box[2] - box[0]) < MIN_PANEL * W or (box[3] - box[1]) < MIN_PANEL * H:
+            continue
+        if 4 * n < 0.35 * _area(box):
+            continue   # trop creux : un trait isolé, pas une case
+        if any(_inter(box, o) >= 0.5 * _area(box) for o in big):
+            continue   # détail à l'intérieur d'une case déjà trouvée
+        # un bloc en L (plusieurs cases qui se touchent par un coin, une bulle) : on le redécoupe par ses propres
+        # gouttières, les autres blocs effacés
+        pieces = [box]
+        crowded = any(_inter(box, o) > 0.1 * min(_area(box), _area(o)) for o in big) or any(
+            _inter(box, (x0 + 2 * a2, y0 + 2 * b2, x0 + 2 * c2, y0 + 2 * d2)) > 0.1 * min(_area(box), 4 * (c2 - a2) * (d2 - b2))
+            for n2, (a2, b2, c2, d2), _ in comps if n2 != n and 4 * n2 >= MIN_AREA * page and (a2, b2, c2, d2) != (a, b, c, d))
+        if crowded and n < 0.8 * (c - a) * (d - b):
+            only = bytearray(len(data))
+            q = deque([seed])
+            only[seed] = 255
+            while q:
+                i = q.popleft()
+                y, x = divmod(i, sw)
+                for j in ((i - 1) if x > 0 else -1, (i + 1) if x < sw - 1 else -1, i - sw, i + sw):
+                    if 0 <= j < len(data) and data[j] and not only[j]:
+                        only[j] = 255
+                        q.append(j)
+            blob = Image.frombytes("L", (sw, sh), bytes(only)).resize((lw, lh), Image.Resampling.NEAREST)
+            blob = blob.filter(ImageFilter.MaxFilter(3))
+            sub = mask.copy()
+            # le fond partout, sauf le dessin de ce bloc
+            sub.paste(255, (0, 0, W, H))
+            sub.paste(mask.crop(leaf), (x0, y0), blob.point([255 if v else 0 for v in range(256)]))
+            min_g = max(2, int(max(W, H) * MIN_GUTTER))
+            min_s = max(6, round(min(W, H) * MIN_PANEL))
+            parts = [r for r in _split(sub, box, 0, 0, min_g, min_s, False)
+                     if _area(r) >= MIN_AREA * page and (r[2] - r[0]) >= MIN_PANEL * W and (r[3] - r[1]) >= MIN_PANEL * H]
+            if len(parts) >= 2:
+                pieces = parts
+        big.extend(pieces)
+    if len(big) < 2:
+        return []
+    # les blocs doivent être des cases côte à côte (peu de chevauchement) et couvrir l'essentiel de la zone dessinée
+    for i, a in enumerate(big):
+        for b in big[i + 1:]:
+            if _inter(a, b) > 0.1 * min(_area(a), _area(b)):
+                return []
+    ux0, uy0 = min(b[0] for b in big), min(b[1] for b in big)
+    ux1, uy1 = max(b[2] for b in big), max(b[3] for b in big)
+    if sum(_area(b) for b in big) < 0.6 * _area((ux0, uy0, ux1, uy1)):
+        return []
+    return big
+
+
 # ----------------------------------------------------------------------------
 # 3. Combinaison
 # ----------------------------------------------------------------------------
@@ -580,6 +673,35 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
             if all(sum(_inter(r, f) for f in outer) <= 0.25 * _area(r) and not any(_inter(r, f) >= 0.8 * _area(f) for f in outer)
                    for r in rest):
                 return _reading_order(outer + rest, rtl)
+    if mask is not None:
+        # une rangée de cases posée sur une grande image (sans gouttière entre les deux) : une case de la rangée est
+        # trouvée comme cadre, collée au bord haut (ou bas) de la zone ; sa hauteur donne celle de la rangée, que les
+        # gouttières verticales découpent ; le reste de la zone est la grande image
+        best: list[tuple] = []
+        for f in inside:
+            if _area(f) < 0.02 * w * h:
+                continue
+            for edge in ("top", "bottom"):
+                if edge == "top" and abs(f[1] - leaf[1]) <= 10 and leaf[3] - f[3] >= min_side:
+                    strip, rest_box = (leaf[0], leaf[1], leaf[2], f[3]), (leaf[0], f[3], leaf[2], leaf[3])
+                elif edge == "bottom" and abs(f[3] - leaf[3]) <= 10 and f[1] - leaf[1] >= min_side:
+                    strip, rest_box = (leaf[0], f[1], leaf[2], leaf[3]), (leaf[0], leaf[1], leaf[2], f[1])
+                else:
+                    continue
+                pieces = [t for t in (_trim(mask, b) for b in _cut(mask, strip, 1, min_gutter, min_side)) if t]
+                pieces = [b for b in pieces if _area(b) >= MIN_AREA * w * h and (b[2] - b[0]) >= MIN_PANEL * w]
+                if len(pieces) >= 2 and len(pieces) > len(best) - 1:
+                    rest_t = _trim(mask, rest_box)
+                    rest_parts = []
+                    if rest_t and _area(rest_t) >= MIN_AREA * w * h:
+                        # le reste peut contenir d'autres cases (une autre rangée posée sur l'image) : même traitement
+                        rest_parts = _refine_leaf(rest_t, inside, w, h, rtl, mask, min_gutter, min_side) \
+                            if _area(rest_t) < la else [rest_t]
+                    cand = pieces + rest_parts
+                    if len(cand) > len(best):
+                        best = cand
+        if best:
+            return _reading_order(best, rtl)
     ordered = _reading_order(inside, rtl)
     bx0, by0 = min(f[0] for f in inside), min(f[1] for f in inside)
     bx1, by1 = max(f[2] for f in inside), max(f[3] for f in inside)
@@ -928,7 +1050,13 @@ def detect_panels(img: Image.Image) -> dict:
         res = (_split(mask, full, 0, 0, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [full]) or [full]
         out: list[tuple] = []
         for leaf in res:
-            out.extend(_refine_leaf(leaf, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None, min_gutter, min_side))
+            parts = _refine_leaf(leaf, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None, min_gutter, min_side)
+            if parts == [leaf] and (bg >= 200 or bg <= 55) and _area(leaf) >= 0.3 * page_area:
+                # grande zone indécoupable : peut-être des cases aux bords tracés à main levée, séparées par le fond
+                blobs = detect_blobs(mask, leaf)
+                if blobs:
+                    parts = _reading_order(blobs, rtl)
+            out.extend(parts)
         return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 
     ltr = leaves(False)
