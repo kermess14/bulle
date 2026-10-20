@@ -29,7 +29,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 8        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 9        # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
@@ -593,13 +593,95 @@ def detect_blobs(mask: Image.Image, leaf: tuple) -> list[tuple]:
     # les blocs doivent être des cases côte à côte (peu de chevauchement) et couvrir l'essentiel de la zone dessinée
     for i, a in enumerate(big):
         for b in big[i + 1:]:
-            if _inter(a, b) > 0.1 * min(_area(a), _area(b)):
+            if _inter(a, b) > 0.25 * min(_area(a), _area(b)):   # (cases de biais : leurs rectangles se recouvrent un peu)
                 return []
     ux0, uy0 = min(b[0] for b in big), min(b[1] for b in big)
     ux1, uy1 = max(b[2] for b in big), max(b[3] for b in big)
     if sum(_area(b) for b in big) < 0.6 * _area((ux0, uy0, ux1, uy1)):
         return []
     return big
+
+
+LINE_EDGE = 32            # écart de gris entre deux pixels de part et d'autre d'un bord net
+LINE_COVER = 0.6          # part de la longueur de la zone que le bord doit couvrir (marges, bulles et cartouches tolérés)
+
+
+def _edge_rows(gray: Image.Image, box: tuple, axis: int) -> list[float]:
+    """Pour chaque ligne (axis=0) ou colonne (axis=1) de la zone : part de sa longueur où l'image change nettement de
+    part et d'autre (un bord de case, quelle que soit sa couleur)."""
+    region = gray.crop(box)
+    if axis == 1:
+        region = region.transpose(Image.Transpose.TRANSPOSE)
+    w, h = region.size
+    if w < 10 or h < 10:
+        return []
+    up = Image.new("L", (w, h), 0); up.paste(region.crop((0, 0, w, h - 2)), (0, 2))
+    diff = ImageChops.difference(region, up).point([255 if i >= LINE_EDGE else 0 for i in range(256)], "L")
+    return [v / 255.0 for v in diff.resize((1, h), Image.Resampling.BOX).getdata()]
+
+
+def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int) -> list[tuple]:
+    """Coupe une zone le long des bords de case rectilignes qui la traversent de part en part : deux bords parallèles
+    rapprochés (le bas d'une case, le haut de la suivante), même quand la gouttière entre les deux n'est pas du fond
+    (décor peint, couleur qui change en cours de page) et même si un cartouche la chevauche."""
+    prof = _edge_rows(gray, box, axis)
+    n = len(prof)
+    rows = [i for i, v in enumerate(prof) if v >= LINE_COVER and i >= 3]
+    # bords regroupés (un trait donne deux ou trois lignes voisines)
+    edges, cur = [], []
+    for i in rows:
+        if cur and i - cur[-1] > 2:
+            edges.append((cur[0], cur[-1] + 1)); cur = []
+        cur.append(i)
+    if cur:
+        edges.append((cur[0], cur[-1] + 1))
+    region = gray.crop(box)
+    if axis == 1:
+        region = region.transpose(Image.Transpose.TRANSPOSE)
+    rw = region.size[0]
+    cuts = []
+    for (a0, a1), (b0, b1) in zip(edges, edges[1:]):
+        gap = b0 - a1
+        strong = max(max(prof[a0:a1]), max(prof[b0:b1])) >= 0.67   # au moins un des deux bords bien net
+        if strong and 2 <= gap <= max(30, round(0.035 * n)) and a0 >= min_side and n - b1 >= min_side:
+            # entre les deux bords, une gouttière : une bande unie sur l'essentiel de sa longueur (un cartouche peut la
+            # chevaucher) ; deux traits d'un décor (plancher, poutre) ont du dessin entre eux
+            band = region.crop((0, a1, rw, b0)).resize((rw, 1), Image.Resampling.BOX)
+            vals = list(band.getdata())
+            med = sorted(vals)[len(vals) // 2]
+            if sum(1 for v in vals if abs(v - med) <= 28) >= 0.45 * len(vals):
+                cuts.append((a0, b1))
+    if not cuts:
+        return [box]
+    x0, y0, x1, y1 = box
+    parts, pos = [], 0
+    for a, b in cuts:
+        if a - pos >= min_side:
+            parts.append((pos, a))
+            pos = b
+    if n - pos >= min_side:
+        parts.append((pos, n))
+    if len(parts) < 2:
+        return [box]
+    if axis == 0:
+        return [(x0, y0 + a, x1, y0 + b) for a, b in parts]
+    return [(x0 + a, y0, x0 + b, y1) for a, b in parts]
+
+
+def split_lines(gray: Image.Image, box: tuple, min_side: int, rtl: bool, depth: int = 0) -> list[tuple]:
+    """Découpage récursif le long des bords rectilignes (rangées, puis cases de chaque rangée)."""
+    if depth > 4:
+        return [box]
+    for axis in ((0, 1) if depth % 2 == 0 else (1, 0)):
+        parts = _line_cuts(gray, box, axis, min_side)
+        if len(parts) >= 2:
+            if axis == 1 and rtl:
+                parts = parts[::-1]
+            out = []
+            for p in parts:
+                out.extend(split_lines(gray, p, min_side, rtl, depth + 1))
+            return out
+    return [box]
 
 
 # ----------------------------------------------------------------------------
@@ -697,6 +779,11 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
                         # le reste peut contenir d'autres cases (une autre rangée posée sur l'image) : même traitement
                         rest_parts = _refine_leaf(rest_t, inside, w, h, rtl, mask, min_gutter, min_side) \
                             if _area(rest_t) < la else [rest_t]
+                    # le reste doit être une grande image : s'il contient lui-même plusieurs cadres de case qu'on n'a
+                    # pas su séparer, c'est une planche ordinaire aux gouttières barrées, pas une rangée sur une image
+                    framed = [g for g in inside if _area(g) >= 0.02 * w * h and _inter(g, rest_box) >= 0.8 * _area(g)]
+                    if len(rest_parts) == 1 and len(framed) >= 2:
+                        continue
                     cand = pieces + rest_parts
                     if len(cand) > len(best):
                         best = cand
@@ -1056,6 +1143,20 @@ def detect_panels(img: Image.Image) -> dict:
                 blobs = detect_blobs(mask, leaf)
                 if blobs:
                     parts = _reading_order(blobs, rtl)
+            if _area(leaf) >= 0.3 * page_area:
+                # ou des rangées aux bords bien droits, mais séparées par autre chose que du fond (décor peint, couleur
+                # qui change, cartouche à cheval) : on coupe le long des bords eux-mêmes, puis chaque rangée est
+                # découpée normalement
+                rows = _line_cuts(gray, leaf, 0, 2 * min_side)   # des rangées franches, pas une bande de texte
+                # seulement si le découpage trouvé contredit ces bords (une case trouvée les enjambe) ou s'il n'y en a pas
+                crossed = parts == [leaf] or any(p[1] < r[1] - min_side and p[3] > r[1] + min_side for p in parts for r in rows[1:])
+                if len(rows) >= 2 and crossed:
+                    parts = []
+                    for row in rows:
+                        sub = (_split(mask, row, 1, 1, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [row]) or [row]
+                        for r in sub:
+                            parts.extend(_refine_leaf(r, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None,
+                                                      min_gutter, min_side))
             out.extend(parts)
         return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 
