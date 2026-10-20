@@ -461,6 +461,7 @@ body:has(.letters.rail.right) .toast { right: 72px; }   /* à gauche de la barre
 .chip:hover { background: var(--card-2); }
 .ext { color: var(--blue); font-size: 13px; margin-left: 6px; white-space: nowrap; }
 .warnlabel { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: rgba(255, 180, 84, .18); color: var(--accent); font-size: 12px; font-weight: 600; }
+.srctag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: rgba(120, 170, 255, .16); color: var(--muted, #9aa); font-size: 11px; font-weight: 600; }
 .bdt-choose { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .bdt-choose p { margin: 0; }
 .cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
