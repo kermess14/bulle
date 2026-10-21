@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.33.2)
+# Bulle — lecteur de BD maison (v0.33.4)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -142,6 +142,12 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - One shots : bouton **« 📚 Tome d'une série »** sur la ligne d'un album qui n'est pas un one shot mais le tome d'une
   série : il est mis de côté (plus cherché ici), rangé dans « tomes de série mis de côté » avec « remettre ». Le
   bouton du haut s'appelle maintenant « Tout le dossier est une série » (il concerne tout le dossier, pas un album).
+- **Sécurité (v0.33.4)**, suite à la relecture : en mode « qui lit ? », un visiteur sans profil choisi était traité
+  comme le premier profil (l'administrateur) par l'API, et pouvait donc changer son mot de passe ou effacer sa
+  progression ; dès que ce profil a un mot de passe (ou que « qui lit ? » est demandé), toute modification exige
+  maintenant d'avoir choisi un profil. Changer ou supprimer son propre mot de passe demande l'ancien (l'administrateur
+  peut toujours changer celui des autres). Le ↻ « Rescanner ce fichier » (qui vide le cache et ré-extrait l'archive)
+  est réservé à l'administrateur. Le paramètre `n` des listes (récents, reprise, historique) est borné à 500.
 - **Sécurité (v0.33.2)** : la vignette d'un profil n'accepte plus qu'une petite image PNG, JPEG, WebP ou GIF en
   base64 (ou quelques caractères) ; une valeur piégée, qui aurait pu lancer un script chez les autres lecteurs et
   l'administrateur, est refusée et les anciennes valeurs douteuses sont ignorées ; l'appli échappe aussi la
