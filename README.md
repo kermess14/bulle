@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.33.1)
+# Bulle — lecteur de BD maison (v0.33.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -142,6 +142,15 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - One shots : bouton **« 📚 Tome d'une série »** sur la ligne d'un album qui n'est pas un one shot mais le tome d'une
   série : il est mis de côté (plus cherché ici), rangé dans « tomes de série mis de côté » avec « remettre ». Le
   bouton du haut s'appelle maintenant « Tout le dossier est une série » (il concerne tout le dossier, pas un album).
+- **Sécurité (v0.33.2)** : la vignette d'un profil n'accepte plus qu'une petite image PNG, JPEG, WebP ou GIF en
+  base64 (ou quelques caractères) ; une valeur piégée, qui aurait pu lancer un script chez les autres lecteurs et
+  l'administrateur, est refusée et les anciennes valeurs douteuses sont ignorées ; l'appli échappe aussi la
+  vignette à l'affichage. Tous les cookies sont **HttpOnly** (illisibles par un script) et « Secure » en HTTPS.
+  Nouveau réglage **Imposer le HTTPS** (Réglages › Accès, ou variable `FORCE_HTTPS=1`) : une visite en `http://`
+  depuis Internet est renvoyée vers `https://` (redirection 308) et le navigateur retient de n'utiliser que le
+  HTTPS (HSTS, 6 mois). Le certificat reste fourni par le proxy inverse, qui doit transmettre `X-Forwarded-Proto` ;
+  les adresses de la maison (192.168…, localhost, nom court) ne sont jamais redirigées, et l'option ne s'active que
+  depuis une page ouverte en `https://` pour ne pas vous enfermer dehors.
 - **Recherche par auteur** : la barre de recherche trouve aussi les albums par leurs auteurs (scénario, dessin,
   couleurs), sans accents ni majuscules, dans l'ordre qu'on veut (« van hamme », « moebius », « mourier jean »). Les
   résultats sont regroupés par auteur, en tête de page. Seuls les albums liés à Bédéthèque (ou BDfugue) dont les
