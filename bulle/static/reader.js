@@ -469,7 +469,7 @@
   const queueStep = dir => { pendingStep = Math.max(-3, Math.min(3, pendingStep + dir)); };
   /* Recadrage à la main en case par case : la case est déplacée du doigt (ou à la souris) quand la détection l'a mal
      cadrée ou qu'un bout déborde ; on ne peut pas sortir de la planche. La case suivante repart d'un cadrage propre. */
-  let panelFrame = null, panelDrag = null;
+  let panelFrame = null, panelDrag = null, dragRaf = 0;
   const panelOff = { x: 0, y: 0, page: -1, idx: -1 };
   function clampPanelOff() {
     if (!panelFrame) return;
@@ -500,12 +500,13 @@
     if (!panelDrag.moved && Math.abs(dx) + Math.abs(dy) > 6) { panelDrag.moved = true; fxOff(true); }
     if (!panelDrag.moved) return;
     panelOff.x = panelDrag.ox + dx; panelOff.y = panelDrag.oy + dy;
-    placePanel();
+    // une mise en place par image d'écran, pas par événement (la souris ou le doigt en envoient bien plus)
+    if (!dragRaf) dragRaf = requestAnimationFrame(() => { dragRaf = 0; placePanel(); });
   }
   function panelDragEnd() {
     const moved = !!(panelDrag && panelDrag.moved);
     panelDrag = null;
-    if (moved) { dragMoved = true; requestAnimationFrame(() => fxOff(false)); }
+    if (moved) { if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = 0; } placePanel(); dragMoved = true; requestAnimationFrame(() => fxOff(false)); }
     return moved;
   }
   // Dépile un pas gardé pendant un chargement (appuis répétés) : un à la fois, dans l'ordre.
