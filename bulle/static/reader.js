@@ -108,6 +108,9 @@
 
   // ---------------------------------------------------------------- largeur d'image demandée au serveur
   const stepW = w => Math.min(3840, Math.ceil(w / 160) * 160);   // paliers de 160 px : URLs stables, caches réutilisés
+  // téléphone ou tablette (tactile, petit écran) : la carte graphique y peine sur une image de 3840 px qu'on fait glisser
+  // et zoomer en case par case (case noire le temps qu'elle la redessine) ; 2560 px suffisent à une case nette
+  const smallTouch = () => navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 1100;
   function wantedWidth(n) {
     if (prefs.reader_quality === "original" || (mode === "single" && fit === "original")) return 0;
     const dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -118,7 +121,8 @@
     else if (mode === "double") css = Math.min(vw / 2, vh * asp);
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
     const factor = mode === "panels" ? 2 : prefs.reader_quality === "high" ? 1.5 : 1;   // cases : nettes dès la première image, sans recharger
-    return stepW(css * dpr * factor);
+    const w = stepW(css * dpr * factor);
+    return mode === "panels" && smallTouch() ? Math.min(2560, w) : w;
   }
   let imgTag = "";
   // marges blanches rognées (réglage) : pas en case par case, où les cases sont repérées sur la page entière
@@ -212,8 +216,11 @@
       // même image d'écran : jamais de planche mal cadrée ni de fond noir pendant le chargement.
       list = [n];
       const hi = images.get(n);
-      const ready = hi && hi.complete && hi.naturalWidth && hi.src.endsWith(pageUrl(n));
-      const imageP = ready ? loadImage(n) : loadImageAt(n, baseWidth(n));
+      // la version nette déjà là convient si c'est celle qu'on voudrait, ou une plus grande (après un redimensionnement
+      // qui a baissé la largeur voulue d'un palier, on garde la plus nette plutôt que d'en recharger une)
+      const want = wantedWidth(n);
+      const ready = hi && hi.complete && hi.naturalWidth && (hi.src.endsWith(pageUrl(n)) || (want > 0 && hi.naturalWidth >= want));
+      const imageP = ready ? (hi.decoded || (hi.decoded = waitFor(hi, n))) : loadImageAt(n, baseWidth(n));
       const panelsP = getPanels(n);
       const a = await imageP;
       if (token !== loadToken) return;
@@ -241,7 +248,15 @@
         updateCounter();
         drainStep();
       });
-      if (!ready && a) loadImage(n).then(full => { if (token === loadToken && current === n && full && full.src !== img.src) swapSrc(img, full.src, n); });
+      if (!ready && a) {
+        // la version nette (×2) arrive en arrière-plan : l'affinage après cadrage l'attend au lieu de demander,
+        // en plus, une troisième largeur pour la même planche
+        hiPending = n;
+        loadImage(n).then(full => {
+          if (hiPending === n) hiPending = -1;
+          if (token === loadToken && current === n && full && full.src !== img.src) swapSrc(img, full.src, n);
+        });
+      }
       updateCounter();
       done();
       drainStep();
@@ -301,7 +316,9 @@
     })();
     panelsCache.set(n, p);
     const d = await p;
-    panelsCache.set(n, d);
+    // une réponse du serveur (même « pas de cases ») porte sa version « v » ; un échec (réseau, erreur) n'en a pas :
+    // il n'est pas gardé, la planche sera redemandée à la prochaine visite
+    if (d && d.v !== undefined) panelsCache.set(n, d); else if (panelsCache.get(n) === p) panelsCache.delete(n);
     return d;
   }
   const padOf = () => Math.max(0, Math.min(15, +prefs.reader_panels_margin || 0)) / 100;
@@ -455,7 +472,7 @@
   const queueStep = dir => { pendingStep = Math.max(-3, Math.min(3, pendingStep + dir)); };
   /* Recadrage à la main en case par case : la case est déplacée du doigt (ou à la souris) quand la détection l'a mal
      cadrée ou qu'un bout déborde ; on ne peut pas sortir de la planche. La case suivante repart d'un cadrage propre. */
-  let panelFrame = null, panelDrag = null;
+  let panelFrame = null, panelDrag = null, dragRaf = 0;
   const panelOff = { x: 0, y: 0, page: -1, idx: -1 };
   function clampPanelOff() {
     if (!panelFrame) return;
@@ -486,12 +503,13 @@
     if (!panelDrag.moved && Math.abs(dx) + Math.abs(dy) > 6) { panelDrag.moved = true; fxOff(true); }
     if (!panelDrag.moved) return;
     panelOff.x = panelDrag.ox + dx; panelOff.y = panelDrag.oy + dy;
-    placePanel();
+    // une mise en place par image d'écran, pas par événement (la souris ou le doigt en envoient bien plus)
+    if (!dragRaf) dragRaf = requestAnimationFrame(() => { dragRaf = 0; placePanel(); });
   }
   function panelDragEnd() {
     const moved = !!(panelDrag && panelDrag.moved);
     panelDrag = null;
-    if (moved) { dragMoved = true; requestAnimationFrame(() => fxOff(false)); }
+    if (moved) { if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = 0; } placePanel(); dragMoved = true; requestAnimationFrame(() => fxOff(false)); }
     return moved;
   }
   // Dépile un pas gardé pendant un chargement (appuis répétés) : un à la fois, dans l'ordre.
@@ -519,6 +537,8 @@
     const count = Math.max(0, Math.min(10, +prefs.reader_preload || 0));
     for (const k of [...images.keys()]) if (Math.abs(k - n) > count + 4) images.delete(k);
     for (const k of [...lowImages.keys()]) if (Math.abs(k - n) > count + 4) lowImages.delete(k);
+    // les cases aussi (le navigateur les garde de son côté : redemander une planche lointaine ne coûte rien)
+    for (const k of [...panelsCache.keys()]) if (Math.abs(k - n) > count + 4) panelsCache.delete(k);
     // tout le spéculatif est en priorité réseau basse : le navigateur n'a que 6 connexions par hôte,
     // la planche qu'on demande vraiment garde la voie libre
     if (mode === "panels") {
@@ -844,11 +864,17 @@
      (1400, 2000, 2600 px) : chaque largeur différente est une image à recalculer côté serveur, et une image trop grande
      rend le zoom poussif ; une seule demande à la fois, jamais une version moins nette que celle affichée. */
   const REFINE_LADDER = [1400, 2000, 2600];
-  let refineTimer = null, refining = false, refineAgain = false;
+  let refineTimer = null, refining = false, refineAgain = false, hiPending = -1;
   function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, mode === "panels" && userZoom === 1 ? 700 : 320); }
   async function refineZoom() {
     if (refining) { refineAgain = true; return; }
     if (navBusy) { scheduleRefine(); return; }   // une planche arrive : on affinera celle-là, plus tard
+    if (mode === "panels" && userZoom === 1) {
+      // sans zoom manuel, la version nette des cases est la version ×2 (wantedWidth) : si elle est là, ou en route
+      // (son échange attend peut-être la fin d'un glissement), on ne demande pas une troisième largeur
+      const hi = images.get(current), want = wantedWidth(current);
+      if (hiPending === current || (hi && want > 0 && hi.naturalWidth >= 0.9 * want)) return;
+    }
     const effective = userZoom * (mode === "panels" && panelIdx >= 0 ? panelScale : 1);
     if (effective <= 1.15 || mode === "scroll" || prefs.reader_quality === "original") return;
     const token = loadToken;
@@ -860,6 +886,10 @@
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const want = Math.ceil(el.getBoundingClientRect().width * dpr);   // largeur affichée réelle en pixels physiques
         if (el.naturalWidth >= want * 0.8) continue;
+        // le serveur n'agrandit jamais : une image plus petite que la largeur demandée, c'est la page d'origine qui est
+        // petite (vignette, dernière page) ; il n'en existe pas de plus nette
+        const asked = +((el.src.match(/[?&]w=(\d+)/) || [])[1] || 0);
+        if (asked && el.naturalWidth && el.naturalWidth < asked) continue;
         const ladder = mode === "panels" && userZoom === 1 ? REFINE_LADDER.slice(0, 2) : REFINE_LADDER;   // cases : 2000 px maxi, le serveur souffle
         const w = ladder.find(x => x >= want) || ladder[ladder.length - 1];
         if (el.naturalWidth >= w) continue;
@@ -1105,7 +1135,10 @@
   let resizeTimer = null;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (current >= 0 && mode !== "scroll" && (fit !== "original" || mode === "panels")) { images.clear(); go(current, { save: false, panel: "keep" }); } }, 300);
+    // les images déjà chargées sont gardées : loadImage / loadImageAt rechargent d'elles-mêmes celles dont la largeur
+    // voulue a changé (adresse différente), et réutilisent les autres (barre d'adresse du téléphone qui apparaît,
+    // clavier, fenêtre un peu agrandie : la planche affichée et ses voisines n'étaient pas à rejeter)
+    resizeTimer = setTimeout(() => { if (current >= 0 && mode !== "scroll" && (fit !== "original" || mode === "panels")) go(current, { save: false, panel: "keep" }); }, 300);
   });
 
   init();
