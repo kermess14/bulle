@@ -29,9 +29,11 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 13       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 14       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
-WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces
+WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
+                          # Le serveur fournit une page d'au moins cette largeur (PANELS_WIDTH) : le résultat ne dépend
+                          # plus de la version de la page en cache (à 600 px, 1 planche sur 4 n'avait pas les mêmes cases)
 GUTTER_FRACTION = 0.965   # part de pixels « fond » pour qu'une ligne soit une gouttière
 PARTIAL_GUTTER = 0.55     # gouttière « barrée » (bulle, cartouche ou décor qui déborde dessus) : lignes candidates…
 PARTIAL_MIN = 0.6         # … part de fond minimale sur toute l'épaisseur…

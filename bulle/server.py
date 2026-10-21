@@ -33,9 +33,10 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.34.0"
+VERSION = "0.34.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
-PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
+PANELS_WIDTH = 800   # largeur de l'image analysée pour trouver les cases : la largeur de travail de panels.py, pour que
+                     # les cases ne dépendent pas de la version de la page qui traîne dans le cache (= WORK_WIDTH)
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -870,7 +871,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if cached is not None and cached.get("v") == PANELS_VERSION:
             return jsonify(cached)
         try:
-            # une version de la page déjà en cache (celle que le lecteur vient d'afficher) évite une conversion de plus
+            # une version de la page déjà en cache (celle que le lecteur vient d'afficher) évite une conversion de plus ;
+            # jamais plus petite que la largeur de travail (la détection la réduit ensuite à cette largeur)
             path, data = comics.cached_page_at_least(node, index, PANELS_WIDTH), None
             if path is None:
                 path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
@@ -881,8 +883,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         except AlbumError as e:
             abort(415, description=str(e))
         except Exception as e:  # noqa: BLE001
+            # pas gardé en base : un raté passager (archive en cours d'extraction, cache plein) sera réessayé
             log.warning("Détection des cases %s p.%d : %s", node["path"], index, e)
-            result = {"panels": [], "rtl": [], "v": PANELS_VERSION}
+            return jsonify({"panels": [], "rtl": [], "v": PANELS_VERSION})
         lib.panels_set(node_id, index, result)
         return jsonify(result)
 
