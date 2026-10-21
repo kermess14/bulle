@@ -1039,6 +1039,49 @@ class Comics:
                         log.warning("Cache pages indisponible : %s", e)
                 return None, data, "image/jpeg"
 
+    SIMPLE_BOX = 1024          # page « lecture simple » : tient dans un carré de 1024 px (jamais agrandie)
+    SIMPLE_QUALITY = 72        # JPEG de base (non progressif), 4:2:0 : léger pour un iPad 1 (256 Mo de mémoire vive)
+
+    def page_simple(self, node: dict, abs_path: str, index: int) -> tuple[Optional[str], Optional[bytes]]:
+        """Page pour la lecture simple (/simple, très vieux appareils) : tient dans SIMPLE_BOX × SIMPLE_BOX px, JPEG de
+        base non progressif et modeste (≈ 100 à 250 Ko). Gardée dans le dossier des pages en cache (donc purgée avec lui,
+        sans toucher aux pages de l'application : le nom se termine par « -simple1024.jpg »).
+        Renvoie (chemin_fichier_cache, None) ou (None, octets) si le cache des pages est coupé."""
+        cached = os.path.join(self.pages_dir, str(node["id"]), f"{self._ver(node)}-{index}-simple{self.SIMPLE_BOX}.jpg")
+        if self.page_cache and os.path.exists(cached):
+            return cached, None
+        with self.lock(node["id"]):
+            if self.page_cache and os.path.exists(cached):
+                return cached, None
+            with self.open(node, abs_path) as album:
+                try:
+                    if isinstance(album, PdfAlbum):
+                        img = album.render(index, self.SIMPLE_BOX)
+                    else:
+                        data, _ = album.read(index)
+                        img = Image.open(io.BytesIO(data))
+                    w, h = img.size
+                    scale = min(1.0, self.SIMPLE_BOX / max(1, w), self.SIMPLE_BOX / max(1, h))
+                    img = _shrink(img, max(1, round(w * scale)), self.sharpen)
+                    img = flatten(img)
+                    img.info = {}
+                    out = io.BytesIO()
+                    img.save(out, "JPEG", quality=self.SIMPLE_QUALITY, subsampling=2, progressive=False, optimize=False)
+                    body = out.getvalue()
+                except AlbumError:
+                    raise
+                except Image.UnidentifiedImageError as e:
+                    raise AlbumError("format d'image non reconnu") from e
+                except Exception as e:  # noqa: BLE001
+                    raise AlbumError(f"image illisible : {e}") from e
+            if self.page_cache:
+                try:
+                    self._write_atomic(cached, body)
+                    return cached, None
+                except OSError as e:
+                    log.warning("Cache pages indisponible : %s", e)
+            return None, body
+
     def _render(self, album: Album, index: int, width: int, trim: bool = False) -> bytes:
         quality, subsampling = self.jpeg
         if width == 0:

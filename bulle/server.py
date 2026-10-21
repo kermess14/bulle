@@ -19,11 +19,14 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
-from flask import Flask, Response, abort, g as flask_g, jsonify, make_response, request, send_file, send_from_directory
+from flask import (Flask, Response, abort, g as flask_g, jsonify, make_response, redirect, request, send_file,
+                   send_from_directory)
 from itsdangerous import BadSignature, URLSafeSerializer
 from PIL import Image
+from werkzeug.exceptions import HTTPException
 
 from . import opds
+from . import simple
 
 from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, compare, index_letter_for, norm_title,
                          album_url as bdt_album_url, album_year, is_oneshot_name, parse_album_name, pick_album, query_from_album,
@@ -33,7 +36,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.34.11"
+VERSION = "0.35.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -793,6 +796,231 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/read/<int:node_id>")
     def read_page(node_id: int):
         return html_page("reader.html")
+
+    # ------------------------------------------------------------------ /simple : lecture sans JavaScript (iPad 1…)
+    # Pages HTML rendues par le serveur (bulle/simple.py), pour un appareil trop vieux pour l'application. Mêmes règles que
+    # le reste : code d'accès / comptes, profil choisi, mots de passe, rubrique Adulte cachée, progression par profil.
+    # Rien d'administratif ici : pas de réglages, pas de scan, pas de gestion des profils. Le « gate » ci-dessus laisse
+    # passer les pages HTML sans authentification (l'interface affiche elle-même l'écran du code) : chaque route /simple
+    # vérifie donc elle-même, d'où simple_guard().
+    def simple_html(html: str, status: int = 200) -> Response:
+        resp = make_response(html, status)
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+    def simple_needs_profile() -> bool:
+        """« Qui lit ? » : pas de profil choisi alors que la bibliothèque en demande un (ou en a plusieurs)."""
+        return not profile_selected() and (guest_locked() or len(lib.profiles()) > 1)
+
+    def simple_guard() -> Optional[Response]:
+        return None if (auth_ok() and not simple_needs_profile()) else redirect("/simple")
+
+    def simple_message(title: str, text: str, status: int, links=(("/simple", "Accueil"),)) -> Response:
+        return simple_html(simple.message_page(title, text, links), status)
+
+    def simple_throttled(fn, *args):
+        """Appelle une des fonctions anti-rafale ; renvoie la réponse « trop d'essais » si le blocage est en cours."""
+        try:
+            fn(*args)
+        except HTTPException as e:
+            return simple_message("Trop d'essais", e.description or "Réessayez plus tard.", 429)
+        return None
+
+    def simple_folder_view(folder: dict) -> Response:
+        pid = current_profile()
+        by_id = {p["node_id"]: p for p in lib.all_progress(pid)}
+        base = "/simple/series" if folder["id"] == (lib.root_node() or {}).get("id") else f"/simple/serie/{folder['id']}"
+        items = []
+        for c in visible(lib.children(folder["id"])):
+            if c["kind"] == "folder":
+                items.append({"href": f"/simple/serie/{c['id']}", "name": c["name"], "sub": "Dossier",
+                              "cover": f"/api/cover/{c['id']}?w=100" if c.get("cover_id") else ""})
+            else:
+                label = simple.progress_label(by_id.get(c["id"]), c.get("page_count")) if not c.get("error") else "illisible"
+                items.append({"href": f"/simple/lire/{c['id']}", "name": c["name"], "sub": label,
+                              "cover": "" if c.get("error") else f"/api/cover/{c['id']}?w=100"})
+        for it in items:
+            it["letter"] = simple.letter_of(it["name"])
+        page = request.args.get("p", 1, type=int) or 1
+        want = request.args.get("l", "")
+        if want:   # index alphabétique : la page où la lettre commence
+            want = "#" if want == "0" else want.upper()[:1]
+            idx = next((i for i, it in enumerate(items) if it["letter"] == want), 0)
+            page = idx // simple.PER_PAGE + 1
+        up = None
+        if folder.get("parent_id"):
+            parent = lib.node(folder["parent_id"])
+            up = (("/simple/series" if parent and parent["id"] == (lib.root_node() or {}).get("id")
+                   else f"/simple/serie/{folder['parent_id']}"), "↑ Dossier au-dessus")
+        crumb = " › ".join(c["name"] for c in lib.breadcrumb(folder)[1:-1])
+        title = folder["name"] if folder.get("parent_id") else "Séries"
+        return simple_html(simple.list_page(title, items, page, base, up, crumb=crumb))
+
+    @app.route("/simple")
+    @app.route("/simple/")
+    def simple_index():
+        if not auth_ok():
+            return simple_html(simple.login_page(account_mode()))
+        profiles = profiles_visible()
+        if not account_mode() and (simple_needs_profile() or request.args.get("choix") == "1"):
+            return simple_html(simple.profiles_page(profiles))
+        pid = current_profile()
+        me = lib.profile(pid) or {}
+        cont = visible(lib.continue_reading(limit=8, profile_id=pid))
+        items = [{"href": f"/simple/lire/{c['id']}", "name": c["name"], "cover": f"/api/cover/{c['id']}?w=100",
+                  "sub": simple.progress_label({"page": c.get("p_page"), "page_count": c.get("p_count"),
+                                                "completed": c.get("p_completed")}, c.get("page_count"))} for c in cont]
+        return simple_html(simple.home_page(me.get("name") or "", items,
+                                            change_profile=not account_mode() and len(profiles) > 1,
+                                            logout=account_mode()))
+
+    @app.route("/simple/connexion", methods=["POST"])
+    def simple_login():
+        """Code d'accès, ou nom + mot de passe (mode comptes) : les mêmes vérifications que /api/auth/login."""
+        ip = "ip:" + client_ip()
+        if account_mode():
+            name = (request.form.get("name") or "").strip()
+            acct = "acct:" + name.casefold()
+            blocked = simple_throttled(throttle_check, ip, acct)
+            if blocked:
+                return blocked
+            p = profile_by_login(name, request.form.get("password") or "")
+            if not p:
+                throttle_fail(ip, acct)
+                return simple_html(simple.login_page(True, "Nom ou mot de passe incorrect"), 403)
+            throttle_ok(ip, acct)
+            resp = redirect("/simple", 303)
+            set_session(resp, p)
+            return resp
+        stored = access_pin_hash()
+        blocked = simple_throttled(throttle_check, ip)
+        if blocked:
+            return blocked
+        if stored and not check_pin(stored, request.form.get("pin") or ""):
+            throttle_fail(ip)
+            return simple_html(simple.login_page(False, "Code d'accès incorrect"), 403)
+        throttle_ok(ip)
+        resp = redirect("/simple", 303)
+        if stored:
+            put_cookie(resp, "bulle_auth", signer.dumps({"auth": stored[-16:]}), 10 * 365 * 24 * 3600)
+        return resp
+
+    @app.route("/simple/profil", methods=["POST"])
+    def simple_profile():
+        """Choisir son profil (avec son mot de passe s'il en a un) : comme /api/profiles/select."""
+        if not auth_ok() or account_mode():
+            return redirect("/simple", 303)
+        p = lib.profile(request.form.get("id", 0, type=int))
+        shown = profiles_visible()
+        if not p:
+            return simple_html(simple.profiles_page(shown, "Profil inconnu"), 404)
+        ip, acct = "ip:" + client_ip(), "acct:" + p["name"].strip().casefold()
+        blocked = simple_throttled(throttle_check, ip, acct)
+        if blocked:
+            return blocked
+        if p.get("pin_hash") and not check_pin(p["pin_hash"], request.form.get("pin") or ""):
+            throttle_fail(ip, acct)
+            return simple_html(simple.profiles_page(shown, f"Mot de passe incorrect pour {p['name']}"), 403)
+        throttle_ok(ip, acct)
+        resp = redirect("/simple", 303)
+        put_cookie(resp, "bulle_profile", signer.dumps({"p": p["id"]}), 10 * 365 * 24 * 3600)
+        return resp
+
+    @app.route("/simple/deconnexion", methods=["POST"])
+    def simple_logout():
+        resp = redirect("/simple", 303)
+        resp.delete_cookie("bulle_profile")
+        resp.delete_cookie("bulle_adult")
+        resp.delete_cookie("bulle_session")
+        return resp
+
+    @app.route("/simple/series")
+    def simple_series():
+        guard = simple_guard()
+        if guard:
+            return guard
+        root = lib.root_node()
+        if not root:
+            return simple_message("Bibliothèque vide", "Aucune série pour le moment (un scan est peut-être en cours).", 200)
+        return simple_folder_view(root)
+
+    @app.route("/simple/serie/<int:node_id>")
+    def simple_serie(node_id: int):
+        guard = simple_guard()
+        if guard:
+            return guard
+        return simple_folder_view(get_node(node_id, "folder"))
+
+    def simple_back_url(node: dict) -> str:
+        """Retour à la liste qui contient l'album, à la bonne page."""
+        parent = node.get("parent_id")
+        if not parent:
+            return "/simple/series"
+        base = "/simple/series" if parent == (lib.root_node() or {}).get("id") else f"/simple/serie/{parent}"
+        ids = [c["id"] for c in visible(lib.children(parent))]
+        pos = ids.index(node["id"]) if node["id"] in ids else 0
+        return f"{base}?p={pos // simple.PER_PAGE + 1}"
+
+    @app.route("/simple/lire/<int:node_id>")
+    def simple_read(node_id: int):
+        """Une planche par page. Sans ?p : reprise à la dernière page lue (un album terminé repart du début), comme le
+        lecteur de l'application. La planche affichée est enregistrée comme page lue (progression du profil)."""
+        guard = simple_guard()
+        if guard:
+            return guard
+        node = ensure_pages(heal(get_node(node_id, "album")))
+        back = simple_back_url(node)
+        count = node.get("page_count") or 0
+        if node.get("error") or not count:
+            return simple_message("Album illisible", node.get("error") or "Cet album ne peut pas être ouvert.", 200,
+                                  [(back, "Retour")])
+        pid = current_profile()
+        prog = lib.progress(node_id, pid)
+        if "p" not in request.args:
+            start = (prog.get("page") or 0) if prog and not prog.get("completed") else 0
+            return redirect(f"/simple/lire/{node_id}?p={min(max(0, start), count - 1) + 1}")
+        page = min(max(1, request.args.get("p", 1, type=int) or 1), count)
+        if not prog or prog.get("page") != page - 1:   # (rien à écrire si on revient sur la page déjà enregistrée)
+            lib.set_progress(node_id, page - 1, count, None, profile_id=pid, threshold=float(settings()["read_threshold"]))
+        prev_, next_ = lib.siblings(node)
+        ver = int(node.get("mtime") or 0)
+        here = f"/simple/lire/{node_id}"
+        prev_url = f"{here}?p={page - 1}" if page > 1 else None
+        if page < count:
+            next_url, next_label = f"{here}?p={page + 1}", "Suivante »"
+        elif next_ and not hidden(lib.node(next_["id"]) or {"path": ""}):
+            next_url, next_label = f"/simple/lire/{next_['id']}", "Album suivant »"
+        else:
+            next_url, next_label = back, "Fin de l'album"
+        return simple_html(simple.reader_page(
+            node["name"], page, count, f"/simple/img/{node_id}/{page - 1}?v={ver}",
+            f"/simple/img/{node_id}/{page}?v={ver}" if page < count else None,
+            prev_url, next_url, next_label, back))
+
+    @app.route("/simple/img/<int:node_id>/<int:index>")
+    def simple_image(node_id: int, index: int):
+        """La planche pour la lecture simple : JPEG de base tenant dans 1024 × 1024 px, gardé en cache (voir
+        Comics.page_simple), avec des en-têtes de cache (l'adresse porte la date du fichier)."""
+        if not (auth_ok() and not simple_needs_profile()):
+            return Response("Accès refusé", 403, {"Content-Type": "text/plain; charset=utf-8"})
+        node = ensure_pages(get_node(node_id, "album"))   # (compte les pages d'un album jamais ouvert)
+        if node.get("error"):
+            abort(415, description=node["error"])
+        if node.get("page_count") and index >= node["page_count"]:
+            abort(404, description="Cette page n'existe pas")
+        try:
+            path, data = comics.page_simple(node, lib.abs_path(node["path"]), index)
+        except AlbumError as e:
+            fresh = heal(node)
+            if fresh["path"] == node["path"]:
+                abort(415, description=str(e))
+            try:
+                path, data = comics.page_simple(fresh, lib.abs_path(fresh["path"]), index)
+            except AlbumError as e2:
+                abort(415, description=str(e2))
+        resp = send_file(path, mimetype="image/jpeg", conditional=True) if path else Response(data, mimetype="image/jpeg")
+        return cache_headers(resp, immutable="v" in request.args)
 
     @app.route("/static/<path:filename>")
     def static_files(filename: str):
@@ -1723,6 +1951,17 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             return jsonify({"error": desc}), e.code
         if request.path.startswith("/static/") or request.path.startswith("/opds"):
             return e
+        if request.path.startswith("/simple"):   # page d'erreur sans JavaScript ni style moderne, pour l'iPad 1
+            if request.path.startswith("/simple/img/"):
+                return Response(getattr(e, "description", "") or "Erreur", e.code,
+                                {"Content-Type": "text/plain; charset=utf-8"})
+            desc = getattr(e, "description", "") or ""
+            if desc == "adult_locked":
+                desc = "Rubrique Adulte verrouillée."
+            elif e.code == 404 and not desc.startswith(("Ce fichier", "Cette page")):
+                desc = "Cette page n'existe pas."
+            titles = {404: "Introuvable", 403: "Accès refusé", 415: "Image illisible"}
+            return simple_message(titles.get(e.code, f"Erreur {e.code}"), desc, e.code), e.code
         return error_page(e), e.code
 
     def error_page(e) -> str:
