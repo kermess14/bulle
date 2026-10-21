@@ -1,0 +1,409 @@
+"""Tests automatiques de la lecture simple (/simple) : python tools/test_simple.py [--vnu chemin/vnu.jar]
+
+Construit une petite bibliothèque jetable (quelques CBZ fabriqués ici), lance l'application avec le client de test de Flask
+et vérifie : toutes les routes répondent ; aucune balise <script>, aucun attribut on…, aucun lien javascript: ; aucune
+ressource externe ; tout texte venu de la bibliothèque est échappé ; les images tiennent dans 1024 px, en JPEG de base,
+avec des en-têtes de cache ; la progression est enregistrée et reprise ; les règles de sécurité (profil choisi, mots de
+passe, code d'accès, comptes, rubrique Adulte, HTTPS imposé hors réseau local) s'appliquent aussi à /simple.
+Si le validateur W3C (vnu.jar, Java) est disponible (--vnu ou variable VNU_JAR), chaque page est validée ; sinon on se
+contente de html5lib en mode strict (s'il est installé).
+"""
+import io
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ.setdefault("SCAN_ON_START", "0")
+os.environ.setdefault("PRELOAD_COVERS", "0")
+
+from PIL import Image, ImageDraw  # noqa: E402
+
+from bulle.library import DEFAULT_PROFILE  # noqa: E402
+from bulle.server import create_app, hash_pin  # noqa: E402
+
+IPAD1_UA = ("Mozilla/5.0 (iPad; U; CPU OS 5_1 like Mac OS X; fr-fr) AppleWebKit/534.46 (KHTML, like Gecko) "
+            "Version/5.1 Mobile/9B176 Safari/7534.48.3")
+VNU = None
+EVIL = '<b>x</b> & "q" \'z\''   # un titre piégé : doit ressortir échappé
+
+
+def make_cbz(path, sizes):
+    """CBZ de pages JPEG dessinées (traits et texte, pour un poids réaliste)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for i, (w, h) in enumerate(sizes, 1):
+            im = Image.new("RGB", (w, h), (250, 248, 240))
+            d = ImageDraw.Draw(im)
+            for k in range(0, h, max(20, h // 40)):
+                d.line([(0, k), (w, (k * 7) % h)], fill=(30 + k % 90, 40, 60), width=3)
+            d.rectangle([w // 8, h // 8, w * 7 // 8, h * 7 // 8], outline=(0, 0, 0), width=6)
+            d.text((w // 3, h // 2), f"page {i}", fill=(0, 0, 0))
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=90)
+            z.writestr(f"{i:03d}.jpg", buf.getvalue())
+
+
+class SimpleTests(unittest.TestCase):
+    pages_seen: dict = {}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="bulle-simple-")
+        root = os.path.join(cls.tmp, "lib")
+        make_cbz(os.path.join(root, "Astérix & Cie", "Tome 01.cbz"), [(900, 1300), (1400, 900), (2000, 2800)])
+        make_cbz(os.path.join(root, "Astérix & Cie", "Tome 02.cbz"), [(400, 560), (400, 560)])
+        make_cbz(os.path.join(root, "Zorro", "Sous-dossier", "Zorro T1.cbz"), [(600, 800), (600, 800)])
+        make_cbz(os.path.join(root, "Adulte", "Secret.cbz"), [(500, 700)])
+        make_cbz(os.path.join(root, "1000 bornes", "Un.cbz"), [(500, 700)])
+        for i in range(1, 45):
+            make_cbz(os.path.join(root, f"Série {i:02d}", "Un.cbz"), [(300, 420)])
+        cls.app = create_app(root, os.path.join(cls.tmp, "data"))
+        ext = cls.app.extensions["bulle"]
+        cls.lib, cls.comics = ext["library"], ext["comics"]
+        cls.lib.scan()
+        # un titre piégé (les caractères < > " sont interdits dans les noms de fichiers Windows : on le pose en base)
+        cls.t01 = cls.find("Tome 01")
+        cls.t02 = cls.find("Tome 02")
+        with cls.lib._write_lock:
+            cls.lib.conn.execute("UPDATE nodes SET name=? WHERE id=?", (EVIL, cls.t01["id"]))
+            cls.lib.conn.commit()
+        cls.astx = cls.lib.node(cls.t01["parent_id"])
+        cls.root = cls.lib.root_node()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    @classmethod
+    def find(cls, name):
+        row = cls.lib.conn.execute("SELECT * FROM nodes WHERE name=?", (name,)).fetchone()
+        return dict(row) if row else None
+
+    def setUp(self):
+        # état de départ : un seul profil sans mot de passe, pas de code, pas de comptes, rien de caché
+        self.lib.set_settings({"require_profile": False, "account_login": False, "force_https": False,
+                               "access_pin_hash": "", "adult_paths": [], "adult_pin_hash": ""}, None)
+        with self.lib._write_lock:
+            self.lib.conn.execute("DELETE FROM profiles WHERE id<>?", (DEFAULT_PROFILE,))
+            self.lib.conn.execute("UPDATE profiles SET pin_hash=NULL WHERE id=?", (DEFAULT_PROFILE,))
+            self.lib.conn.execute("DELETE FROM progress")
+            self.lib.conn.commit()
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+        self.c.environ_base["HTTP_USER_AGENT"] = IPAD1_UA
+        self.c.environ_base["REMOTE_ADDR"] = "192.168.0.50"
+
+    # ---- aides --------------------------------------------------------------------------
+    def get(self, url, status=200, **kw):
+        r = self.c.get(url, **kw)
+        self.assertEqual(r.status_code, status, f"{url} → {r.status_code}")
+        if r.mimetype == "text/html":
+            self.check_html(r.get_data(as_text=True), url)
+        return r
+
+    def post(self, url, data, status=303):
+        r = self.c.post(url, data=data)
+        self.assertEqual(r.status_code, status, f"POST {url} → {r.status_code}")
+        if r.mimetype == "text/html":
+            self.check_html(r.get_data(as_text=True), "POST " + url)
+        return r
+
+    def check_html(self, html, where):
+        low = html.lower()
+        self.assertNotIn("<script", low, f"balise script dans {where}")
+        self.assertNotIn("<noscript", low)
+        self.assertIsNone(re.search(r"<[^>]+\son[a-z]+\s*=", low), f"attribut on… dans {where}")
+        self.assertNotIn("javascript:", low)
+        for tag in ("<link", "<iframe", "<object", "<embed", "<form action=\"http", "@import"):
+            self.assertNotIn(tag, low, f"{tag} dans {where}")
+        self.assertNotIn("http://", low, f"adresse externe dans {where}")
+        self.assertNotIn("https://", low, f"adresse externe dans {where}")
+        for attr, val in re.findall(r'\b(src|href|action)="([^"]*)"', html):
+            ok = (re.match(r"^/simple(/|\?|$)", val) or re.match(r"^/api/cover/\d+\?w=100$", val))
+            self.assertTrue(ok, f"{attr}={val!r} sort de /simple dans {where}")
+        self.assertNotIn("<b>x</b>", html, f"texte non échappé dans {where}")
+        for banned in ("/api/scan", "/api/settings", "admin", "reglages", "rescan"):
+            self.assertNotIn(banned, low, f"{banned} dans {where}")
+        SimpleTests.pages_seen[where] = html
+
+    def album(self, name="Tome 02"):
+        return self.find(name)
+
+    # ---- routes et contenu --------------------------------------------------------------
+    def test_routes_repondent(self):
+        r = self.get("/simple")
+        self.assertIn("Toutes les séries", r.get_data(as_text=True))
+        self.get("/simple/")
+        s = self.get("/simple/series").get_data(as_text=True)
+        self.assertIn("Astérix &amp; Cie", s)
+        self.assertIn(f'/simple/serie/{self.astx["id"]}', s)
+        self.get(f'/simple/serie/{self.astx["id"]}')
+        sub = self.find("Sous-dossier")
+        z = self.get(f'/simple/serie/{sub["id"]}').get_data(as_text=True)
+        self.assertIn("Zorro T1", z)
+        self.assertIn("Dossier au-dessus", z)
+        r = self.c.get(f'/simple/lire/{self.t02["id"]}')
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(r.headers["Location"].endswith(f'/simple/lire/{self.t02["id"]}?p=1'))
+        self.get(f'/simple/lire/{self.t02["id"]}?p=1')
+        self.get(f'/simple/lire/{self.t02["id"]}?p=2')
+        self.get(f'/simple/lire/{self.t02["id"]}?p=99')   # borné à la dernière page
+        self.get(f'/simple/lire/{self.t02["id"]}?p=abc')  # illisible → première page
+        self.get("/simple/serie/999999", 404)
+        self.get("/simple/lire/999999", 404)
+        self.get(f'/simple/serie/{self.t02["id"]}', 404)  # un album n'est pas un dossier
+        self.get("/simple/img/999999/0", 404)
+
+    def test_pagination_et_index_alphabetique(self):
+        s = self.get("/simple/series").get_data(as_text=True)
+        self.assertIn("Page 1 / 3", s)       # 47 entrées, 20 par page
+        self.assertIn('class="letters"', s)
+        self.assertIn("/simple/series?l=S", s)
+        self.assertIn("/simple/series?l=0", s)   # « # » : les noms qui commencent par un chiffre
+        p3 = self.get("/simple/series?p=3").get_data(as_text=True)
+        self.assertIn("Page 3 / 3", p3)
+        z = self.get("/simple/series?l=Z").get_data(as_text=True)
+        self.assertIn("Zorro", z)
+        self.get("/simple/series?p=0")
+        self.get("/simple/series?p=9999")
+        self.get("/simple/series?l=%3Cscript%3E")
+
+    def test_titres_echappes(self):
+        s = self.get(f'/simple/serie/{self.astx["id"]}').get_data(as_text=True)
+        self.assertIn("&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;z&#x27;", s)
+        r = self.get(f'/simple/lire/{self.t01["id"]}?p=1').get_data(as_text=True)
+        self.assertIn("&lt;b&gt;x&lt;/b&gt;", r)
+        pid = self.lib.add_profile('<i>Zoé</i> & "co"', None, None, "reader")["id"]
+        ch = self.get("/simple?choix=1").get_data(as_text=True)
+        self.assertIn("&lt;i&gt;Zoé&lt;/i&gt; &amp; &quot;co&quot;", ch)
+        self.assertNotIn("<i>Zoé</i>", ch)
+
+    def test_lecteur_boutons_et_zones(self):
+        h = self.get(f'/simple/lire/{self.t01["id"]}?p=2').get_data(as_text=True)
+        self.assertEqual(h.count("« Précédente"), 2)      # les deux boutons (haut et bas)
+        self.assertEqual(h.count("Page précédente"), 1)   # + la zone cliquable de gauche
+        self.assertIn('class="zone zl"', h)
+        self.assertIn('class="zone zr"', h)
+        self.assertIn(f'href="/simple/lire/{self.t01["id"]}?p=1"', h)
+        self.assertIn(f'href="/simple/lire/{self.t01["id"]}?p=3"', h)
+        self.assertIn("Album</a>", h)
+        self.assertIn("page 2 / 3", h)
+        self.assertIn(f'src="/simple/img/{self.t01["id"]}/1?v=', h)
+        self.assertIn(f'class="pre" src="/simple/img/{self.t01["id"]}/2?v=', h)   # la suivante, préchargée
+        first = self.get(f'/simple/lire/{self.t01["id"]}?p=1').get_data(as_text=True)
+        self.assertNotIn('class="zone zl"', first)        # pas de page avant la première
+        self.assertIn("btn off", first)
+        last = self.get(f'/simple/lire/{self.t02["id"]}?p=2').get_data(as_text=True)
+        self.assertIn("Album suivant", last) if self.lib.siblings(self.t02)[1] else self.assertIn("Fin de l", last)
+        self.assertNotIn('class="pre"', last)             # rien à précharger après la dernière
+
+    def test_images_1024_jpeg_de_base_avec_cache(self):
+        v = int(self.t01.get("mtime") or 0)
+        seen = []
+        for idx, (w, h) in enumerate([(900, 1300), (1400, 900), (2000, 2800)]):
+            r = self.get(f'/simple/img/{self.t01["id"]}/{idx}?v={v}')
+            self.assertEqual(r.mimetype, "image/jpeg")
+            im = Image.open(io.BytesIO(r.data))
+            self.assertEqual(im.format, "JPEG")
+            self.assertLessEqual(max(im.size), 1024, f"page {idx}: {im.size}")
+            self.assertAlmostEqual(im.size[0] / im.size[1], w / h, delta=0.01)   # proportions gardées
+            self.assertFalse(im.info.get("progressive"), "JPEG progressif : trop gourmand pour un iPad 1")
+            self.assertLess(len(r.data), 400_000, f"page {idx} : {len(r.data)} octets")
+            seen.append((im.size, len(r.data)))
+            cc = r.headers["Cache-Control"]
+            self.assertIn("max-age=31536000", cc)
+            self.assertIn("immutable", cc)
+        small = Image.open(io.BytesIO(self.get(f'/simple/img/{self.t02["id"]}/0').data))
+        self.assertEqual(small.size, (400, 560), "une petite page n'est jamais agrandie")
+        self.assertIn("max-age=600", self.get(f'/simple/img/{self.t02["id"]}/0').headers["Cache-Control"])
+        cached = os.path.join(self.comics.pages_dir, str(self.t01["id"]))
+        self.assertTrue(any(n.endswith("-simple1024.jpg") for n in os.listdir(cached)), "pas de fichier en cache")
+        r1 = self.get(f'/simple/img/{self.t01["id"]}/0?v={v}')
+        r2 = self.c.get(f'/simple/img/{self.t01["id"]}/0?v={v}', headers={"If-None-Match": r1.headers.get("ETag", "")})
+        self.assertEqual(r2.status_code, 304)
+        self.get(f'/simple/img/{self.t01["id"]}/3', 404)   # il n'y a que 3 pages (0, 1, 2)
+        print("  images :", ", ".join(f"{s[0][0]}x{s[0][1]} {s[1] // 1024} Ko" for s in seen))
+
+    # ---- progression ----------------------------------------------------------------------
+    def test_progression_et_reprise(self):
+        a = self.t01["id"]
+        self.get(f"/simple/lire/{a}?p=2")
+        prog = self.lib.progress(a, DEFAULT_PROFILE)
+        self.assertEqual(prog["page"], 1)
+        self.assertFalse(prog["completed"])
+        r = self.c.get(f"/simple/lire/{a}")   # reprise
+        self.assertTrue(r.headers["Location"].endswith(f"/simple/lire/{a}?p=2"))
+        self.get(f"/simple/lire/{a}?p=3")     # dernière page : lu
+        self.assertTrue(self.lib.progress(a, DEFAULT_PROFILE)["completed"])
+        r = self.c.get(f"/simple/lire/{a}")   # un album terminé repart du début
+        self.assertTrue(r.headers["Location"].endswith(f"/simple/lire/{a}?p=1"))
+        home = self.get("/simple").get_data(as_text=True)
+        self.assertNotIn("Reprendre la lecture", home)   # terminé : plus « en cours »
+        self.get(f"/simple/lire/{self.t02['id']}?p=1")
+        home = self.get("/simple").get_data(as_text=True)
+        self.assertIn("Reprendre la lecture", home)
+        self.assertIn("page 1 / 2", home)
+        s = self.get(f'/simple/serie/{self.astx["id"]}').get_data(as_text=True)
+        self.assertIn("Lu", s)
+
+    # ---- profils, mots de passe ------------------------------------------------------------
+    def test_profils_et_mots_de_passe(self):
+        self.lib.set_settings({"require_profile": True}, None)
+        bob = self.lib.add_profile("Bob", hash_pin("secret1"), None, "reader")["id"]
+        ch = self.get("/simple").get_data(as_text=True)
+        self.assertIn("Qui lit ?", ch)
+        self.assertIn("Mot de passe de Bob", ch)
+        self.assertNotIn("Toutes les séries", ch)
+        for url in ("/simple/series", f'/simple/serie/{self.astx["id"]}', f'/simple/lire/{self.t02["id"]}?p=1'):
+            r = self.c.get(url)
+            self.assertEqual((r.status_code, r.headers["Location"].rstrip("/").endswith("/simple")), (302, True), url)
+        self.assertEqual(self.c.get(f'/simple/img/{self.t02["id"]}/0').status_code, 403)   # pas d'image sans profil
+        self.assertEqual(self.lib.progress(self.t02["id"], bob), None)
+        r = self.post("/simple/profil", {"id": bob, "pin": "faux"}, 403)
+        self.assertIn("Mot de passe incorrect", r.get_data(as_text=True))
+        self.assertNotIn("bulle_profile", r.headers.get("Set-Cookie", ""))
+        r = self.post("/simple/profil", {"id": bob, "pin": "secret1"}, 303)
+        self.assertIn("bulle_profile", r.headers.get("Set-Cookie", ""))
+        self.assertIn("HttpOnly", r.headers.get("Set-Cookie", ""))
+        self.assertEqual(self.get("/simple").get_data(as_text=True).count("Bonjour <b>Bob</b>"), 1)
+        self.get(f'/simple/lire/{self.t02["id"]}?p=2')
+        self.assertEqual(self.lib.progress(self.t02["id"], bob)["page"], 1)       # la progression est celle de Bob
+        self.assertIsNone(self.lib.progress(self.t02["id"], DEFAULT_PROFILE))
+        self.get(f'/simple/img/{self.t02["id"]}/0')
+        self.post("/simple/profil", {"id": 9999, "pin": ""}, 404)
+        self.get("/simple?choix=1")   # « changer de profil » rouvre le choix
+        self.post("/simple/deconnexion", {}, 303)
+        self.assertIn("Qui lit ?", self.get("/simple").get_data(as_text=True))
+
+    def test_aucune_fonction_admin(self):
+        paths = ("/simple", "/simple/series", f'/simple/serie/{self.astx["id"]}', f'/simple/lire/{self.t02["id"]}?p=1')
+        for url in paths:
+            html = self.get(url).get_data(as_text=True)
+            self.assertNotRegex(html, r'(?i)(rescan|scanner|param[eè]tres|r[eé]glages|supprimer|ignorer)')
+        # les routes /simple n'acceptent pas d'autre méthode que celles prévues
+        self.assertEqual(self.c.post("/simple/series").status_code, 405)
+        self.assertEqual(self.c.post(f'/simple/lire/{self.t02["id"]}').status_code, 405)
+        self.assertEqual(self.c.put("/simple").status_code, 405)
+
+    # ---- code d'accès, comptes ---------------------------------------------------------------
+    def test_code_d_acces(self):
+        self.lib.set_settings({"access_pin_hash": hash_pin("sesame")}, None)
+        h = self.get("/simple").get_data(as_text=True)
+        self.assertIn("Code d'accès", h)
+        self.assertNotIn("Toutes les séries", h)
+        for url in ("/simple/series", f'/simple/lire/{self.t02["id"]}?p=1'):
+            self.assertEqual(self.c.get(url).status_code, 302)
+        self.assertEqual(self.c.get(f'/simple/img/{self.t02["id"]}/0').status_code, 403)
+        r = self.post("/simple/connexion", {"pin": "mauvais"}, 403)
+        self.assertIn("incorrect", r.get_data(as_text=True))
+        r = self.post("/simple/connexion", {"pin": "sesame"}, 303)
+        self.assertIn("bulle_auth", r.headers.get("Set-Cookie", ""))
+        self.get("/simple/series")
+        self.get(f'/simple/img/{self.t02["id"]}/0')
+
+    def test_comptes(self):
+        ann = self.lib.add_profile("Ann", hash_pin("motdepasse1"), None, "reader")["id"]
+        self.lib.set_settings({"account_login": True}, None)
+        h = self.get("/simple").get_data(as_text=True)
+        self.assertIn('name="name"', h)
+        self.assertIn('type="password"', h)
+        self.assertEqual(self.c.get("/simple/series").status_code, 302)
+        self.assertEqual(self.c.get(f'/simple/img/{self.t02["id"]}/0').status_code, 403)
+        self.post("/simple/connexion", {"name": "Ann", "password": "faux"}, 403)
+        r = self.post("/simple/connexion", {"name": "ann", "password": "motdepasse1"}, 303)   # sans tenir compte des majuscules
+        self.assertIn("bulle_session", r.get_data(as_text=True) + r.headers.get("Set-Cookie", ""))
+        home = self.get("/simple").get_data(as_text=True)
+        self.assertIn("Bonjour <b>Ann</b>", home)
+        self.assertIn("Se déconnecter", home)
+        self.assertNotIn("Changer de profil", home)   # en mode comptes on ne change pas de compte sans se déconnecter
+        self.get(f'/simple/lire/{self.t02["id"]}?p=2')
+        self.assertEqual(self.lib.progress(self.t02["id"], ann)["page"], 1)
+        self.post("/simple/profil", {"id": DEFAULT_PROFILE, "pin": ""}, 303)   # sans effet : redirige vers /simple
+        self.assertIn("Bonjour <b>Ann</b>", self.get("/simple").get_data(as_text=True))
+        self.post("/simple/deconnexion", {}, 303)
+        self.assertEqual(self.c.get("/simple/series").status_code, 302)
+
+    def test_essais_ratés_bloques(self):
+        self.lib.set_settings({"access_pin_hash": hash_pin("sesame")}, None)
+        self.c.environ_base["REMOTE_ADDR"] = "192.168.0.77"   # une adresse pour ce seul test
+        for _ in range(5):
+            self.c.post("/simple/connexion", data={"pin": "non"})
+        r = self.post("/simple/connexion", {"pin": "sesame"}, 429)   # même avec le bon code : bloqué 15 minutes
+        self.assertIn("Trop d", r.get_data(as_text=True))
+
+    # ---- rubrique Adulte, HTTPS ---------------------------------------------------------------
+    def test_rubrique_adulte_cachee(self):
+        self.lib.set_settings({"adult_paths": ["Adulte"], "adult_pin_hash": hash_pin("1234")}, None)
+        secret = self.find("Secret")
+        s = self.get("/simple/series").get_data(as_text=True)
+        self.assertNotIn(">Adulte<", s)
+        folder = self.find("Adulte")
+        self.get(f'/simple/serie/{folder["id"]}', 403)
+        self.get(f'/simple/lire/{secret["id"]}?p=1', 403)
+        self.get(f'/simple/img/{secret["id"]}/0', 403)
+        self.assertEqual(self.lib.progress(secret["id"], DEFAULT_PROFILE), None)
+
+    def test_https_impose_hors_reseau_local(self):
+        self.lib.set_settings({"force_https": True}, None)
+        for host in ("192.168.0.213:2205", "localhost:2205", "nas:2205", "bulle.local:2205"):
+            r = self.c.get("/simple", base_url=f"http://{host}")
+            self.assertEqual(r.status_code, 200, f"{host} doit rester accessible en http")
+            self.assertEqual(self.c.get("/simple/series", base_url=f"http://{host}").status_code, 200)
+            self.assertIn("image/jpeg", self.c.get(f'/simple/img/{self.t02["id"]}/0', base_url=f"http://{host}").mimetype)
+        r = self.c.get("/simple", base_url="http://exemple.org")
+        self.assertEqual(r.status_code, 308)
+        self.assertTrue(r.headers["Location"].startswith("https://exemple.org/simple"))
+        # et le cookie de profil n'est « Secure » qu'en HTTPS (sinon l'iPad en http ne le garderait pas)
+        self.lib.set_settings({"require_profile": True}, None)
+        bob = self.lib.add_profile("Bob", None, None, "reader")["id"]
+        r = self.c.post("/simple/profil", data={"id": bob}, base_url="http://192.168.0.213:2205")
+        self.assertEqual(r.status_code, 303)
+        self.assertNotIn("Secure", r.headers.get("Set-Cookie", ""))
+
+    def test_zz_html_valide(self):
+        """Toutes les pages vues par les tests ci-dessus : validées par le W3C (vnu.jar) ou, à défaut, html5lib strict."""
+        pages = SimpleTests.pages_seen
+        self.assertGreater(len(pages), 10, "lancer toute la suite (les pages sont collectées par les autres tests)")
+        if VNU and os.path.isfile(VNU):
+            d = tempfile.mkdtemp(prefix="bulle-vnu-")
+            try:
+                files = []
+                for i, (where, html) in enumerate(pages.items()):
+                    f = os.path.join(d, f"{i:03d}.html")
+                    with open(f, "w", encoding="utf-8") as fh:
+                        fh.write(html)
+                    files.append(f)
+                p = subprocess.run(["java", "-jar", VNU, "--errors-only", "--format", "text", *files],
+                                   capture_output=True, text=True, timeout=300)
+                out = (p.stdout + p.stderr).strip()
+                self.assertEqual(p.returncode, 0, "validateur W3C :\n" + out)
+                print(f"  W3C (vnu {VNU}) : {len(files)} pages sans erreur")
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+        else:
+            try:
+                import html5lib
+            except ImportError:
+                self.skipTest("ni vnu.jar ni html5lib")
+            for where, html in pages.items():
+                try:
+                    html5lib.HTMLParser(strict=True).parse(html)
+                except Exception as e:  # noqa: BLE001
+                    self.fail(f"HTML invalide ({where}) : {e}")
+            print(f"  html5lib strict : {len(pages)} pages sans erreur")
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    if "--vnu" in args:
+        i = args.index("--vnu")
+        VNU = args[i + 1]
+        del args[i:i + 2]
+    VNU = VNU or os.environ.get("VNU_JAR")
+    unittest.main(argv=[sys.argv[0]] + args, verbosity=2)

@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.11)
+# Bulle — lecteur de BD maison (v0.35.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -50,6 +50,8 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
 - **Flux OPDS** (`http://<serveur>:2205/opds`) pour lire depuis une appli mobile (Panels, Chunky, Moon+,
   Mihon…) : navigation par dossiers, reprise, récents, recherche, téléchargement et lecture page par page
   (OPDS-PSE) sans télécharger l'album.
+- **Lecture simple** (`http://<serveur>:2205/simple`) pour un très vieil appareil (iPad 1, iOS 5.1) : pages HTML sans
+  aucun JavaScript, une planche entière par page, gros boutons, progression enregistrée.
 - **Recherche** sans tenir compte des accents ni de la casse (« aigles decap » trouve
   « Aigles Décapitées (Les) »), sur les noms de dossiers et de fichiers.
 - **Pages et couvertures redimensionnées** par le serveur (comme Ubooquity) à la taille réellement
@@ -139,6 +141,26 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Lecture simple pour un très vieil appareil (v0.35.0)** : un iPad 1 (iOS 5.1, Safari 5.1 de 2011, 256 Mo de
+  mémoire vive) ne fait pas tourner l'application. Ouvrir `http://<adresse du NAS>:2205/simple` (par exemple
+  `http://192.168.0.213:2205/simple`) : des pages HTML rendues par le serveur, **sans aucun JavaScript**, au style
+  intégré (aucune ressource externe), HTML valide (validateur W3C), tableaux et blocs simples, CSS 2.1 (ni flexbox,
+  ni grid, ni variables). « Qui lit ? » (mot de passe du profil ; ou code d'accès / compte selon la configuration),
+  séries et dossiers en gros liens avec leur couverture, 20 par page avec un index alphabétique quand la liste est
+  longue, puis la lecture : **une planche entière par page**, avec en haut et en bas « Précédente / Album /
+  Suivante » et deux grandes zones sur l'image (moitié gauche : précédente, moitié droite : suivante), de simples
+  liens ; la planche suivante est préchargée par une image invisible. Chaque planche est un JPEG de base (non
+  progressif) tenant dans 1 024 × 1 024 px, jamais agrandi (44 à 155 Ko sur de vraies planches), gardé dans le cache
+  des pages et servi avec des en-têtes de cache. La planche affichée est enregistrée comme page lue ; ouvrir un
+  album reprend à la dernière page lue (un album terminé repart du début). À la dernière page, un bouton mène à
+  l'album suivant du dossier. Mêmes règles que le reste : profil choisi obligatoire en mode « qui lit ? », mots de
+  passe et blocage après 5 essais ratés, rubrique Adulte cachée tant que le code n'est pas entré ; rien
+  d'administratif (ni réglages, ni scan, ni gestion des profils) et pas de case par case. Le réseau local reste
+  exempté du HTTPS imposé (192.168.x.x, localhost, nom court) et le cookie de profil n'est « Secure » qu'en HTTPS.
+  L'application ordinaire n'est pas touchée. Vérifié par `python tools/test_simple.py` (14 tests : routes, aucune
+  balise script, aucune ressource externe, échappement des titres, images, progression, profils, code d'accès,
+  comptes, Adulte, HTTPS ; validateur W3C : 0 erreur sur 26 pages) et dans Edge avec JavaScript désactivé,
+  user-agent d'iPad iOS 5, en 1 024 × 768 puis 768 × 1 024. Pas essayé sur le vrai iPad 1.
 - **Case par case : un rectangle avec du texte n'est pas une case (v0.34.11)**, signalé sur « La nuit des
   morts-vivants » p. 6. Une bulle rectangulaire ou un cartouche (petit cadre, moins de 4 % de la page, dont
   l'intérieur est surtout du fond : papier et lettres) était parfois lu comme une case à part entière. Il ne l'est
@@ -565,7 +587,9 @@ bulle/
   bulle/comics.py    ouverture CBZ/CBR/PDF, redimensionnement JPEG, cache disque
   bulle/bedetheque.py recherche et lecture des fiches Bédéthèque (poliment, avec cache), comparaison avec un dossier
   bulle/opds.py      flux OPDS / OPDS-PSE pour les applis de lecture
+  bulle/simple.py    pages « lecture simple » (/simple) : HTML sans JavaScript pour les très vieux appareils
   bulle/server.py    serveur web Flask (servi par waitress) + API JSON + scan périodique
+  tools/             banc d'essai de la détection des cases (banc_cases.py), tests de /simple (test_simple.py)
   bulle/static/      interface : index.html + app.js (navigation), reader.html + reader.js (lecteur), style.css
   stack.yml          la stack à coller dans Dockhand (image ghcr.io/kermess14/bulle)
   stack-autonome.yml la même stack sans image (code embarqué), générée par make_stack.py
@@ -592,6 +616,7 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET` `POST /api/profiles` · `PUT` `DELETE /api/profiles/<id>` · `POST /api/profiles/select` | profils (`{"id", "pin"}` pour choisir) |
 | `GET /api/auth/status` · `POST /api/auth/login` · `POST /api/auth/logout` | code d'accès général (`PUT /api/settings {"global": {"access_pin": "…"}}` pour le définir, `""` pour l'enlever) |
 | `GET /opds` · `/opds/folder/<id>` · `/opds/continue` · `/opds/recent` · `/opds/search?q=` | flux OPDS (authentification Basic avec le code d'accès s'il y en a un) |
+| `GET /simple` · `/simple/series` · `/simple/serie/<id>` · `/simple/lire/<id>?p=N` · `/simple/img/<id>/<n>` · `POST /simple/connexion` · `/simple/profil` · `/simple/deconnexion` | lecture simple, HTML sans JavaScript (pages et formulaires ; `p` compte à partir de 1) |
 | `GET` `POST /api/lists` · `GET` `PUT` `DELETE /api/lists/<id>` · `POST /api/lists/<id>/items` · `DELETE /api/lists/<id>/items/<album>` | listes du profil (Favoris et À lire créées d'office) |
 | `GET /api/panels/<id>/<page>` | cases de la planche (fractions de la page, ordre occidental + ordre manga), détectées une fois puis gardées |
 | `GET /api/covers/sample?n=` | couvertures au hasard (mosaïque de fond) |
