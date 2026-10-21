@@ -120,6 +120,19 @@ def _trim(mask: Image.Image, box: tuple) -> Optional[tuple]:
     return (x0 + left, box[1], x0 + right, box[3])
 
 
+def _column_min(region: Image.Image, y0: int, y1: int) -> Optional[bytes]:
+    """Minimum de chaque colonne sur les lignes [y0, y1) (ramenées dans l'image), en C ligne par ligne : une colonne
+    vaut 255 si elle est entièrement fond, 0 dès qu'une ligne y a du dessin. None si aucune ligne n'est dans l'image."""
+    w, h = region.size
+    y0, y1 = max(0, y0), min(h, y1)
+    if y1 <= y0:
+        return None
+    out = region.crop((0, y0, w, y0 + 1))
+    for y in range(y0 + 1, y1):
+        out = ImageChops.darker(out, region.crop((0, y, w, y + 1)))
+    return out.tobytes()
+
+
 def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, blockers: bool = False):
     """Bande [a, b) d'une zone (axis=0 : lignes) : part des colonnes entièrement « fond » dans la bande, et parmi elles,
     part de celles qui ont du dessin juste avant et juste après la bande (à 4 px près). Une vraie gouttière est bordée
@@ -131,34 +144,25 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
     w, h = region.size
     if w == 0 or b <= a:
         return 0.0, 0.0, 0.0
-    data = region.tobytes()
-    band = [255] * w
-    for y in range(a, b):
-        row = data[y * w:(y + 1) * w]
-        band = [min(p, q) for p, q in zip(band, row)]
-    def content(rows: range) -> list[bool]:
-        out = [False] * w
-        for y in rows:
-            if 0 <= y < h:
-                row = data[y * w:(y + 1) * w]
-                out = [o or v == 0 for o, v in zip(out, row)]
-        return out
-    above, below = content(range(a - 4, a)), content(range(b, b + 4))
+    # colonne par colonne, le minimum des lignes de la bande (255 : colonne entièrement fond), calculé par Pillow
+    band = _column_min(region, a, b)
+    # au-dessus et au-dessous : un 0 dans la colonne = du dessin (None : rien de ce côté, bord de la zone)
+    above, below = _column_min(region, a - 4, a), _column_min(region, b, b + 4)
     cols = [i for i in range(w) if band[i] == 255]
     if not cols:
         return (0.0, 0.0, 0.0, False) if blockers else (0.0, 0.0, 0.0)
-    ratios = (len(cols) / w, sum(above[i] for i in cols) / len(cols), sum(below[i] for i in cols) / len(cols))
+    n = len(cols)
+    up = sum(1 for i in cols if above[i] == 0) / n if above else 0.0
+    down = sum(1 for i in cols if below[i] == 0) / n if below else 0.0
+    ratios = (n / w, up, down)
     if not blockers:
         return ratios
     # ce qui barre la gouttière doit être une bulle ou un cartouche : au milieu, et court. Un obstacle qui touche un bout
     # de la bande est une case qui la traverse (grande case sur deux rangées) : alors ce n'est pas une gouttière.
     end = max(2, round(0.03 * w))
-    # part de fond dans la bande, colonne par colonne : un cartouche (lettres sur du blanc) en garde beaucoup, une case
-    # dessinée qui traverse presque pas
-    mean = [0] * w
-    for y in range(a, b):
-        row = data[y * w:(y + 1) * w]
-        mean = [m + (v == 255) for m, v in zip(mean, row)]
+    # part de fond dans l'obstacle : un cartouche (lettres sur du blanc) en garde beaucoup, une case dessinée qui
+    # traverse presque pas (nombre de pixels fond dans le rectangle de l'obstacle, compté par Pillow)
+    strip = region.crop((0, a, w, b))
     ok, i = True, 0
     big = 0
     while i < w:
@@ -167,7 +171,7 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
             while j < w and band[j] != 255:
                 j += 1
             at_end = i < end or j > w - end
-            caption = not at_end and sum(mean[i:j]) >= 0.5 * (j - i) * (b - a)
+            caption = not at_end and strip.crop((i, 0, j, b - a)).histogram()[255] >= 0.5 * (j - i) * (b - a)
             big += (j - i) > 0.1 * w and not caption
             if j - i > (0.12 if at_end else 0.4 if caption else 0.25) * w or big > 1:   # deux gros obstacles : des cases qui traversent
                 ok = False
@@ -467,6 +471,19 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
         used = tops.calls + bottoms.calls + lefts.calls + rights.calls
         return used > budget[0]
 
+    # la même couverture (même bord, même position, même étendue) est demandée des milliers de fois par les boucles
+    # ci-dessous : on la garde. Le compteur du budget avance quand même, pour s'arrêter exactement au même endroit.
+    memo: dict[tuple, float] = {}
+
+    def coverage(segs: _Segs, pos: int, a: int, b: int) -> float:
+        k = (id(segs), pos, a, b)
+        v = memo.get(k)
+        if v is None:
+            v = memo[k] = _coverage(segs, pos, a, b)
+        else:
+            segs.calls += 1
+        return v
+
     def ys_near(segs, a: int, b: int) -> set[int]:
         """Positions (y ou x) des bords dont un morceau touche [a, b)."""
         return {p for p, s0, s1 in segs if s1 > a and s0 < b}
@@ -484,14 +501,14 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
             for ty in sorted(ys_near(tops, lx, rx + 1)):
                 if ty < y0 - FRAME_TOL or ty > y1 - min_h:
                     continue
-                if _coverage(tops, ty, lx, rx + 1) < COV:
+                if coverage(tops, ty, lx, rx + 1) < COV:
                     continue
                 for by in sorted(ys_near(bottoms, lx, rx + 1)):
                     if by < ty + min_h or by > y1 + FRAME_TOL:
                         continue
-                    if _coverage(bottoms, by, lx, rx + 1) < COV:
+                    if coverage(bottoms, by, lx, rx + 1) < COV:
                         continue
-                    if _coverage(lefts, lx, ty, by + 1) < COV or _coverage(rights, rx, ty, by + 1) < COV:
+                    if coverage(lefts, lx, ty, by + 1) < COV or coverage(rights, rx, ty, by + 1) < COV:
                         continue
                     found.append((lx, ty, rx + 1, by + 1))
     # 2) paires haut / bas
@@ -505,12 +522,12 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
             if x1 - x0 < min_w:
                 continue
             for lx in sorted(ys_near(lefts, ty, by + 1)):
-                if lx < x0 - FRAME_TOL or lx > x1 - min_w or _coverage(lefts, lx, ty, by + 1) < COV:
+                if lx < x0 - FRAME_TOL or lx > x1 - min_w or coverage(lefts, lx, ty, by + 1) < COV:
                     continue
                 for rx in sorted(ys_near(rights, ty, by + 1)):
-                    if rx < lx + min_w or rx > x1 + FRAME_TOL or _coverage(rights, rx, ty, by + 1) < COV:
+                    if rx < lx + min_w or rx > x1 + FRAME_TOL or coverage(rights, rx, ty, by + 1) < COV:
                         continue
-                    if _coverage(tops, ty, lx, rx + 1) < COV or _coverage(bottoms, by, lx, rx + 1) < COV:
+                    if coverage(tops, ty, lx, rx + 1) < COV or coverage(bottoms, by, lx, rx + 1) < COV:
                         continue
                     found.append((lx, ty, rx + 1, by + 1))
     # un rectangle traversé par un bord vertical (ou horizontal) complet est en fait deux cases côte à côte : on le rejette
@@ -518,20 +535,23 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
         x0, y0, x1, y1 = r
         for segs, lo, hi, a, b in ((lefts, x0, x1, y0, y1), (rights, x0, x1, y0, y1)):
             for pos in {p for p, s0, s1 in segs if lo + 2 * FRAME_TOL < p < hi - 2 * FRAME_TOL and s1 > a and s0 < b}:
-                if _coverage(segs, pos, a, b) >= COV:
+                if coverage(segs, pos, a, b) >= COV:
                     return True
         for segs in (tops, bottoms):
             for pos in {p for p, s0, s1 in segs if y0 + 2 * FRAME_TOL < p < y1 - 2 * FRAME_TOL and s1 > x0 and s0 < x1}:
-                if _coverage(segs, pos, x0, x1) >= COV:
+                if coverage(segs, pos, x0, x1) >= COV:
                     return True
         return False
-    found = [r for r in {tuple(r) for r in found} if not divided(r)]
-    # dédoublonnage : bord extérieur / intérieur d'un même trait, rectangles quasi identiques → on garde le plus grand
-    found.sort(key=lambda r: -(r[2] - r[0]) * (r[3] - r[1]))
+    # dédoublonnage : bord extérieur / intérieur d'un même trait, rectangles quasi identiques → on garde le plus grand.
+    # Un rectangle recouvert par un rectangle déjà gardé est écarté sans qu'on ait besoin de savoir s'il est « divisé »
+    # (les milliers de quasi-doublons ne passent donc plus par le test coûteux ; les rectangles gardés sont les mêmes).
+    found = sorted({tuple(r) for r in found}, key=lambda r: -(r[2] - r[0]) * (r[3] - r[1]))
     kept: list[tuple] = []
     for r in found:
         ra = (r[2] - r[0]) * (r[3] - r[1])
-        if not any(_inter(r, k) >= 0.8 * ra for k in kept):
+        if any(_inter(r, k) >= 0.8 * ra for k in kept):
+            continue
+        if not divided(r):
             kept.append(r)
     return kept
 
@@ -1034,17 +1054,23 @@ def _text_lines(neutral: Image.Image, ink: Image.Image, box: tuple, anchor: int)
 
 
 def _bridge(gray: Image.Image, mask: Image.Image, paper: Image.Image, ink: Image.Image, neutral: Image.Image,
-            a: tuple, b: tuple, axis: int, bw: bool = False) -> Optional[dict]:
+            a: tuple, b: tuple, axis: int, bw: bool = False, transposed: Optional[tuple] = None,
+            valid0: Optional[Image.Image] = None) -> Optional[dict]:
     """`a` puis `b`, voisines (axis=1 : côte à côte, a à gauche ; axis=0 : l'une sous l'autre, a en haut). Un cartouche
     ou une bulle passe-t-il de l'une à l'autre par-dessus la gouttière ? Renvoie None, ou {"grow": 0|1, "edge": x} :
     la case qui porte le texte (0 : a, 1 : b) et la coordonnée jusqu'où l'élargir pour qu'il ne soit plus coupé, avec
-    "join": True si le texte est vraiment sur les deux cases (on les montre alors ensemble)."""
+    "join": True si le texte est vraiment sur les deux cases (on les montre alors ensemble).
+    `valid0` (papier ou encre) et `transposed` (les mêmes images transposées : gray, mask, paper, ink, neutral, valid)
+    peuvent être fournis, calculés une fois pour toutes les paires de la planche."""
     W, H = gray.size
     neutral0, ink0 = neutral, ink   # sens d'origine : le texte se lit toujours en lignes horizontales
-    valid0 = ImageChops.lighter(paper, ink)
+    if valid0 is None:
+        valid0 = ImageChops.lighter(paper, ink)
+    valid = valid0   # papier ou encre : l'intérieur d'une bulle, lettres comprises
     if axis == 0:   # on se ramène au cas « côte à côte » en transposant tout
-        T = Image.Transpose.TRANSPOSE
-        gray, mask, paper, ink, neutral = (im.transpose(T) for im in (gray, mask, paper, ink, neutral))
+        if transposed is None:
+            transposed = _transposed_set(gray, mask, paper, ink, neutral)
+        gray, mask, paper, ink, neutral, valid = transposed
         a, b = (a[1], a[0], a[3], a[2]), (b[1], b[0], b[3], b[2])
         W, H = H, W
     g0, g1 = a[2], b[0]
@@ -1094,8 +1120,6 @@ def _bridge(gray: Image.Image, mask: Image.Image, paper: Image.Image, ink: Image
     ca = crossing(fa, c0 - side, c0)
     cb = crossing(fb, c1, c1 + side)
     inner = [x and y for x, y in zip(ca, cb)]
-
-    valid = ImageChops.lighter(paper, ink)   # papier ou encre : l'intérieur d'une bulle, lettres comprises
 
     def reach(ya: int, yb: int, direction: int) -> int:
         """Jusqu'où va le papier (avec ses lettres) de ce côté-ci, ligne par ligne : la largeur du cartouche dans la case
@@ -1182,6 +1206,15 @@ def _bridge(gray: Image.Image, mask: Image.Image, paper: Image.Image, ink: Image
     return found
 
 
+def _transposed_set(gray: Image.Image, mask: Image.Image, paper: Image.Image, ink: Image.Image,
+                    neutral: Image.Image) -> tuple:
+    """Les images transposées (lignes ↔ colonnes) dont `_bridge` a besoin pour une paire l'une sous l'autre, plus
+    « valid » (papier ou encre), transposée elle aussi."""
+    T = Image.Transpose.TRANSPOSE
+    gray, mask, paper, ink, neutral = (im.transpose(T) for im in (gray, mask, paper, ink, neutral))
+    return gray, mask, paper, ink, neutral, ImageChops.lighter(paper, ink)
+
+
 def text_bridges(img: Image.Image, gray: Image.Image, mask: Image.Image, boxes: list[tuple]) -> tuple[list, dict]:
     """Cases reliées par un texte à cheval sur la gouttière. Renvoie (paires à réunir, {indice: case élargie})."""
     w, h = gray.size
@@ -1196,9 +1229,12 @@ def text_bridges(img: Image.Image, gray: Image.Image, mask: Image.Image, boxes: 
         return [], {}
     paper, ink, neutral = _paper_ink(img, (w, h))
     bw = ImageStat.Stat(neutral).mean[0] >= 0.85 * 255   # planche en noir et blanc (ou presque)
+    # papier ou encre, et les images transposées pour les paires l'une sous l'autre : calculés une seule fois
+    valid0 = ImageChops.lighter(paper, ink)
+    transposed = _transposed_set(gray, mask, paper, ink, neutral) if any(ax == 0 for _, _, ax in pairs) else None
     join, grown = [], {}
     for i, j, axis in pairs:
-        r = _bridge(gray, mask, paper, ink, neutral, boxes[i], boxes[j], axis, bw)
+        r = _bridge(gray, mask, paper, ink, neutral, boxes[i], boxes[j], axis, bw, transposed, valid0)
         if not r:
             continue
         if r.get("join"):
