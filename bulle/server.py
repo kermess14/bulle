@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.34.4"
+VERSION = "0.34.5"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -914,7 +914,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 if not panels_sem.acquire(timeout=panels_wait):
                     return panels_busy()
                 try:
-                    result = detect_panels(im)
+                    # couverture, pages de garde et dernière page : pas de second essai (il y invente des cases)
+                    last = (node.get("page_count") or 0) - 1
+                    result = detect_panels(im, retry=index >= 3 and (last < 0 or index < last))
                 finally:
                     panels_sem.release()
             lib.panels_set(node_id, index, result)

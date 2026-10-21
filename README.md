@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.4)
+# Bulle — lecteur de BD maison (v0.34.5)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,16 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case : second essai sur les planches claires sans cases (v0.34.5)**. Des gouttières blanches fines,
+  salies par la réduction de la page (aquarelle, fond peint jusqu'aux bords, scan jauni), sortaient de la tolérance
+  autour du blanc : la planche restait entière. Quand rien n'est trouvé sur une page claire, Bulle refait la
+  détection avec une tolérance élargie, et ne garde le résultat que s'il donne de vraies cases (bordées de dessin des
+  deux côtés, au moins deux, qui couvrent la planche). Banc d'essai : 2 planches sur 223 changent, toutes deux
+  mieux découpées (une aquarelle : 0 → 3 cases justes sur 5 ; un scan jauni : 0 → 7 cases justes), score 80 → 83
+  justes sur 139, toujours 25 en trop ; sur 120 pages intérieures de la bibliothèque, 1 change (0 → 6 cases, juste).
+  Mais sur les couvertures, pages de garde et dernières pages, ce second essai inventait des cases (titre, dessin et
+  texte séparés par du vide : 8 sur 160) : il n'y est pas fait. Les cases en base sont recalculées (`PANELS_VERSION`
+  15).
 - **Lecteur, case par case : moins d'images chargées, plus fluide sur tablette (v0.34.4)**. Pour une planche, le
   lecteur chargeait la version « page entière », puis la version nette (×2), puis encore une troisième largeur
   (« affinage ») une fois la première case cadrée : plus que les deux premières, la version ×2 étant la netteté des

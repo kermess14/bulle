@@ -29,8 +29,9 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 14       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 15       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
+RETRY_BG = 225            # second essai, page claire sans cases trouvées : fond de référence plus sombre (voir detect_panels)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
                           # Le serveur fournit toujours la page rendue à cette largeur (PANELS_WIDTH), par le même
                           # chemin : la détection est sensible au rééchantillonnage (à 600 px, 1 planche sur 4 n'avait
@@ -1336,13 +1337,16 @@ def overflow_grow(mask: Image.Image, boxes: list[tuple], grown: dict) -> dict:
     return out
 
 
-def detect_panels(img: Image.Image) -> dict:
-    """Cases d'une planche : {"panels": [[x0, y0, x1, y1], …] (fractions, ordre occidental), "rtl": [indices, ordre manga]}."""
+def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = None) -> dict:
+    """Cases d'une planche : {"panels": [[x0, y0, x1, y1], …] (fractions, ordre occidental), "rtl": [indices, ordre manga]}.
+    `retry` : si rien n'est trouvé sur une page claire, second essai avec une tolérance élargie autour du fond (voir
+    plus bas) ; à désactiver pour les couvertures, pages de garde et dernière page, où il invente des cases (titre,
+    illustration et texte séparés par du vide). `_bg` : couleur de fond imposée (usage interne, ce second essai)."""
     gray = ImageOps.grayscale(img)
     if gray.width > WORK_WIDTH:
         gray = gray.resize((WORK_WIDTH, max(1, round(gray.height * WORK_WIDTH / gray.width))), Image.Resampling.BOX)
     w, h = gray.size
-    bg = _background_value(gray)
+    bg = _background_value(gray) if _bg is None else _bg
     mask = _mask(gray, bg)
     min_gutter = max(2, int(max(w, h) * MIN_GUTTER))
     min_side = max(6, round(min(w, h) * MIN_PANEL))
@@ -1420,6 +1424,15 @@ def detect_panels(img: Image.Image) -> dict:
 
     ltr = [b for b in leaves(False) if not flat_sliver(b)]
     empty = {"panels": [], "rtl": [], "v": PANELS_VERSION}
+    if (len(ltr) < 2 or max(_area(b) for b in ltr) > 0.85 * page_area or sum(_area(b) for b in ltr) < 0.35 * page_area) \
+            and retry and _bg is None and bg > 55 and bg != RETRY_BG:
+        # rien trouvé sur une page claire : des gouttières blanches fines, salies par la réduction (ou un fond peint
+        # jusqu'aux bords, avec des gouttières blanches ; un scan jauni), sortent de la tolérance autour du blanc.
+        # Second essai avec un fond de référence un peu plus sombre (tolérance jusqu'à 179) ; il n'est gardé que s'il
+        # donne de vraies cases (bordées de dessin des deux côtés, au moins deux, qui couvrent la planche). Sur le banc
+        # d'essai : 2 planches sur 223 y gagnent leurs cases, aucune autre ne change ; sur les pages intérieures de la
+        # bibliothèque, 1 sur 120 ; mais 1 couverture ou page de garde sur 20 y gagne de fausses cases, d'où `retry`.
+        return detect_panels(img, retry, RETRY_BG)
     if len(ltr) < 2:
         return empty
     if max(_area(b) for b in ltr) > 0.85 * page_area:
