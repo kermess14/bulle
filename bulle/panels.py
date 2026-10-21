@@ -1421,11 +1421,13 @@ def overflow_grow(mask: Image.Image, boxes: list[tuple], grown: dict) -> dict:
     return out
 
 
-def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = None) -> dict:
+def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = None, manga: bool = True) -> dict:
     """Cases d'une planche : {"panels": [[x0, y0, x1, y1], …] (fractions, ordre occidental), "rtl": [indices, ordre manga]}.
     `retry` : si rien n'est trouvé sur une page claire, second essai avec une tolérance élargie autour du fond (voir
     plus bas) ; à désactiver pour les couvertures, pages de garde et dernière page, où il invente des cases (titre,
-    illustration et texte séparés par du vide). `_bg` : couleur de fond imposée (usage interne, ce second essai)."""
+    illustration et texte séparés par du vide). `_bg` : couleur de fond imposée (usage interne, ce second essai).
+    `manga` : calculer l'ordre de lecture manga (une seconde passe de découpage, de droite à gauche) ; sinon « rtl »
+    est l'ordre occidental et le résultat porte "rtl_full": false. Les cases elles-mêmes n'en dépendent pas."""
     gray = ImageOps.grayscale(img)
     if gray.width > WORK_WIDTH:
         gray = gray.resize((WORK_WIDTH, max(1, round(gray.height * WORK_WIDTH / gray.width))), Image.Resampling.BOX)
@@ -1524,14 +1526,13 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         # donne de vraies cases (bordées de dessin des deux côtés, au moins deux, qui couvrent la planche). Sur le banc
         # d'essai : 2 planches sur 223 y gagnent leurs cases, aucune autre ne change ; sur les pages intérieures de la
         # bibliothèque, 1 sur 120 ; mais 1 couverture ou page de garde sur 20 y gagne de fausses cases, d'où `retry`.
-        return detect_panels(img, retry, RETRY_BG)
+        return detect_panels(img, retry, RETRY_BG, manga)
     if len(ltr) < 2:
         return empty
     if max(_area(b) for b in ltr) > 0.85 * page_area:
         return empty
     if sum(_area(b) for b in ltr) < 0.35 * page_area:
         return empty   # couverture, page de titre, crédits : quelques blocs isolés sur du vide, pas des cases
-    rtl = [b for b in leaves(True) if not flat_sliver(b)]
     pad_x, pad_y = PAD * w, PAD * h
 
     def rel(b: tuple) -> list[float]:
@@ -1539,11 +1540,18 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
                 round(min(1.0, (b[2] + pad_x) / w), 4), round(min(1.0, (b[3] + pad_y) / h), 4)]
 
     panels = [rel(b) for b in ltr]
-    index = {tuple(rel(b)): i for i, b in enumerate(ltr)}
-    order = [index.get(tuple(rel(b)), i) for i, b in enumerate(rtl)]
-    if sorted(order) != list(range(len(panels))):
-        order = list(range(len(panels)))
+    order = list(range(len(panels)))
+    if manga:
+        # ordre manga : le même découpage refait de droite à gauche (les cadres, déjà calculés, sont partagés), puis
+        # apparié aux cases ci-dessus ; en cas de désaccord, l'ordre occidental
+        rtl = [b for b in leaves(True) if not flat_sliver(b)]
+        index = {tuple(rel(b)): i for i, b in enumerate(ltr)}
+        order = [index.get(tuple(rel(b)), i) for i, b in enumerate(rtl)]
+        if sorted(order) != list(range(len(panels))):
+            order = list(range(len(panels)))
     out = {"panels": panels, "rtl": order, "v": PANELS_VERSION}
+    if not manga:
+        out["rtl_full"] = False   # (le serveur recalcule avec la passe manga si un lecteur en sens manga le demande)
     if bg >= 200 or bg <= 55:
         try:
             join, grown = text_bridges(img, gray, mask, ltr)

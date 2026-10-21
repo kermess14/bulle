@@ -305,8 +305,9 @@
     if (panelsCache.has(n)) return panelsCache.get(n);
     const p = (async () => {
       try {
-        // date du fichier et version de la détection dans l'adresse : le navigateur peut garder la réponse pour toujours
-        const r = await fetch(`/api/panels/${id}/${n}?v=${item.mtime}&pv=${item.panels_v || 0}`, { priority: lazy ? "low" : "high" });
+        // date du fichier et version de la détection dans l'adresse : le navigateur peut garder la réponse pour toujours ;
+        // en sens manga, l'ordre de droite à gauche est demandé en plus (le serveur ne le calcule que sur demande)
+        const r = await fetch(`/api/panels/${id}/${n}?v=${item.mtime}&pv=${item.panels_v || 0}${manga ? "&rtl=1" : ""}`, { priority: lazy ? "low" : "high" });
         if (r.status === 503 && attempt < 4) {
           // serveur occupé (cette planche déjà en cours ailleurs, ou trop de détections à la fois) : on redemande
           // un peu plus tard, sans garder cette réponse
@@ -320,9 +321,9 @@
     })();
     panelsCache.set(n, p);
     const d = await p;
-    // une réponse du serveur (même « pas de cases ») porte sa version « v » ; un échec (réseau, erreur) n'en a pas :
-    // il n'est pas gardé, la planche sera redemandée à la prochaine visite
-    if (d && d.v !== undefined) panelsCache.set(n, d); else if (panelsCache.get(n) === p) panelsCache.delete(n);
+    // une réponse du serveur (même « pas de cases ») porte sa version « v » ; un échec (réseau, erreur du serveur,
+    // marquée « error ») n'est pas gardé : la planche sera redemandée à la prochaine visite
+    if (d && d.v !== undefined && !d.error) panelsCache.set(n, d); else if (panelsCache.get(n) === p) panelsCache.delete(n);
     return d;
   }
   const padOf = () => Math.max(0, Math.min(15, +prefs.reader_panels_margin || 0)) / 100;
@@ -543,16 +544,20 @@
       go(current - 1, { panel: "last" });
     }
   }
+  const PANELS_AHEAD = 6;   // cases demandées d'avance en case par case
   function preloadAround(n) {
     const count = Math.max(0, Math.min(10, +prefs.reader_preload || 0));
     for (const k of [...images.keys()]) if (Math.abs(k - n) > count + 4) images.delete(k);
     for (const k of [...lowImages.keys()]) if (Math.abs(k - n) > count + 4) lowImages.delete(k);
     // les cases aussi (le navigateur les garde de son côté : redemander une planche lointaine ne coûte rien)
-    for (const k of [...panelsCache.keys()]) if (Math.abs(k - n) > count + 4) panelsCache.delete(k);
+    for (const k of [...panelsCache.keys()]) if (Math.abs(k - n) > Math.max(count, PANELS_AHEAD) + 4) panelsCache.delete(k);
     // tout le spéculatif est en priorité réseau basse : le navigateur n'a que 6 connexions par hôte,
     // la planche qu'on demande vraiment garde la voie libre
     if (mode === "panels") {
-      for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) { const m = n + k; loadImageAt(m, baseWidth(m), true); getPanels(m, true); }
+      for (let k = 1; k <= Math.min(2, count); k++) if (n + k < pages) { const m = n + k; loadImageAt(m, baseWidth(m), true); }
+      // les cases (légères, mais longues à calculer sur le serveur) : six planches d'avance, en priorité basse,
+      // pour que le changement de planche n'attende plus la détection
+      for (let k = 1; k <= PANELS_AHEAD; k++) if (n + k < pages) getPanels(n + k, true);
       if (n - 1 >= 0) { const m = n - 1; loadImageAt(m, baseWidth(m), true); getPanels(m, true); }
       if (n + 1 < pages) loadImage(n + 1, true);   // la version nette de la suivante seulement : le plein format ×2 est lourd
       return;
@@ -750,7 +755,16 @@
       for (const im of scrollEl.querySelectorAll("img[src]")) im.src = pageUrl(+im.dataset.n);
     } else if (mode !== "panels") go(current, { save: false });
   }
-  function toggleManga() { manga = !manga; applyManga(); saveAlbumMemory(); if (mode === "panels") applyPanel(true); }
+  function toggleManga() {
+    manga = !manga; applyManga(); saveAlbumMemory();
+    if (mode === "panels") {
+      // les cases gardées n'ont l'ordre manga que si on l'a demandé : on les redemande (le navigateur a déjà les
+      // réponses sans cet ordre, le serveur ne calcule que l'ordre manquant)
+      panelsCache.clear();
+      const n = current;
+      getPanels(n).then(() => { if (current === n) { applyPanel(true); updateCounter(); } preloadAround(n); });
+    }
+  }
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen().catch(() => {});
