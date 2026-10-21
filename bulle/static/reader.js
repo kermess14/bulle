@@ -301,7 +301,9 @@
     })();
     panelsCache.set(n, p);
     const d = await p;
-    panelsCache.set(n, d);
+    // une réponse du serveur (même « pas de cases ») porte sa version « v » ; un échec (réseau, erreur) n'en a pas :
+    // il n'est pas gardé, la planche sera redemandée à la prochaine visite
+    if (d && d.v !== undefined) panelsCache.set(n, d); else if (panelsCache.get(n) === p) panelsCache.delete(n);
     return d;
   }
   const padOf = () => Math.max(0, Math.min(15, +prefs.reader_panels_margin || 0)) / 100;
@@ -519,6 +521,8 @@
     const count = Math.max(0, Math.min(10, +prefs.reader_preload || 0));
     for (const k of [...images.keys()]) if (Math.abs(k - n) > count + 4) images.delete(k);
     for (const k of [...lowImages.keys()]) if (Math.abs(k - n) > count + 4) lowImages.delete(k);
+    // les cases aussi (le navigateur les garde de son côté : redemander une planche lointaine ne coûte rien)
+    for (const k of [...panelsCache.keys()]) if (Math.abs(k - n) > count + 4) panelsCache.delete(k);
     // tout le spéculatif est en priorité réseau basse : le navigateur n'a que 6 connexions par hôte,
     // la planche qu'on demande vraiment garde la voie libre
     if (mode === "panels") {
