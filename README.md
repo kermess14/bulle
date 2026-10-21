@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.36.0)
+# Bulle — lecteur de BD maison (v0.36.1)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -142,6 +142,19 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Lecture simple : l'application reste en plein écran (v0.36.1)**. Sur l'iPad 1, l'icône s'ouvrait bien en plein
+  écran sur `/simple`, mais le premier lien touché rouvrait Safari, avec sa barre d'adresse. Avant iOS 11.3, dans une
+  application de l'écran d'accueil, iOS envoie à Safari tout lien `<a href>` touché ; seuls un changement d'adresse par
+  script ou l'envoi d'un formulaire restent dans l'application. La lecture simple n'ayant pas de JavaScript, toute sa
+  navigation passe maintenant par de petits **formulaires GET** dont le bouton est ce que l'on touche : mêmes adresses
+  qu'avec un lien (`?p=3`, `?l=S` deviennent des champs cachés), même aspect, **aucune balise `<a>`** dans les pages.
+  Les deux zones tactiles de la lecture et le petit bouton ‹ sont des boutons vides (avec un libellé pour les lecteurs
+  d'écran) ; dans une liste, la couverture et le titre sont chacun un bouton. Vérifié : 20 tests (aucune balise `<a>`
+  sur aucune page, tous les formulaires GET vont vers `/simple`, mêmes adresses qu'avant), validateur W3C sans erreur,
+  parcours dans Edge sans JavaScript (34 contrôles, dont « aucun lien `<a>` sur les pages visitées »), 18 mesures de
+  tenue à l'écran inchangées. Pas essayé sur le vrai iPad ; si l'application en sortait encore, le plan B est le petit
+  script habituel (`window.location` au toucher, en mode application seulement), ce qui demande de lever la règle
+  « sans JavaScript ».
 - **Lecture simple : plein écran et icône d'application (v0.36.0)**, d'après l'essai sur l'iPad 1. (1) La lecture
   n'affiche plus que la planche : plein écran, fond noir, **entière** (jamais coupée), centrée, sans défilement ni zoom,
   en paysage comme en portrait. Plus de titre ni de boutons « précédent / suivant » : seulement les deux grandes
@@ -157,8 +170,9 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
   icônes sont le logo de Bulle, carrées, sans transparence ni coins arrondis (iOS les ajoute ; `python
   tools/make_icons.py` les refait) et servies sans connexion sur `/simple/icone-72.png` et `/simple/icone-144.png`.
   Pour l'ajouter : ouvrir `/simple` sur l'iPad (c'est la page de départ de l'application), bouton « action » de Safari
-  (la flèche) › « Sur l'écran d'accueil ». L'application s'ouvre sans barre d'adresse ; les liens y restent (liens
-  ordinaires : ni `target`, ni redirection par script) ; la session y reste connectée (cookies persistants : profil et
+  (la flèche) › « Sur l'écran d'accueil ». L'application s'ouvre sans barre d'adresse ; la navigation y reste (en
+  v0.36.0 c'étaient de simples liens, qui font sortir d'une application iOS : corrigé en v0.36.1, voir plus haut) ;
+  la session y reste connectée (cookies persistants : profil et
   code d'accès 10 ans, compte 30 jours). Vérifié : 19 tests (`python tools/test_simple.py`), validateur W3C sans erreur,
   18 mesures dans Edge (user-agent d'iPad iOS 5, JavaScript coupé : 6 tailles d'écran, paysage et portrait, plein écran
   d'application et avec les barres de Safari, × 3 formes de planche) : la planche tient entièrement, centrée à 1 px

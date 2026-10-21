@@ -7,13 +7,15 @@ vieux Safari :
   - HTML « à l'ancienne » (tableaux et blocs simples), CSS 2.1 seulement : pas de flexbox, de grid, de variables CSS, de
     calc(), de vh, de @media ; aucune balise <script>, aucun attribut on…, aucun lien javascript: ;
   - une seule page par adresse, tout le style est dans la page (aucune ressource externe : ni police, ni CDN) ;
-  - tout texte qui vient de la bibliothèque (titres, noms de profil…) passe par esc().
+  - tout texte qui vient de la bibliothèque (titres, noms de profil…) passe par esc() ;
+  - AUCUN lien <a href> : toute la navigation passe par nav_form() (voir plus bas).
 """
 from __future__ import annotations
 
 import unicodedata
 from html import escape
 from typing import Iterable, Optional
+from urllib.parse import parse_qsl
 
 PER_PAGE = 20   # entrées par page dans les listes (gros liens faciles à toucher, listes courtes pour un vieil appareil)
 
@@ -30,8 +32,8 @@ body{background:#efeadf;color:#222;font-family:Helvetica,Arial,sans-serif;font-s
 h1{font-size:32px;margin:6px 0 12px 0;line-height:1.15}
 h2{font-size:26px;margin:20px 0 8px 0}
 p{margin:8px 0}
-a{color:#17508c}
 form{margin:0 0 12px 0}
+form.nav{margin:0}
 .muted{color:#6b665c;font-size:19px}
 .err{background:#f6d6d2;border:2px solid #c0453a;color:#6d1b14;padding:12px;margin:10px 0;font-weight:bold}
 .btn{display:block;width:100%;-webkit-box-sizing:border-box;box-sizing:border-box;-webkit-appearance:none;text-align:center;padding:20px 8px;margin:0;background:#2e6da4;color:#fff;border:2px solid #1d4c78;font-size:26px;font-weight:bold;text-decoration:none;font-family:Helvetica,Arial,sans-serif}
@@ -44,15 +46,18 @@ table.bar{width:100%;table-layout:fixed;border-collapse:collapse;margin:6px 0}
 table.bar td{padding:0 3px;vertical-align:top}
 .cnt{text-align:center;font-size:21px;padding-top:18px}
 .item{border-bottom:1px solid #cdc6b6}
-a.row{display:block;padding:12px 6px;color:#222;text-decoration:none;min-height:104px}
-span.cvb{float:left;display:block;width:76px;height:104px;overflow:hidden;margin:0 14px 0 0;border:1px solid #888;background:#ddd}
-img.cv{display:block;width:76px;height:auto}
+table.rowtab{width:100%;border-collapse:collapse}
+table.rowtab td{padding:0;vertical-align:top}
+table.rowtab td.cvc{width:78px;padding:12px 14px 12px 6px}
+button.cvbtn{display:block;width:78px;height:106px;padding:0;margin:0;overflow:hidden;line-height:0;border:1px solid #888;background:#ddd;-webkit-appearance:none;-webkit-box-sizing:border-box;box-sizing:border-box}
+button.cvbtn img.cv{display:block;width:76px;height:auto}
+button.rowbtn{display:block;width:100%;min-height:130px;padding:12px 6px;margin:0;border:0;background:transparent;-webkit-appearance:none;-webkit-box-sizing:border-box;box-sizing:border-box;text-align:left;color:#222;font-family:Helvetica,Arial,sans-serif;font-size:22px;line-height:1.35}
 .t{display:block;font-size:26px;font-weight:bold;line-height:1.2}
 .s{display:block;font-size:20px;color:#6b665c;margin-top:4px}
-.clr{display:block;clear:both;height:0;overflow:hidden}
 .letters{margin:8px 0}
-.letters a{display:inline-block;min-width:44px;padding:10px 6px;margin:2px;background:#e1dacb;border:1px solid #b9b19e;text-align:center;font-weight:bold;text-decoration:none;color:#222}
-.letters a.cur{background:#2e6da4;color:#fff;border-color:#1d4c78}
+.letters form{display:inline;margin:0}
+.letters button{display:inline-block;min-width:44px;padding:10px 6px;margin:2px;background:#e1dacb;border:1px solid #b9b19e;font-weight:bold;color:#222;font-size:22px;font-family:Helvetica,Arial,sans-serif;-webkit-appearance:none}
+.letters button.cur{background:#2e6da4;color:#fff;border-color:#1d4c78}
 .crumb{font-size:20px;color:#6b665c;margin:4px 0}
 """
 
@@ -60,8 +65,12 @@ img.cv{display:block;width:76px;height:auto}
 # Écran d'accueil de l'iPad : iOS 5 ne connaît pas le manifest web (iOS 11.3), il lit ces balises propres à Apple. Elles sont dans
 # le <head> de TOUTES les pages /simple (on peut ajouter l'icône depuis n'importe laquelle ; la page de départ de l'icône
 # est celle où l'on se trouvait : /simple pour avoir l'accueil). Les icônes sont servies sans authentification (l'iPad les
-# demande avant la connexion). Les liens restent dans l'application : de simples <a href> de même origine, jamais de
-# target="_blank" ni de redirection JavaScript.
+# demande avant la connexion).
+# LIENS : dans une application de l'écran d'accueil, iOS (avant 11.3) rouvre Safari, avec sa barre d'adresse, pour tout
+# <a href> touché (l'application s'ouvre en plein écran sur /simple, puis le premier lien en sort). Ce qui reste dans
+# l'application : la soumission d'un formulaire (ce n'est pas un « lien touché »). Toute la navigation de /simple passe
+# donc par nav_form() : un petit formulaire GET dont le bouton est l'élément touchable. Pas de <a href>, pas de
+# target="_blank", pas de redirection JavaScript.
 APPLE_HEAD = ('<meta name="apple-mobile-web-app-capable" content="yes">'
               '<meta name="apple-mobile-web-app-status-bar-style" content="black">'
               '<meta name="apple-mobile-web-app-title" content="Bulle">'
@@ -86,11 +95,24 @@ def layout(title: str, body: str) -> str:
             f'<body><div id="main">{body}</div></body></html>\n')
 
 
+def nav_form(href: str, inner: str, cls: str = "", form_cls: str = "", aria: str = "") -> str:
+    """Un « lien » qui reste dans l'application iOS : un petit formulaire GET dont le bouton est ce que l'on touche.
+    Les paramètres de l'adresse (?p=3, ?l=S…) deviennent des champs cachés (un formulaire GET remplace la partie « ? » de
+    son action) ; l'adresse visitée est donc la même qu'avec un lien. `inner` : contenu du bouton (déjà échappé) ;
+    `aria` : libellé pour les lecteurs d'écran d'un bouton sans texte."""
+    path, _, query = href.partition("?")
+    hidden = "".join(f'<input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in parse_qsl(query, keep_blank_values=True))
+    label = f' aria-label="{esc(aria)}" title="{esc(aria)}"' if aria else ""
+    klass = f' class="{esc(cls)}"' if cls else ""
+    return (f'<form method="get" action="{esc(path)}" class="nav {esc(form_cls)}">{hidden}'
+            f'<button type="submit"{klass}{label}>{inner}</button></form>')
+
+
 def link_button(href: Optional[str], label: str, cls: str = "") -> str:
-    """Gros bouton-lien ; sans adresse : bouton grisé, non cliquable."""
+    """Gros bouton de navigation ; sans adresse : bouton grisé, non touchable."""
     if href is None:
         return f'<span class="btn off">{esc(label)}</span>'
-    return f'<a class="btn {cls}" href="{esc(href)}">{esc(label)}</a>'
+    return nav_form(href, esc(label), cls=f"btn {cls}".strip())
 
 
 def bar(left: str, middle: str, right: str) -> str:
@@ -165,11 +187,17 @@ def profiles_page(profiles: list[dict], error: Optional[str] = None, only: Optio
 
 # ---------------------------------------------------------------- accueil, listes
 def _row(it: dict) -> str:
-    # la couverture a sa case de taille fixe : la liste ne « saute » pas quand les images arrivent (lentement, sur un NAS)
-    cover = f'<span class="cvb"><img class="cv" src="{esc(it["cover"])}" alt=""></span>' if it.get("cover") else ""
+    """Une ligne : la couverture et le titre sont chacun un bouton qui mène au même endroit (tableau : rien de fragile
+    dans un bouton). La couverture a sa case de taille fixe : la liste ne « saute » pas quand les images arrivent."""
     sub = f'<span class="s">{esc(it["sub"])}</span>' if it.get("sub") else ""
-    return (f'<div class="item"><a class="row" href="{esc(it["href"])}">{cover}'
-            f'<span class="t">{esc(it["name"])}</span>{sub}<span class="clr"></span></a></div>')
+    title = nav_form(it["href"], f'<span class="t">{esc(it["name"])}</span>{sub}', cls="rowbtn")
+    if it.get("cover"):
+        cover = nav_form(it["href"], f'<img class="cv" src="{esc(it["cover"])}" alt="">', cls="cvbtn",
+                         aria=it["name"])
+        cells = f'<td class="cvc">{cover}</td><td>{title}</td>'
+    else:
+        cells = f'<td colspan="2">{title}</td>'
+    return f'<div class="item"><table class="rowtab"><tr>{cells}</tr></table></div>'
 
 
 def home_page(name: str, continuing: list[dict], change_profile: bool, logout: bool) -> str:
@@ -181,7 +209,7 @@ def home_page(name: str, continuing: list[dict], change_profile: bool, logout: b
     if change_profile:
         parts.append(f'<div class="gap">{link_button("/simple?choix=1", "Changer de profil", "alt")}</div>')
     if logout:
-        parts.append('<form class="gap" method="post" action="/simple/deconnexion">'
+        parts.append('<form method="post" action="/simple/deconnexion" class="gap">'
                      '<button class="btn alt" type="submit">Se déconnecter</button></form>')
     return layout("Bulle — lecture simple", "".join(parts))
 
@@ -206,8 +234,7 @@ def list_page(title: str, items: list[dict], page: int, base: str, up: Optional[
         cur = chunk[0]["letter"] if chunk else ""
         links = []
         for L in seen:
-            attr = ' class="cur"' if L == cur else ""
-            links.append(f'<a{attr} href="{esc(base)}?l={esc(L if L != "#" else "0")}">{esc(L)}</a>')
+            links.append(nav_form(f"{base}?l={'0' if L == '#' else L}", esc(L), cls="cur" if L == cur else ""))
         head.append('<div class="letters">' + "".join(links) + "</div>")
 
     def nav() -> str:
@@ -234,21 +261,26 @@ def list_page(title: str, items: list[dict], page: int, base: str, up: Optional[
 READER_CSS = """
 html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
 div.screen{position:fixed;left:0;top:0;right:0;bottom:0;background-color:#000;background-repeat:no-repeat;background-position:center center;-webkit-background-size:contain;background-size:contain}
-a.zone{position:fixed;top:0;bottom:0;width:50%;display:block;overflow:hidden;text-indent:-9999px;z-index:1;-webkit-tap-highlight-color:rgba(0,0,0,0)}
-a.zl{left:0}
-a.zr{right:0}
-a.back{position:fixed;left:6px;top:6px;width:42px;height:42px;z-index:2;display:block;overflow:hidden;text-align:center;font:bold 34px/40px Helvetica,Arial,sans-serif;color:#fff;text-decoration:none;background:#333;background:rgba(0,0,0,.45);border:1px solid #777;border:1px solid rgba(255,255,255,.35);border-radius:8px;opacity:.6;-webkit-tap-highlight-color:rgba(0,0,0,0)}
+form.nav{margin:0}
+button.zone{position:fixed;top:0;height:100%;width:50%;margin:0;padding:0;border:0;background:transparent;-webkit-appearance:none;-webkit-box-sizing:border-box;box-sizing:border-box;z-index:1;outline:none;-webkit-tap-highlight-color:rgba(0,0,0,0)}
+button.zl{left:0}
+button.zr{right:0}
+button.back{position:fixed;left:6px;top:6px;width:44px;height:44px;margin:0;padding:0;z-index:2;overflow:hidden;text-align:center;font:bold 34px/40px Helvetica,Arial,sans-serif;color:#fff;background:#333;background:rgba(0,0,0,.45);border:1px solid #777;border:1px solid rgba(255,255,255,.35);border-radius:8px;opacity:.6;-webkit-appearance:none;-webkit-box-sizing:border-box;box-sizing:border-box;outline:none;-webkit-tap-highlight-color:rgba(0,0,0,0)}
 img.pre{position:absolute;left:-9999px;top:0;width:1px;height:1px}
 """
 
 
+BACK_LABEL = "Retour à l'album"   # libellé (lecteurs d'écran) du petit bouton
+
+
 def reader_page(title: str, page: int, pages: int, img: str, preload: Optional[str], prev_url: Optional[str],
                 next_url: Optional[str], back_url: str) -> str:
-    """Une planche, plein écran (voir plus haut). Les zones gauche / droite sont de simples liens (sans JavaScript) ; les
-    libellés « Page précédente / suivante » qu'elles contiennent sont cachés (hors de l'écran) pour les lecteurs d'écran.
-    `preload` : la planche suivante, demandée par une image invisible pour qu'elle soit déjà là quand on tourne la page."""
-    zl = f'<a class="zone zl" href="{esc(prev_url)}">Page précédente</a>' if prev_url else ""
-    zr = f'<a class="zone zr" href="{esc(next_url)}">Page suivante</a>' if next_url else ""
+    """Une planche, plein écran (voir plus haut). Les zones gauche / droite et le petit bouton sont des boutons de
+    formulaires GET (sans JavaScript, et qui ne font pas sortir de l'application iOS) ; sans texte, avec un libellé pour
+    les lecteurs d'écran. `preload` : la planche suivante, demandée par une image invisible pour qu'elle soit déjà là
+    quand on tourne la page."""
+    zl = nav_form(prev_url, "", cls="zone zl", aria="Page précédente") if prev_url else ""
+    zr = nav_form(next_url, "", cls="zone zr", aria="Page suivante") if next_url else ""
     pre = f'<img class="pre" src="{esc(preload)}" alt="">' if preload else ""
     label = f"{title} — page {page} / {pages}"
     return ("<!DOCTYPE html>\n"
@@ -258,5 +290,5 @@ def reader_page(title: str, page: int, pages: int, img: str, preload: Optional[s
             f'<body><div class="screen" role="img" aria-label="{esc(label)}" '
             f'style="background-image:url(&#39;{esc(img)}&#39;)"></div>'
             f'{zl}{zr}'
-            f'<a class="back" href="{esc(back_url)}" title="Retour à l\'album" aria-label="Retour à l\'album">‹</a>'
+            f'{nav_form(back_url, "‹", cls="back", aria=BACK_LABEL)}'
             f'{pre}</body></html>\n')
