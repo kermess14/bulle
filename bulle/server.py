@@ -33,9 +33,10 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.34.0"
+VERSION = "0.34.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
-PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
+PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
+                     # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -870,10 +871,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if cached is not None and cached.get("v") == PANELS_VERSION:
             return jsonify(cached)
         try:
-            # une version de la page déjà en cache (celle que le lecteur vient d'afficher) évite une conversion de plus
-            path, data = comics.cached_page_at_least(node, index, PANELS_WIDTH), None
-            if path is None:
-                path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
+            # toujours la page rendue à PANELS_WIDTH par le même chemin (gardée dans le cache des pages) : partir d'une
+            # autre version en cache (plus grande, réduite ensuite) donne d'autres cases sur une planche sur trois,
+            # la détection étant sensible au rééchantillonnage au pixel près
+            path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
             with Image.open(path or io.BytesIO(data)) as im:
                 im.load()
                 with panels_sem:   # deux détections à la fois au plus : les autres requêtes (pages, interface) gardent des fils
@@ -881,8 +882,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         except AlbumError as e:
             abort(415, description=str(e))
         except Exception as e:  # noqa: BLE001
+            # pas gardé en base : un raté passager (archive en cours d'extraction, cache plein) sera réessayé
             log.warning("Détection des cases %s p.%d : %s", node["path"], index, e)
-            result = {"panels": [], "rtl": [], "v": PANELS_VERSION}
+            return jsonify({"panels": [], "rtl": [], "v": PANELS_VERSION})
         lib.panels_set(node_id, index, result)
         return jsonify(result)
 
