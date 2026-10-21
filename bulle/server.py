@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.33.3"
+VERSION = "0.33.4"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -371,6 +371,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             resp.headers.setdefault("Strict-Transport-Security", "max-age=15552000")   # 6 mois, sans sous-domaines
         return resp
 
+    def arg_n(default: int, top: int = 500) -> int:
+        """Paramètre ?n= borné : jamais négatif (-1 = tout en SQLite) ni démesuré."""
+        return max(1, min(top, request.args.get("n", default, type=int) or default))
+
     def account_mode() -> bool:
         return bool(settings().get("account_login"))
 
@@ -445,6 +449,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             throttle_fail(ip)
         return False
 
+    def guest_locked() -> bool:
+        """Mode « profils » : sans cookie de profil, le serveur retombait sur le premier profil (l'administrateur) pour
+        tout, même pour changer son mot de passe. Dès que ce profil est protégé (mot de passe) ou que « qui lit ? » est
+        demandé, un visiteur sans profil choisi ne peut plus rien modifier : il doit d'abord choisir un profil."""
+        if account_mode() or profile_selected():
+            return False
+        return bool(settings()["require_profile"]) or bool((lib.profile(DEFAULT_PROFILE) or {}).get("pin_hash"))
+
     @app.before_request
     def gate():
         path = request.path
@@ -452,6 +464,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 or path == "/favicon.ico":
             return None
         if auth_ok():
+            if request.method in ("POST", "PUT", "PATCH", "DELETE") and path.startswith("/api/") \
+                    and path not in ("/api/profiles", "/api/profiles/select", "/api/profiles/logout", "/api/adult/unlock",
+                                     "/api/adult/lock") and guest_locked():
+                return jsonify({"error": "Choisissez d'abord un profil (« qui lit ? »)", "profile_required": True}), 401
             return None
         accounts = account_mode()
         if path.startswith("/opds"):
@@ -925,12 +941,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/continue")
     def api_continue():
-        return jsonify(with_folder(lib.continue_reading(limit=request.args.get("n", 20, type=int),
+        return jsonify(with_folder(lib.continue_reading(limit=arg_n(20),
                                                         profile_id=current_profile())))
 
     @app.route("/api/recent")
     def api_recent():
-        return jsonify(with_folder(lib.recent(limit=request.args.get("n", 24, type=int),
+        return jsonify(with_folder(lib.recent(limit=arg_n(24),
                                               profile_id=current_profile())))
 
     @app.route("/api/search")
@@ -1144,7 +1160,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/covers/retry/<int:node_id>", methods=["POST"])
     def api_covers_retry(node_id: int):
-        """Réessaie un album en échec (ou refait sa couverture) tout de suite."""
+        """Réessaie un album en échec (ou refait sa couverture) tout de suite. Administrateur : vide le cache de
+        l'album et ré-extrait l'archive (lourd sur un gros CBR)."""
+        require_admin()
         node = get_node(node_id, "album")
         comics.invalidate([node["id"]])
         fresh = lib.refresh_file(node["id"])   # taille, date et vrai format relus sur le disque
@@ -1270,6 +1288,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             fields["avatar"] = clean_avatar(body["avatar"])
         if "pin" in body:
             pin = str(body["pin"] or "").strip()
+            if p.get("pin_hash") and not (is_admin() and pid != current_profile()):
+                # son propre mot de passe (ou celui de l'admin lui-même) : l'ancien est exigé, sinon une session
+                # empruntée pourrait se rendre définitive
+                ip, acct = "ip:" + client_ip(), "acct:" + p["name"].strip().casefold()
+                throttle_check(ip, acct)
+                if not check_pin(p["pin_hash"], str(body.get("old_pin") or "")):
+                    throttle_fail(ip, acct)
+                    abort(403, description="Ancien mot de passe incorrect")
+                throttle_ok(ip, acct)
             if pin and len(pin) < min_password():
                 abort(400, description=f"Mot de passe trop court ({min_password()} caractères au moins)")
             if not pin and account_mode():
@@ -1751,11 +1778,11 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/history")
     def api_history():
-        return jsonify(with_folder(lib.history(current_profile(), limit=request.args.get("n", 60, type=int))))
+        return jsonify(with_folder(lib.history(current_profile(), limit=arg_n(60))))
 
     @app.route("/api/history/reading")
     def api_history_reading():
-        return jsonify(with_folder(lib.reading_now(current_profile(), limit=request.args.get("n", 60, type=int))))
+        return jsonify(with_folder(lib.reading_now(current_profile(), limit=arg_n(60))))
 
     @app.route("/api/activity")
     def api_activity():
@@ -1768,7 +1795,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/covers/sample")
     def api_covers_sample():
         """Couvertures au hasard pour la mosaïque de fond (seulement celles déjà générées : pas de travail serveur)."""
-        n = request.args.get("n", 60, type=int)
+        n = arg_n(60, 400)
         rows = lib.random_covers(n * 2)
         if adult_paths() and not adult_unlocked():
             rows = [r for r in rows if not is_adult_path(r["path"])]
