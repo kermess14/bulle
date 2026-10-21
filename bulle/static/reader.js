@@ -20,11 +20,13 @@
     reader_bars_delay: 2.5, reader_tap_zones: true, reader_wheel: true, reader_night: 0, reader_remember_album: true,
     reader_mode: "single", reader_cover_alone: true, reader_scroll_width: 100, reader_panels_full_first: false,
     reader_trim: false, reader_panels_wide: "split", reader_panels_margin: 3, reader_panels_dim: 100,
-    reader_panels_speed: 0.55, reader_panels_join: true,
+    reader_panels_speed: 0.55, reader_panels_join: true, reader_panels_fill: false,
   };
   const prefs = Object.assign({}, DEFAULTS);
   // durée du glissement d'une case à l'autre (secondes ; 0 = instantané)
   const panelSpeed = () => { const v = +prefs.reader_panels_speed; return isFinite(v) ? Math.max(0, Math.min(2, v)) : 0.55; };
+  const dimBlur = () => prefs.reader_panels_dim === "blur";   // autour de la case : la planche floutée
+  const panelFill = () => !!prefs.reader_panels_fill;         // la case remplit la largeur de l'écran, quitte à défiler
   function pick(o) { const out = {}; for (const k of Object.keys(DEFAULTS)) if (o && o[k] !== undefined) out[k] = o[k]; return out; }
   try { Object.assign(prefs, pick(JSON.parse(localStorage.getItem("bulle:profile") || "{}"))); } catch (_) { /* ignore */ }
   const store = {
@@ -37,7 +39,9 @@
     body.classList.add("bg-" + (prefs.reader_bg || "black"));
     body.style.setProperty("--night", String((+prefs.reader_night || 0) / 100));
     body.classList.toggle("night", (+prefs.reader_night || 0) > 0);
-    body.style.setProperty("--dim", String(Math.max(0, Math.min(100, +prefs.reader_panels_dim || 0)) / 100));
+    // autour de la case : 0..100 = voile de la couleur du fond ; « blur » = la planche floutée (voile opaque)
+    body.style.setProperty("--dim", dimBlur() ? "1" : String(Math.max(0, Math.min(100, +prefs.reader_panels_dim || 0)) / 100));
+    body.classList.toggle("dimblur", dimBlur());
     body.style.setProperty("--panel-speed", panelSpeed() + "s");
     body.style.setProperty("--scroll-w", String(Math.max(30, Math.min(100, +prefs.reader_scroll_width || 100))) + "%");
   }
@@ -233,6 +237,7 @@
       fxOff(true);
       pendingSwap = null; endMove();
       if (a) { img.src = a.src; img.style.backgroundColor = tintOf(a, n); } else { img.removeAttribute("src"); img.style.transform = ""; reportError(n); }
+      setDimBg(a ? (lowImages.get(n) || a).src : "");   // fond flou : la version « page entière », plus légère
       resetZoom(false);
       clearTimeout(spin); loading.hidden = true;
       current = n; shown = list;
@@ -421,11 +426,18 @@
   }
   // Reste de la planche assombri autour de la case (réglage) : un voile sur toute la scène, troué à la case ;
   // le trou suit la case avec la même animation que l'image (clip-path, dessiné par la carte graphique).
-  const dimEl = $("#dim");
+  const dimEl = $("#dim"), dimBg = $("#dimbg");
+  // « Flou » : la planche en cours, floutée, derrière le masque (un calque fixe par planche : la carte graphique le
+  // dessine une fois, le trou du masque bouge par-dessus)
+  function setDimBg(src) {
+    const want = dimBlur() && src ? `url("${src}")` : "";
+    if (dimBg.style.backgroundImage !== want) dimBg.style.backgroundImage = want;
+  }
   function placeDim(x0, y0, w, h) {
-    if (!(+prefs.reader_panels_dim > 0)) { dimEl.hidden = true; return; }
-    // recadrage à la main (case mal détectée) : le masque s'efface, on voit la planche autour
-    dimEl.classList.toggle("loose", !!(panelOff.x || panelOff.y));
+    if (!(+prefs.reader_panels_dim > 0) && !dimBlur()) { dimEl.hidden = true; return; }
+    // recadrage à la main (case mal détectée) : le masque s'efface, on voit la planche autour (pas quand c'est le
+    // défilement dans une case qui remplit l'écran)
+    dimEl.classList.toggle("loose", !!(panelOff.x || panelOff.y) && !panelOff.auto);
     const f = v => v.toFixed(1) + "px";
     // contour extérieur, puis aller-retour par le même segment jusqu'au trou : pas de pointe parasite entre les deux
     dimEl.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${f(x0)} ${f(y0)}, ${f(x0)} ${f(y0 + h)}, ${f(x0 + w)} ${f(y0 + h)}, ${f(x0 + w)} ${f(y0)}, ${f(x0)} ${f(y0)})`;
@@ -455,11 +467,14 @@
     const iw = ir.width / scale0, ih = ir.height / scale0;
     const px = r[0] * iw, py = r[1] * ih, pw = Math.max(1, (r[2] - r[0]) * iw), ph = Math.max(1, (r[3] - r[1]) * ih);
     const vw = sr.width, vh = sr.height, pad = padOf();
-    let s = Math.min(vw * (1 - 2 * pad) / pw, vh * (1 - 2 * pad) / ph);
+    // « remplir l'écran » : la case prend toute la largeur ; une case haute dépasse alors en bas, on la fait défiler
+    let s = panelFill() ? vw * (1 - 2 * pad) / pw : Math.min(vw * (1 - 2 * pad) / pw, vh * (1 - 2 * pad) / ph);
     s = Math.max(1, Math.min(5, s));
-    const tx = vw / 2 - ix - s * (px + pw / 2), ty = vh / 2 - iy - s * (py + ph / 2);
+    const tall = s * ph > vh * (1 - 2 * pad) + 1;
+    const tx = vw / 2 - ix - s * (px + pw / 2);
+    const ty = tall ? vh * pad - iy - s * py : vh / 2 - iy - s * (py + ph / 2);   // trop haute : alignée en haut
     // recadrage à la main (glisser) : l'écart est oublié dès qu'on change de case ou de planche
-    if (panelOff.page !== current || panelOff.idx !== panelIdx) Object.assign(panelOff, { x: 0, y: 0, page: current, idx: panelIdx });
+    if (panelOff.page !== current || panelOff.idx !== panelIdx) Object.assign(panelOff, { x: 0, y: 0, page: current, idx: panelIdx, auto: false });
     panelFrame = { tx, ty, s, ix, iy, iw, ih, vw, vh, px, py, pw, ph };
     panelScale = s;
     const before = img.style.transform;
@@ -473,7 +488,23 @@
   /* Recadrage à la main en case par case : la case est déplacée du doigt (ou à la souris) quand la détection l'a mal
      cadrée ou qu'un bout déborde ; on ne peut pas sortir de la planche. La case suivante repart d'un cadrage propre. */
   let panelFrame = null, panelDrag = null, dragRaf = 0;
-  const panelOff = { x: 0, y: 0, page: -1, idx: -1 };
+  const panelOff = { x: 0, y: 0, page: -1, idx: -1, auto: false };
+  /* « Remplir l'écran » : une case plus haute que l'écran se lit en la faisant défiler. Un pas en avant descend
+     d'abord dans la case (d'un peu moins d'un écran), un pas en arrière remonte ; on ne change de case qu'au bout. */
+  function panelScroll(dir) {
+    if (!panelFill() || !panelFrame || userZoom !== 1) return false;
+    const { ty, s, iy, py, ph, vh } = panelFrame, pad = padOf();
+    const top = iy + ty + panelOff.y + s * py, bottom = top + s * ph;
+    const step = vh * (1 - 2 * pad) * 0.85;
+    if (dir > 0 && bottom > vh * (1 - pad) + 2) panelOff.y -= Math.min(step, bottom - vh * (1 - pad));
+    else if (dir < 0 && top < vh * pad - 2) panelOff.y += Math.min(step, vh * pad - top);
+    else return false;
+    panelOff.auto = true;
+    const before = img.style.transform;
+    fxOff(false); placePanel();
+    if (img.style.transform !== before) startMove();
+    return true;
+  }
   function clampPanelOff() {
     if (!panelFrame) return;
     const { tx, ty, s, ix, iy, iw, ih, vw, vh } = panelFrame;
@@ -502,7 +533,7 @@
     const dx = x - panelDrag.x, dy = y - panelDrag.y;
     if (!panelDrag.moved && Math.abs(dx) + Math.abs(dy) > 6) { panelDrag.moved = true; fxOff(true); }
     if (!panelDrag.moved) return;
-    panelOff.x = panelDrag.ox + dx; panelOff.y = panelDrag.oy + dy;
+    panelOff.x = panelDrag.ox + dx; panelOff.y = panelDrag.oy + dy; panelOff.auto = false;
     // une mise en place par image d'écran, pas par événement (la souris ou le doigt en envoient bien plus)
     if (!dragRaf) dragRaf = requestAnimationFrame(() => { dragRaf = 0; placePanel(); });
   }
@@ -523,6 +554,7 @@
     const d = panelsCache.get(current);
     if (d && typeof d.then === "function") { queueStep(dir); return; }   // cases pas encore connues : pas gardé
     const count = d && d.panels instanceof Array ? viewsOf(d).length : 0;
+    if (panelIdx >= 0 && panelScroll(dir)) { drainStep(); return; }   // case plus haute que l'écran : on y défile d'abord
     if (dir > 0) {
       if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); drainStep(); return; }
       go(current + 1);
