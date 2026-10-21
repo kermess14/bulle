@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.8)
+# Bulle — lecteur de BD maison (v0.34.9)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,12 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case encore un peu plus rapide (v0.34.9)**, sans rien changer aux cases : dans la recherche des cadres,
+  l'union des bords à une position est calculée une fois pour toutes (au lieu d'être retriée à chaque test de
+  couverture), et le test « ce rectangle est-il deux cases côte à côte ? » ne visite plus que les positions de bord
+  comprises dans le rectangle, avec un rejet rapide par leur étendue. Banc d'essai : 192 → 153 ms de moyenne, pire
+  planche 2,5 → 1,5 s, 0 planche changée. Mesuré aussi : la seconde passe (ordre manga) ne coûte que 16 % du
+  temps, les cadres étant partagés ; pas de quoi justifier un calcul à la demande.
 - **Case par case : mise en page en escalier (v0.34.8)**, idée qualité n° 2. Quand une case déborde un peu sur la
   gouttière de la rangée suivante (son cadre descend de quelques dizaines de pixels dans la bande, ou se pose sur la
   case du dessous), la gouttière n'était plus « traversante » et les deux rangées restaient soudées en un seul bloc.

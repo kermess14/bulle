@@ -25,6 +25,7 @@ comics, noir et blanc, aquarelle) :
 from __future__ import annotations
 
 import re
+from bisect import bisect_left, bisect_right
 from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
@@ -386,13 +387,17 @@ def _edge_segments(edge: bytes, w: int, h: int, min_len: int) -> list[tuple[int,
 
 class _Segs:
     """Bords (position, début, fin) indexés par position : la couverture à une position se calcule sans parcourir la liste."""
-    __slots__ = ("items", "by_pos", "calls")
+    __slots__ = ("items", "by_pos", "positions", "extent", "merged", "calls")
 
     def __init__(self, items: list[tuple[int, int, int]]):
         self.items = items
         self.by_pos: dict[int, list[tuple[int, int]]] = {}
         for p, s0, s1 in items:
             self.by_pos.setdefault(p, []).append((s0, s1))
+        self.positions = sorted(self.by_pos)   # pour ne parcourir que les positions d'un intervalle (bisect)
+        # étendue (début min, fin max) des bords de chaque position : rejet rapide avant le test bord par bord
+        self.extent = {p: (min(s0 for s0, _ in lst), max(s1 for _, s1 in lst)) for p, lst in self.by_pos.items()}
+        self.merged: dict[int, list[tuple[int, int]]] = {}   # position → union des bords à ± FRAME_TOL (calculée une fois)
         self.calls = 0
 
     def near(self, pos: int):
@@ -400,6 +405,25 @@ class _Segs:
             lst = self.by_pos.get(p)
             if lst:
                 yield from lst
+
+    def union_at(self, pos: int) -> list[tuple[int, int]]:
+        """Les bords à `pos` (± FRAME_TOL), réunis en intervalles disjoints triés : la couverture de n'importe quel
+        [a, b) s'en déduit sans retrier (l'union des morceaux puis leur découpe à [a, b) donne la même longueur que
+        la découpe puis l'union)."""
+        out = self.merged.get(pos)
+        if out is None:
+            out, cur0, cur1 = [], None, None
+            for s0, s1 in sorted(self.near(pos)):
+                if cur1 is None or s0 > cur1:
+                    if cur1 is not None:
+                        out.append((cur0, cur1))
+                    cur0, cur1 = s0, s1
+                else:
+                    cur1 = max(cur1, s1)
+            if cur1 is not None:
+                out.append((cur0, cur1))
+            self.merged[pos] = out
+        return out
 
     def __iter__(self):
         return iter(self.items)
@@ -412,9 +436,14 @@ def _coverage(segments, pos: int, a: int, b: int) -> float:
         return 0.0
     if isinstance(segments, _Segs):
         segments.calls += 1
-        parts = sorted((max(a, s0), min(b, s1)) for s0, s1 in segments.near(pos) if s1 > a and s0 < b)
-    else:
-        parts = sorted((max(a, s0), min(b, s1)) for p, s0, s1 in segments if abs(p - pos) <= FRAME_TOL and s1 > a and s0 < b)
+        covered = 0
+        for e0, e1 in segments.union_at(pos):
+            if e0 >= b:
+                break
+            if e1 > a:
+                covered += min(b, e1) - max(a, e0)
+        return min(1.0, covered / (b - a))
+    parts = sorted((max(a, s0), min(b, s1)) for p, s0, s1 in segments if abs(p - pos) <= FRAME_TOL and s1 > a and s0 < b)
     covered, cur0, cur1 = 0, None, None
     for s0, s1 in parts:
         if cur1 is None or s0 > cur1:
@@ -535,17 +564,24 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
                         continue
                     found.append((lx, ty, rx + 1, by + 1))
     # un rectangle traversé par un bord vertical (ou horizontal) complet est en fait deux cases côte à côte : on le rejette
+    def spanning(segs: _Segs, lo: int, hi: int, a: int, b: int) -> bool:
+        """Un bord strictement entre lo et hi (à 2 × FRAME_TOL des bouts), touchant [a, b), qui couvre ce côté ?
+        Seules les positions de bord comprises dans l'intervalle sont visitées (liste triée)."""
+        i = bisect_right(segs.positions, lo + 2 * FRAME_TOL)
+        j = bisect_left(segs.positions, hi - 2 * FRAME_TOL)
+        extent, by_pos = segs.extent, segs.by_pos
+        for pos in segs.positions[i:j]:
+            e0, e1 = extent[pos]
+            if e1 <= a or e0 >= b:
+                continue
+            if any(s1 > a and s0 < b for s0, s1 in by_pos[pos]) and coverage(segs, pos, a, b) >= COV:
+                return True
+        return False
+
     def divided(r: tuple) -> bool:
         x0, y0, x1, y1 = r
-        for segs, lo, hi, a, b in ((lefts, x0, x1, y0, y1), (rights, x0, x1, y0, y1)):
-            for pos in {p for p, s0, s1 in segs if lo + 2 * FRAME_TOL < p < hi - 2 * FRAME_TOL and s1 > a and s0 < b}:
-                if coverage(segs, pos, a, b) >= COV:
-                    return True
-        for segs in (tops, bottoms):
-            for pos in {p for p, s0, s1 in segs if y0 + 2 * FRAME_TOL < p < y1 - 2 * FRAME_TOL and s1 > x0 and s0 < x1}:
-                if coverage(segs, pos, x0, x1) >= COV:
-                    return True
-        return False
+        return (spanning(lefts, x0, x1, y0, y1) or spanning(rights, x0, x1, y0, y1)
+                or spanning(tops, y0, y1, x0, x1) or spanning(bottoms, y0, y1, x0, x1))
     # dédoublonnage : bord extérieur / intérieur d'un même trait, rectangles quasi identiques → on garde le plus grand.
     # Un rectangle recouvert par un rectangle déjà gardé est écarté sans qu'on ait besoin de savoir s'il est « divisé »
     # (les milliers de quasi-doublons ne passent donc plus par le test coûteux ; les rectangles gardés sont les mêmes).
