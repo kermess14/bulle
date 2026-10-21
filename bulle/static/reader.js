@@ -241,7 +241,15 @@
         updateCounter();
         drainStep();
       });
-      if (!ready && a) loadImage(n).then(full => { if (token === loadToken && current === n && full && full.src !== img.src) swapSrc(img, full.src, n); });
+      if (!ready && a) {
+        // la version nette (×2) arrive en arrière-plan : l'affinage après cadrage l'attend au lieu de demander,
+        // en plus, une troisième largeur pour la même planche
+        hiPending = n;
+        loadImage(n).then(full => {
+          if (hiPending === n) hiPending = -1;
+          if (token === loadToken && current === n && full && full.src !== img.src) swapSrc(img, full.src, n);
+        });
+      }
       updateCounter();
       done();
       drainStep();
@@ -848,11 +856,12 @@
      (1400, 2000, 2600 px) : chaque largeur différente est une image à recalculer côté serveur, et une image trop grande
      rend le zoom poussif ; une seule demande à la fois, jamais une version moins nette que celle affichée. */
   const REFINE_LADDER = [1400, 2000, 2600];
-  let refineTimer = null, refining = false, refineAgain = false;
+  let refineTimer = null, refining = false, refineAgain = false, hiPending = -1;
   function scheduleRefine() { clearTimeout(refineTimer); refineTimer = setTimeout(refineZoom, mode === "panels" && userZoom === 1 ? 700 : 320); }
   async function refineZoom() {
     if (refining) { refineAgain = true; return; }
     if (navBusy) { scheduleRefine(); return; }   // une planche arrive : on affinera celle-là, plus tard
+    if (mode === "panels" && hiPending === current) { scheduleRefine(); return; }   // la version nette de la planche arrive déjà
     const effective = userZoom * (mode === "panels" && panelIdx >= 0 ? panelScale : 1);
     if (effective <= 1.15 || mode === "scroll" || prefs.reader_quality === "original") return;
     const token = loadToken;
