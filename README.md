@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.10)
+# Bulle — lecteur de BD maison (v0.34.11)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,16 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case : un rectangle avec du texte n'est pas une case (v0.34.11)**, signalé sur « La nuit des
+  morts-vivants » p. 6. Une bulle rectangulaire ou un cartouche (petit cadre, moins de 4 % de la page, dont
+  l'intérieur est surtout du fond : papier et lettres) était parfois lu comme une case à part entière. Il ne l'est
+  plus : s'il est dans une case, il en fait partie ; s'il est entre deux cases, il est **rattaché** à la case qu'il
+  touche (la case est élargie jusqu'à lui, sans grandir de plus de moitié ni mordre sur une autre), jamais lu seul.
+  Banc d'essai (la page signalée ajoutée et annotée : 19 planches corrigées, 148 cases) : 92 justes avant comme
+  après, cases en trop 26 → 24, 16 planches sur 225 changent (bulles et cartouches retirés ou rattachés, rien de
+  moins bien) ; bibliothèque, 240 pages intérieures au hasard : 6 changent, toutes dans le même sens. Sur la page
+  signalée, la case bandeau des yeux manque toujours : ses gouttières font 2 à 3 pixels sur une page à marges noires,
+  c'est un autre chantier (noté). Les cases en base sont recalculées (`PANELS_VERSION` 17).
 - **Case par case : moins d'attente au changement de planche (v0.34.10)**. Trois choses. (1) L'ordre de lecture
   manga (une seconde passe de découpage, de droite à gauche) n'est plus calculé que si le lecteur est en sens manga
   (il le demande avec `?rtl=1`) ; sinon le serveur s'en passe, et complète le résultat le jour où un lecteur en sens

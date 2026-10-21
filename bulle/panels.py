@@ -30,7 +30,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 16       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 17       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 RETRY_BG = 225            # second essai, page claire sans cases trouvées : fond de référence plus sombre (voir detect_panels)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
@@ -47,6 +47,8 @@ BG_TOLERANCE = 46         # écart de gris toléré autour de la couleur de fond
 MIN_GUTTER = 0.003        # largeur minimale d'une gouttière (fraction du grand côté, au moins 2 px)
 MIN_PANEL = 0.055         # côté minimal d'une case (fraction de la dimension de la page)
 MIN_AREA = 0.012          # surface minimale d'une case (fraction de la page) — élimine numéros, titres
+TEXT_BOX = 0.04           # un cadre plus petit que ceci (fraction de la page)…
+TEXT_PAPER = 0.55         # … et dont l'intérieur est au moins à 70 % du fond est une bulle ou un cartouche, pas une case
 PAD = 0.012               # marge ajoutée autour de chaque case (fraction de la page)
 MAX_DEPTH = 5
 # cadres
@@ -1027,6 +1029,11 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
         if best:
             return _reading_order(best, rtl)
     ordered = _reading_order(inside, rtl)
+    if mask is not None:
+        # un rectangle avec du texte n'est pas une case : une bulle rectangulaire ou un cartouche (petit cadre dont
+        # l'intérieur est surtout du fond : papier et lettres) n'est pas rendu comme une case, il fait partie de la
+        # case qui le porte (les cadres gardent leur rôle de repères pour la bande restante ci-dessous)
+        ordered = [f for f in ordered if not _is_text_box(mask, f, w, h)]
     bx0, by0 = min(f[0] for f in inside), min(f[1] for f in inside)
     bx1, by1 = max(f[2] for f in inside), max(f[3] for f in inside)
     # la partie de l'image qui reste visible autour des cadres : au-dessus, en dessous, à gauche, à droite
@@ -1354,6 +1361,51 @@ def text_bridges(img: Image.Image, gray: Image.Image, mask: Image.Image, boxes: 
     return join, grown
 
 
+TEXT_ATTACH = 0.01        # un cartouche hors de toute case est rattaché à la case qu'il touche (écart ≤ 1 % de la page)
+
+
+def _is_text_box(mask: Image.Image, f: tuple, w: int, h: int) -> bool:
+    """Un cadre petit dont l'intérieur est surtout du fond (papier et lettres) : bulle rectangulaire, cartouche."""
+    return _area(f) < TEXT_BOX * w * h and ImageStat.Stat(mask.crop(f)).mean[0] >= TEXT_PAPER * 255
+
+
+def attach_text_boxes(mask: Image.Image, frames: list, boxes: list[tuple], grown: dict) -> dict:
+    """Un rectangle avec du texte (bulle rectangulaire, cartouche) n'est jamais une case ; s'il n'est dans aucune case,
+    il est rattaché à celle qu'il touche ou chevauche le plus (à TEXT_ATTACH près) : cette case est élargie jusqu'à lui (« grow »), pour qu'il soit lu avec elle. Pas de rattachement si la
+    case élargie mordrait sur une autre."""
+    w, h = mask.size
+    near = TEXT_ATTACH * max(w, h)
+
+    def gap(a: tuple, b: tuple) -> float:
+        dx = max(0, max(a[0], b[0]) - min(a[2], b[2]))
+        dy = max(0, max(a[1], b[1]) - min(a[3], b[3]))
+        return max(dx, dy)
+
+    for f in frames:
+        if not _area(f) or not _is_text_box(mask, f, w, h):
+            continue
+        if any(_inter(f, grown.get(k, b)) >= 0.6 * _area(f) for k, b in enumerate(boxes)):
+            continue   # déjà dans une case (ou dans une case déjà élargie)
+        best, best_key = None, None
+        for k, b in enumerate(boxes):
+            cur = grown.get(k, b)
+            inter = _inter(f, cur)
+            key = (-inter, gap(f, cur))   # le plus de recouvrement, puis la plus proche
+            if inter > 0 or gap(f, cur) <= near:
+                if best_key is None or key < best_key:
+                    best, best_key = k, key
+        if best is None:
+            continue
+        cur = grown.get(best, boxes[best])
+        u = (min(cur[0], f[0]), min(cur[1], f[1]), max(cur[2], f[2]), max(cur[3], f[3]))
+        if _area(u) > 1.5 * _area(cur):
+            continue   # la case grandirait de plus de moitié : le cartouche est sur autre chose (une case non trouvée)
+        if any(k != best and _inter(u, grown.get(k, b)) > 0.1 * _area(b) for k, b in enumerate(boxes)):
+            continue
+        grown[best] = u
+    return grown
+
+
 BUBBLE_REACH = 0.3        # une bulle qui dépasse du cadre : on élargit la case d'au plus 30 % de sa taille…
 BUBBLE_PAGE = 0.06        # … et d'au plus 6 % de la page
 
@@ -1559,6 +1611,10 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
             join, grown = [], {}
         try:
             grown = overflow_grow(mask, ltr, grown)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            grown = attach_text_boxes(mask, frames_cache[0] if frames_cache else [], ltr, grown)
         except Exception:  # noqa: BLE001
             pass
         if join:
