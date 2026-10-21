@@ -54,23 +54,35 @@ img.cv{display:block;width:76px;height:auto}
 .letters a{display:inline-block;min-width:44px;padding:10px 6px;margin:2px;background:#e1dacb;border:1px solid #b9b19e;text-align:center;font-weight:bold;text-decoration:none;color:#222}
 .letters a.cur{background:#2e6da4;color:#fff;border-color:#1d4c78}
 .crumb{font-size:20px;color:#6b665c;margin:4px 0}
-.pgbox{position:relative;margin:8px 0;text-align:center}
-img.pg{display:block;margin:0 auto;max-width:100%;height:auto;border:1px solid #999;background:#fff}
-a.zone{position:absolute;top:0;height:100%;width:50%;display:block;overflow:hidden;text-indent:-9999px}
-a.zl{left:0}
-a.zr{right:0}
-img.pre{position:absolute;left:-9999px;top:0;width:1px;height:1px}
 """
 
 
+# Écran d'accueil de l'iPad : iOS 5 ne connaît pas le manifest web (iOS 11.3), il lit ces balises propres à Apple. Elles sont dans
+# le <head> de TOUTES les pages /simple (on peut ajouter l'icône depuis n'importe laquelle ; la page de départ de l'icône
+# est celle où l'on se trouvait : /simple pour avoir l'accueil). Les icônes sont servies sans authentification (l'iPad les
+# demande avant la connexion). Les liens restent dans l'application : de simples <a href> de même origine, jamais de
+# target="_blank" ni de redirection JavaScript.
+APPLE_HEAD = ('<meta name="apple-mobile-web-app-capable" content="yes">'
+              '<meta name="apple-mobile-web-app-status-bar-style" content="black">'
+              '<meta name="apple-mobile-web-app-title" content="Bulle">'
+              '<link rel="apple-touch-icon" href="/simple/icone-72.png">'
+              '<link rel="apple-touch-icon" sizes="72x72" href="/simple/icone-72.png">'
+              '<link rel="apple-touch-icon" sizes="144x144" href="/simple/icone-144.png">')
+
+VIEWPORT = '<meta name="viewport" content="width=device-width, initial-scale=1">'
+# Lecture : ni zoom ni défilement. « maximum-scale=1 » évite aussi le bogue d'iOS qui agrandit la page quand on tourne
+# l'iPad de portrait en paysage (la planche ne tiendrait plus dans l'écran) ; sans zoom, pas de délai au toucher non plus.
+VIEWPORT_READER = ('<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, '
+                   'maximum-scale=1, user-scalable=no">')
+
+
 def layout(title: str, body: str) -> str:
-    """Page complète : doctype simple, jeu de caractères, style intégré. Largeur « de l'appareil » : 768 px en portrait et
-    1024 px en paysage sur un iPad 1 ; le pincement pour zoomer reste possible."""
+    """Page complète : doctype simple, jeu de caractères, balises Apple, style intégré. Largeur « de l'appareil » : 768 px
+    en portrait et 1024 px en paysage sur un iPad 1 ; le pincement pour zoomer reste possible."""
     return ("<!DOCTYPE html>\n"
-            '<html lang="fr"><head><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<html lang="fr"><head><meta charset="utf-8">{VIEWPORT}{APPLE_HEAD}'
             f"<title>{esc(title)}</title>"
-            f'<style type="text/css">{CSS}</style></head>'
+            f'<style>{CSS}</style></head>'
             f'<body><div id="main">{body}</div></body></html>\n')
 
 
@@ -213,17 +225,38 @@ def list_page(title: str, items: list[dict], page: int, base: str, up: Optional[
 
 
 # ---------------------------------------------------------------- lecture
+# Lecture : QUE la planche, plein écran, fond noir. Rien d'autre que deux grandes zones tactiles (moitié gauche de l'écran :
+# page précédente, moitié droite : page suivante) et un petit bouton discret en haut à gauche (44 px) qui ramène à l'album.
+# La planche est l'image de fond d'une zone qui remplit l'écran, avec « background-size: contain » : le navigateur la fait
+# tenir entièrement dans l'écran (paysage comme portrait, avec ou sans barre d'outils de Safari), centrée, sans déformation
+# et sans défilement, quelle que soit la taille de l'écran ; une petite planche est agrandie. Cela ne dépend d'aucune
+# hauteur en pourcentage (peu fiables sur un vieux Safari) ni de JavaScript.
+READER_CSS = """
+html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
+div.screen{position:fixed;left:0;top:0;right:0;bottom:0;background-color:#000;background-repeat:no-repeat;background-position:center center;-webkit-background-size:contain;background-size:contain}
+a.zone{position:fixed;top:0;bottom:0;width:50%;display:block;overflow:hidden;text-indent:-9999px;z-index:1;-webkit-tap-highlight-color:rgba(0,0,0,0)}
+a.zl{left:0}
+a.zr{right:0}
+a.back{position:fixed;left:6px;top:6px;width:42px;height:42px;z-index:2;display:block;overflow:hidden;text-align:center;font:bold 34px/40px Helvetica,Arial,sans-serif;color:#fff;text-decoration:none;background:#333;background:rgba(0,0,0,.45);border:1px solid #777;border:1px solid rgba(255,255,255,.35);border-radius:8px;opacity:.6;-webkit-tap-highlight-color:rgba(0,0,0,0)}
+img.pre{position:absolute;left:-9999px;top:0;width:1px;height:1px}
+"""
+
+
 def reader_page(title: str, page: int, pages: int, img: str, preload: Optional[str], prev_url: Optional[str],
-                next_url: Optional[str], next_label: str, back_url: str) -> str:
-    """Une planche entière : en haut et en bas, précédent / retour à l'album / suivant ; deux grandes zones sur l'image
-    (moitié gauche : précédente, moitié droite : suivante), de simples liens. `preload` : la planche suivante, demandée
-    par une image invisible pour qu'elle soit déjà là quand on tourne la page."""
-    def buttons() -> str:
-        return bar(link_button(prev_url, "« Précédente"), link_button(back_url, "Album", "alt"),
-                   link_button(next_url, next_label))
+                next_url: Optional[str], back_url: str) -> str:
+    """Une planche, plein écran (voir plus haut). Les zones gauche / droite sont de simples liens (sans JavaScript) ; les
+    libellés « Page précédente / suivante » qu'elles contiennent sont cachés (hors de l'écran) pour les lecteurs d'écran.
+    `preload` : la planche suivante, demandée par une image invisible pour qu'elle soit déjà là quand on tourne la page."""
     zl = f'<a class="zone zl" href="{esc(prev_url)}">Page précédente</a>' if prev_url else ""
     zr = f'<a class="zone zr" href="{esc(next_url)}">Page suivante</a>' if next_url else ""
     pre = f'<img class="pre" src="{esc(preload)}" alt="">' if preload else ""
-    body = (buttons() + f'<div class="crumb">{esc(title)} — page {page} / {pages}</div>'
-            f'<div class="pgbox"><img class="pg" src="{esc(img)}" alt="Page {page}">{zl}{zr}</div>{pre}' + buttons())
-    return layout(f"{title} — page {page}", body)
+    label = f"{title} — page {page} / {pages}"
+    return ("<!DOCTYPE html>\n"
+            f'<html lang="fr"><head><meta charset="utf-8">{VIEWPORT_READER}{APPLE_HEAD}'
+            f"<title>{esc(label)}</title>"
+            f'<style>{READER_CSS}</style></head>'
+            f'<body><div class="screen" role="img" aria-label="{esc(label)}" '
+            f'style="background-image:url(&#39;{esc(img)}&#39;)"></div>'
+            f'{zl}{zr}'
+            f'<a class="back" href="{esc(back_url)}" title="Retour à l\'album" aria-label="Retour à l\'album">‹</a>'
+            f'{pre}</body></html>\n')

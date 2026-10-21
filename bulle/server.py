@@ -36,7 +36,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.35.0"
+VERSION = "0.36.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -988,15 +988,25 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         here = f"/simple/lire/{node_id}"
         prev_url = f"{here}?p={page - 1}" if page > 1 else None
         if page < count:
-            next_url, next_label = f"{here}?p={page + 1}", "Suivante »"
+            next_url = f"{here}?p={page + 1}"
         elif next_ and not hidden(lib.node(next_["id"]) or {"path": ""}):
-            next_url, next_label = f"/simple/lire/{next_['id']}", "Album suivant »"
+            next_url = f"/simple/lire/{next_['id']}"   # dernière page : la zone de droite ouvre l'album suivant du dossier
         else:
-            next_url, next_label = back, "Fin de l'album"
+            next_url = back                            # … ou, s'il n'y en a pas, ramène à la liste
         return simple_html(simple.reader_page(
             node["name"], page, count, f"/simple/img/{node_id}/{page - 1}?v={ver}",
             f"/simple/img/{node_id}/{page}?v={ver}" if page < count else None,
-            prev_url, next_url, next_label, back))
+            prev_url, next_url, back))
+
+    @app.route("/simple/icone-<int:size>.png")
+    def simple_icon(size: int):
+        """Icône de l'écran d'accueil de l'iPad (balises apple-touch-icon des pages /simple) : 72 px (iPad 1) et 144 px
+        (Retina). SANS authentification : l'iPad la demande en ajoutant l'icône, avant toute connexion. C'est le logo de
+        Bulle, carré et opaque (tools/make_icons.py) ; iOS ajoute lui-même les coins arrondis."""
+        if size not in (72, 144):
+            abort(404, description="Cette page n'existe pas")
+        return send_from_directory(STATIC_DIR, f"simple-icone-{size}.png", mimetype="image/png", max_age=86400,
+                                   conditional=True)
 
     @app.route("/simple/img/<int:node_id>/<int:index>")
     def simple_image(node_id: int, index: int):

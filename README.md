@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.35.0)
+# Bulle — lecteur de BD maison (v0.36.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -51,7 +51,8 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
   Mihon…) : navigation par dossiers, reprise, récents, recherche, téléchargement et lecture page par page
   (OPDS-PSE) sans télécharger l'album.
 - **Lecture simple** (`http://<serveur>:2205/simple`) pour un très vieil appareil (iPad 1, iOS 5.1) : pages HTML sans
-  aucun JavaScript, une planche entière par page, gros boutons, progression enregistrée.
+  aucun JavaScript, la planche seule en plein écran sur fond noir (deux grandes zones tactiles pour tourner les
+  pages), progression enregistrée, installable comme une application sur l'écran d'accueil de l'iPad.
 - **Recherche** sans tenir compte des accents ni de la casse (« aigles decap » trouve
   « Aigles Décapitées (Les) »), sur les noms de dossiers et de fichiers.
 - **Pages et couvertures redimensionnées** par le serveur (comme Ubooquity) à la taille réellement
@@ -141,6 +142,27 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Lecture simple : plein écran et icône d'application (v0.36.0)**, d'après l'essai sur l'iPad 1. (1) La lecture
+  n'affiche plus que la planche : plein écran, fond noir, **entière** (jamais coupée), centrée, sans défilement ni zoom,
+  en paysage comme en portrait. Plus de titre ni de boutons « précédent / suivant » : seulement les deux grandes
+  zones tactiles (moitié gauche de l'écran = page précédente, moitié droite = page suivante, sur toute la hauteur) et
+  un petit bouton discret en haut à gauche (44 px, semi-transparent) qui ramène à l'album. À la dernière page, la zone
+  de droite ouvre l'album suivant du dossier (ou ramène à la liste s'il n'y en a pas). La planche est l'image de fond
+  d'une zone qui remplit l'écran, réglée sur « contain » : c'est le navigateur qui la fait tenir, sans dépendre de
+  hauteurs en pourcentage (peu fiables sur un vieux Safari) ; une petite planche est agrandie. Le zoom est coupé dans
+  la lecture (`maximum-scale=1`) : cela évite que Safari agrandisse la page quand on tourne l'iPad, et que deux
+  touchers rapides soient pris pour un double-toucher de zoom. (2) **Icône sur l'écran d'accueil** : iOS 5 ne connaît
+  pas le manifest web (iOS 11.3) ; toutes les pages `/simple` portent donc les balises propres à Apple
+  (`apple-mobile-web-app-capable`, barre d'état noire, titre « Bulle », `apple-touch-icon` en 72 px et 144 px). Les
+  icônes sont le logo de Bulle, carrées, sans transparence ni coins arrondis (iOS les ajoute ; `python
+  tools/make_icons.py` les refait) et servies sans connexion sur `/simple/icone-72.png` et `/simple/icone-144.png`.
+  Pour l'ajouter : ouvrir `/simple` sur l'iPad (c'est la page de départ de l'application), bouton « action » de Safari
+  (la flèche) › « Sur l'écran d'accueil ». L'application s'ouvre sans barre d'adresse ; les liens y restent (liens
+  ordinaires : ni `target`, ni redirection par script) ; la session y reste connectée (cookies persistants : profil et
+  code d'accès 10 ans, compte 30 jours). Vérifié : 19 tests (`python tools/test_simple.py`), validateur W3C sans erreur,
+  18 mesures dans Edge (user-agent d'iPad iOS 5, JavaScript coupé : 6 tailles d'écran, paysage et portrait, plein écran
+  d'application et avec les barres de Safari, × 3 formes de planche) : la planche tient entièrement, centrée à 1 px
+  près, sans défilement. Pas essayé sur le vrai iPad.
 - **Lecture simple pour un très vieil appareil (v0.35.0)** : un iPad 1 (iOS 5.1, Safari 5.1 de 2011, 256 Mo de
   mémoire vive) ne fait pas tourner l'application. Ouvrir `http://<adresse du NAS>:2205/simple` (par exemple
   `http://192.168.0.213:2205/simple`) : des pages HTML rendues par le serveur, **sans aucun JavaScript**, au style
@@ -589,7 +611,8 @@ bulle/
   bulle/opds.py      flux OPDS / OPDS-PSE pour les applis de lecture
   bulle/simple.py    pages « lecture simple » (/simple) : HTML sans JavaScript pour les très vieux appareils
   bulle/server.py    serveur web Flask (servi par waitress) + API JSON + scan périodique
-  tools/             banc d'essai de la détection des cases (banc_cases.py), tests de /simple (test_simple.py)
+  tools/             banc d'essai de la détection des cases (banc_cases.py), tests de /simple (test_simple.py), icônes de
+                     l'écran d'accueil de l'iPad (make_icons.py)
   bulle/static/      interface : index.html + app.js (navigation), reader.html + reader.js (lecteur), style.css
   stack.yml          la stack à coller dans Dockhand (image ghcr.io/kermess14/bulle)
   stack-autonome.yml la même stack sans image (code embarqué), générée par make_stack.py
@@ -616,7 +639,7 @@ L'API (toutes les réponses en JSON, sauf les images) :
 | `GET` `POST /api/profiles` · `PUT` `DELETE /api/profiles/<id>` · `POST /api/profiles/select` | profils (`{"id", "pin"}` pour choisir) |
 | `GET /api/auth/status` · `POST /api/auth/login` · `POST /api/auth/logout` | code d'accès général (`PUT /api/settings {"global": {"access_pin": "…"}}` pour le définir, `""` pour l'enlever) |
 | `GET /opds` · `/opds/folder/<id>` · `/opds/continue` · `/opds/recent` · `/opds/search?q=` | flux OPDS (authentification Basic avec le code d'accès s'il y en a un) |
-| `GET /simple` · `/simple/series` · `/simple/serie/<id>` · `/simple/lire/<id>?p=N` · `/simple/img/<id>/<n>` · `POST /simple/connexion` · `/simple/profil` · `/simple/deconnexion` | lecture simple, HTML sans JavaScript (pages et formulaires ; `p` compte à partir de 1) |
+| `GET /simple` · `/simple/series` · `/simple/serie/<id>` · `/simple/lire/<id>?p=N` · `/simple/img/<id>/<n>` · `/simple/icone-72.png` · `/simple/icone-144.png` (sans connexion) · `POST /simple/connexion` · `/simple/profil` · `/simple/deconnexion` | lecture simple, HTML sans JavaScript (pages et formulaires ; `p` compte à partir de 1) |
 | `GET` `POST /api/lists` · `GET` `PUT` `DELETE /api/lists/<id>` · `POST /api/lists/<id>/items` · `DELETE /api/lists/<id>/items/<album>` | listes du profil (Favoris et À lire créées d'office) |
 | `GET /api/panels/<id>/<page>` | cases de la planche (fractions de la page, ordre occidental + ordre manga), détectées une fois puis gardées |
 | `GET /api/covers/sample?n=` | couvertures au hasard (mosaïque de fond) |
