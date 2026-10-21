@@ -117,10 +117,13 @@
   const initial = n => (n || "?").trim()[0].toUpperCase();
   const isAdmin = () => settings.meta.role === "admin";
   /* Vignette d'un profil : une petite image choisie par l'utilisateur, sinon un emoji ou l'initiale. */
+  const AVATAR_IMG = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
   function avatarHtml(p, cls = "") {
     const a = p && p.avatar;
-    if (a && a.startsWith("data:image/")) return `<img class="pavatar ${cls}" src="${a}" alt="">`;
-    return `<span class="pavatar ${cls}">${esc(a || initial(p ? p.name : "?"))}</span>`;
+    // seules les petites images PNG/JPEG/WebP/GIF en base64 sont acceptées (jamais de HTML), et tout est échappé
+    if (a && AVATAR_IMG.test(a)) return `<img class="pavatar ${esc(cls)}" src="${esc(a)}" alt="">`;
+    if (a && a.startsWith("data:")) return `<span class="pavatar ${esc(cls)}">${esc(initial(p ? p.name : "?"))}</span>`;
+    return `<span class="pavatar ${esc(cls)}">${esc(a || initial(p ? p.name : "?"))}</span>`;
   }
   function profileTile(p, current) {
     return `<button type="button" class="ptile ${p.id === current ? "on" : ""}" data-profile="${p.id}" data-haspin="${p.has_pin ? 1 : 0}" data-name="${esc(p.name)}">
@@ -1745,6 +1748,7 @@
         ${field("Résumé lu à l'ouverture d'une fiche", chk("g", "bdt_auto_summary", g.bdt_auto_summary), "Une requête vers la fiche de l'album, une seule fois ; le bouton « Résumés » d'une série les lit tous en tâche de fond.")}
         <p class="muted">Rien n'est jamais écrit dans vos fichiers : les informations Bédéthèque restent dans la base de Bulle. <a href="#/collection">Voir la collection</a>.</p>`,
       access: () => `
+        ${field("Imposer le HTTPS", chk("g", "force_https", g.force_https), `Une visite en http:// depuis Internet est renvoyée vers https://, et le navigateur retient de n'utiliser que le HTTPS. Le certificat vient de votre proxy (Nginx Proxy Manager…), qui doit transmettre l'en-tête X-Forwarded-Proto. L'accès par l'adresse du réseau local (192.168…) reste possible en http. ${location.protocol === "https:" ? "" : "<b>À activer depuis une page ouverte en https://</b> (sinon Bulle refuse, pour ne pas vous enfermer dehors)."}`)}
         ${field("Se connecter avec un compte", chk("g", "account_login", g.account_login), "Pour mettre Bulle sur Internet : à l'ouverture, on tape le nom d'un compte et son mot de passe, sinon on ne voit rien (ni les BD, ni la liste des comptes). Chaque personne a son compte, que vous pouvez supprimer à tout moment. Après 5 essais ratés, l'adresse est bloquée 15 minutes. On reste connecté 30 jours. Le flux OPDS demande aussi le nom du compte et son mot de passe. Avant d'activer : donnez un mot de passe à votre compte (Mon compte), c'est avec lui que vous vous connecterez.")}
         ${g.account_login ? "" : field("Demander « qui lit ? » à l'ouverture", chk("g", "require_profile", g.require_profile), "Chaque profil a sa progression et ses réglages d'affichage.")}
         <div class="field"><div class="flabel"><span>Comptes</span><small>${g.account_login ? "Chaque compte a un mot de passe (8 caractères au moins, gardé chiffré) : on se connecte avec le nom du compte et ce mot de passe." : "Un mot de passe par compte est facultatif (4 caractères au moins, gardé chiffré)."} Administrateur : réglages, scans, comptes, rubrique Adulte ; lecteur : lecture et listes seulement. Il faut garder au moins un administrateur.</small></div>
