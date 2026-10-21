@@ -246,6 +246,29 @@ class ScanAborted(RuntimeError):
     rien n'a été écrit dans la base, pour ne pas tout effacer à cause d'un partage réseau pas encore monté."""
 
 
+# Vignette d'un profil : une petite image PNG/JPEG/WebP/GIF en base64, ou quelques caractères (emoji, initiales).
+# Tout le reste (notamment une valeur « data:image/png;base64,x" onerror="… ») est refusé : cette valeur finit dans du
+# HTML chez tous les lecteurs, administrateur compris.
+AVATAR_IMAGE_RE = re.compile(r"data:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+")
+AVATAR_MAX = 60_000
+
+
+def safe_avatar(val) -> Optional[str]:
+    """La vignette si elle est valide, sinon None (les anciennes valeurs douteuses déjà en base sont écartées aussi)."""
+    v = str(val or "").strip()
+    if not v:
+        return None
+    if v.startswith("data:"):
+        return v if len(v) <= AVATAR_MAX and AVATAR_IMAGE_RE.fullmatch(v) else None
+    return v[:8]
+
+
+def _profile_row(r) -> dict:
+    d = dict(r)
+    d["avatar"] = safe_avatar(d.get("avatar"))
+    return d
+
+
 class Library:
     def __init__(self, root: str, db_path: str,
                  on_invalidate: Optional[Callable[[Iterable[int]], None]] = None):
@@ -358,15 +381,15 @@ class Library:
     def profiles(self) -> list[dict]:
         rows = self.conn.execute("SELECT id, name, avatar, role, pin_hash IS NOT NULL AS has_pin FROM profiles "
                                  "ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
+        return [_profile_row(r) for r in rows]
 
     def profiles_full(self) -> list[dict]:
         """Avec les empreintes des mots de passe : pour la connexion seulement, jamais renvoyé au navigateur."""
-        return [dict(r) for r in self.conn.execute("SELECT * FROM profiles ORDER BY id").fetchall()]
+        return [_profile_row(r) for r in self.conn.execute("SELECT * FROM profiles ORDER BY id").fetchall()]
 
     def profile(self, profile_id: int) -> Optional[dict]:
         r = self.conn.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
-        return dict(r) if r else None
+        return _profile_row(r) if r else None
 
     def add_profile(self, name: str, pin_hash: Optional[str] = None, avatar: Optional[str] = None,
                     role: str = "reader") -> dict:
@@ -875,7 +898,7 @@ class Library:
 
     def activity_by_profile(self, days: int = 30) -> list[dict]:
         since = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-        return [dict(r) for r in self.conn.execute(
+        return [_profile_row(r) for r in self.conn.execute(
             "SELECT pr.id, pr.name, pr.avatar, COALESCE(SUM(l.pages),0) AS pages, COALESCE(SUM(l.seconds),0) AS seconds, "
             "COALESCE(SUM(l.finished),0) AS finished, MAX(l.last_at) AS last_at FROM profiles pr "
             "LEFT JOIN reading_log l ON l.profile_id=pr.id AND l.day>=? GROUP BY pr.id ORDER BY pr.id", (since,))]

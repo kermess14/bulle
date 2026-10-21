@@ -30,10 +30,10 @@ from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, comp
                          query_from_folder)
 from . import bdfugue
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
-from .library import DEFAULT_PROFILE, Library
+from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.33.1"
+VERSION = "0.33.2"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -90,6 +90,7 @@ def global_defaults() -> dict:
         "bdt_bdfugue": False,         # laboratoire : si Bédéthèque ne trouve rien de sûr, recherche sur BDfugue (librairie)
         "require_profile": False,     # demander « qui lit ? » à l'ouverture
         "account_login": False,       # se connecter avec un compte (nom + mot de passe) : pour mettre Bulle sur Internet
+        "force_https": env_bool("FORCE_HTTPS", False),   # n'accepter que le HTTPS depuis Internet (voir https_gate)
         "opds_enabled": True,         # flux OPDS pour les applis mobiles
         "tools_url": "auto",          # BDConverter dans le menu caché (champignon) : adresse, "auto" = même machine, port 3111, "" = masqué
         "adult_paths": [],            # dossiers de la rubrique Adulte (chemins relatifs), cachés tant que le code n'est pas entré
@@ -105,7 +106,7 @@ GLOBAL_TYPES = {
     "sharpen": (bool,), "cover_width": (int, 200, 1200), "read_threshold": (float, 0.5, 1.0),
     "bdt_enabled": (bool,), "bdt_interval": (float, 1.0, 30.0), "bdt_auto_summary": (bool,), "bdt_bdgest": (bool,), "bdt_bdfugue": (bool,),
     "bdt_per_minute": (float, 1.0, 60.0), "bdt_pause_every": (int, 0, 1000), "bdt_pause_minutes": (float, 0.5, 30.0),
-    "require_profile": (bool,), "account_login": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
+    "require_profile": (bool,), "account_login": (bool,), "force_https": (bool,), "opds_enabled": (bool,), "tools_url": (str,), "adult_paths": (list,), "ignored_paths": (list,), "adult_hide_tab": (bool,),
     "quality_auto": (bool,), "hd_min_px": (int, 800, 8000),
 }
 
@@ -324,6 +325,36 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def secure_request() -> bool:
         return request.is_secure or (request.headers.get("X-Forwarded-Proto") or "").lower() == "https"
 
+    def lan_host(host: str) -> bool:
+        """Adresse « de la maison » (192.168.x.x, localhost, nom court, .local) : jamais redirigée vers HTTPS, sinon on
+        ne pourrait plus ouvrir Bulle depuis le réseau local, où il n'y a pas de certificat."""
+        h = host.strip().lower()
+        if h.startswith("["):
+            h = h[1:].split("]")[0]
+        elif h.count(":") == 1:
+            h = h.split(":")[0]
+        try:
+            ip = ipaddress.ip_address(h)
+            return ip.is_private or ip.is_loopback or ip.is_link_local
+        except ValueError:
+            return "." not in h or h.endswith((".local", ".lan", ".home", ".internal", ".localhost"))
+
+    @app.before_request
+    def https_gate():
+        """Option « Imposer HTTPS » : une visite en http:// depuis Internet est renvoyée vers https:// (redirection 308,
+        même méthode et même contenu). Le HTTPS lui-même est fourni par le proxy inverse (Nginx Proxy Manager…) qui
+        transmet X-Forwarded-Proto ; l'accès direct par l'adresse du réseau local reste possible."""
+        if not settings().get("force_https") or secure_request() or lan_host(request.host or ""):
+            return None
+        host = (request.host or "").split(":")[0]
+        return Response("", 308, {"Location": "https://" + host + request.full_path.rstrip("?")})
+
+    @app.after_request
+    def https_headers(resp: Response) -> Response:
+        if settings().get("force_https") and secure_request():
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=15552000")   # 6 mois, sans sous-domaines
+        return resp
+
     def account_mode() -> bool:
         return bool(settings().get("account_login"))
 
@@ -365,12 +396,16 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         flask_g._session_profile = found
         return found
 
+    def put_cookie(resp: Response, name: str, value: str, max_age: int) -> None:
+        """Tous les cookies de Bulle : HttpOnly (le JavaScript de la page ne peut pas les lire, même si une faille laissait
+        passer un script) et « Secure » dès que la connexion est en HTTPS."""
+        resp.set_cookie(name, value, max_age=max_age, samesite="Lax", httponly=True, secure=secure_request())
+
     def set_session(resp: Response, p: dict) -> None:
-        resp.set_cookie("bulle_session", signer.dumps({"p": p["id"], "k": p["pin_hash"][-16:],
-                                                       "exp": time.time() + SESSION_DAYS * 86400}),
-                        max_age=SESSION_DAYS * 86400, samesite="Lax", httponly=True, secure=secure_request())
-        resp.set_cookie("bulle_profile", signer.dumps({"p": p["id"]}), max_age=SESSION_DAYS * 86400, samesite="Lax",
-                        httponly=True, secure=secure_request())
+        put_cookie(resp, "bulle_session", signer.dumps({"p": p["id"], "k": p["pin_hash"][-16:],
+                                                        "exp": time.time() + SESSION_DAYS * 86400}),
+                   SESSION_DAYS * 86400)
+        put_cookie(resp, "bulle_profile", signer.dumps({"p": p["id"]}), SESSION_DAYS * 86400)
 
     def auth_ok() -> bool:
         if account_mode():
@@ -935,6 +970,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 lib.set_settings({"adult_pin_hash": hash_pin(pin) if pin else None}, None)
             if ("adult_paths" in g or "adult_hide_tab" in g) and adult_pin_hash() and not adult_unlocked():
                 abort(403, description="adult_locked")
+            if g.get("force_https") is True and not settings().get("force_https") and not secure_request():
+                abort(400, description="Ouvrez d'abord Bulle en https:// (par votre adresse sur Internet) pour activer "
+                                       "cette option : sinon vous ne pourriez plus vous connecter.")
             if g.get("account_login") is True and not account_mode():
                 me = lib.profile(current_profile())
                 if not me or not me.get("pin_hash"):
@@ -955,14 +993,13 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if isinstance(body.get("global"), dict) and "adult_pin" in body["global"]:
             stored = adult_pin_hash()
             if stored:
-                resp.set_cookie("bulle_adult", signer.dumps({"adult": stored[-16:], "t": time.time()}), max_age=ADULT_TTL, samesite="Lax")
+                put_cookie(resp, "bulle_adult", signer.dumps({"adult": stored[-16:], "t": time.time()}), ADULT_TTL)
             else:
                 resp.delete_cookie("bulle_adult")
         if isinstance(body.get("global"), dict) and "access_pin" in body["global"]:
             stored = access_pin_hash()
             if stored:
-                resp.set_cookie("bulle_auth", signer.dumps({"auth": stored[-16:]}), max_age=10 * 365 * 24 * 3600,
-                                samesite="Lax")
+                put_cookie(resp, "bulle_auth", signer.dumps({"auth": stored[-16:]}), 10 * 365 * 24 * 3600)
             else:
                 resp.delete_cookie("bulle_auth")
         return resp
@@ -993,7 +1030,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         throttle_ok(ip)
         resp = make_response(jsonify({"unlocked": True}))
         if stored:
-            resp.set_cookie("bulle_adult", signer.dumps({"adult": stored[-16:], "t": time.time()}), max_age=ADULT_TTL, samesite="Lax")
+            put_cookie(resp, "bulle_adult", signer.dumps({"adult": stored[-16:], "t": time.time()}), ADULT_TTL)
         return resp
 
     @app.route("/api/adult/lock", methods=["POST"])
@@ -1128,8 +1165,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         throttle_ok(ip)
         resp = make_response(jsonify({"ok": True}))
         if stored:
-            resp.set_cookie("bulle_auth", signer.dumps({"auth": stored[-16:]}), max_age=10 * 365 * 24 * 3600,
-                            samesite="Lax")
+            put_cookie(resp, "bulle_auth", signer.dumps({"auth": stored[-16:]}), 10 * 365 * 24 * 3600)
         return resp
 
     @app.route("/api/auth/logout", methods=["POST"])
@@ -1157,16 +1193,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 "has_pin": bool(p.get("pin_hash"))}
 
     def clean_avatar(val) -> Optional[str]:
-        """Vignette : quelques caractères (emoji, initiales) ou une petite image (data:image/…, ≤ 60 Ko, réduite côté
-        navigateur)."""
+        """Vignette : quelques caractères (emoji, initiales) ou une petite image (data:image/png|jpeg|webp|gif;base64,
+        …, ≤ 60 Ko, réduite côté navigateur) ; tout le reste est refusé."""
         v = str(val or "").strip()
         if not v:
             return None
-        if v.startswith("data:image/"):
-            if len(v) > 60_000 or ";base64," not in v[:40]:
+        if v.startswith("data:"):
+            if len(v) > AVATAR_MAX:
                 abort(400, description="Image de profil trop lourde")
+            if not AVATAR_IMAGE_RE.fullmatch(v):
+                abort(400, description="Image de profil non valide (PNG, JPEG, WebP ou GIF seulement)")
             return v
-        return v[:8]
+        return safe_avatar(v)
 
     @app.route("/api/profiles", methods=["POST"])
     def api_profile_create():
@@ -1264,7 +1302,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             abort(403, description="Code PIN incorrect")
         throttle_ok(ip, acct)
         resp = make_response(jsonify({"current": pid, "name": p["name"], "role": p.get("role") or "reader"}))
-        resp.set_cookie("bulle_profile", signer.dumps({"p": pid}), max_age=10 * 365 * 24 * 3600, samesite="Lax")
+        put_cookie(resp, "bulle_profile", signer.dumps({"p": pid}), 10 * 365 * 24 * 3600)
         return resp
 
     @app.route("/api/profiles/logout", methods=["POST"])
