@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.33.4)
+# Bulle — lecteur de BD maison (v0.34.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,14 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case plus rapide (v0.34.0)**, sans rien changer aux cases trouvées : la recherche des cadres testait
+  des milliers de fois les mêmes bords (le résultat est maintenant gardé), vérifiait « est-ce deux cases côte à
+  côte ? » sur des milliers de rectangles quasi identiques avant de les dédoublonner (après, désormais), lisait les
+  gouttières pixel par pixel en Python (Pillow s'en charge en C) et, pour le texte à cheval, retournait la planche
+  entière pour chaque paire de cases l'une sous l'autre (une seule fois maintenant). Sur le banc d'essai de 223
+  planches : temps moyen de 438 à 191 ms, pire planche de 6,7 à 2,3 s, **0 planche changée** (cases, ordre manga,
+  cases réunies ou élargies). Le banc lui-même est dans le dépôt : `python tools/banc_cases.py base|compare|score
+  <dossier des planches>` (les planches restent chez vous).
 - One shots : bouton **« 📚 Tome d'une série »** sur la ligne d'un album qui n'est pas un one shot mais le tome d'une
   série : il est mis de côté (plus cherché ici), rangé dans « tomes de série mis de côté » avec « remettre ». Le
   bouton du haut s'appelle maintenant « Tout le dossier est une série » (il concerne tout le dossier, pas un album).
