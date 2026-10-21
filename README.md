@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.3)
+# Bulle — lecteur de BD maison (v0.34.4)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,19 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Lecteur, case par case : moins d'images chargées, plus fluide sur tablette (v0.34.4)**. Pour une planche, le
+  lecteur chargeait la version « page entière », puis la version nette (×2), puis encore une troisième largeur
+  (« affinage ») une fois la première case cadrée : plus que les deux premières, la version ×2 étant la netteté des
+  cases (l'affinage ne sert plus qu'au zoom manuel). Un redimensionnement (barre d'adresse du téléphone, clavier,
+  fenêtre) jetait toutes les images chargées et rechargeait tout : elles sont gardées, et une version déjà là plus
+  nette que celle voulue est conservée. Une page d'origine petite (vignette, dernière page) n'est plus redemandée
+  à chaque visite. Un échec de demande des cases (réseau, serveur) n'est plus retenu pour toute la session : la
+  planche est redemandée à la visite suivante. Sur téléphone et tablette (tactile, petit côté ≤ 1 100 px), l'image
+  des cases est plafonnée à 2 560 px au lieu de 3 840 (la carte graphique n'avait pas le temps de la redessiner
+  pendant le glissement : case noire) ; rien ne change sur PC. Le recadrage d'une case au doigt ou à la souris est
+  recalculé une fois par image d'écran et non à chaque mouvement. Vérifié dans Edge (PC 1920×1080 et iPad Pro 11
+  émulé, tactile) : une planche = 2 images au lieu de 3, redimensionnement en hauteur = 0 rechargement, aucune
+  erreur.
 - **Case par case : les cases restent dans le navigateur (v0.34.3)**. À chaque réouverture d'un album, le lecteur
   redemandait les cases de chaque planche au serveur (une requête, une lecture en base, par planche). L'adresse des
   cases porte maintenant la date du fichier et la version de la détection : le navigateur garde la réponse pour
