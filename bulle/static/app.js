@@ -1042,7 +1042,7 @@
     const img = id && !item.error
       ? `<img loading="lazy" decoding="async" alt="" src="${coverUrl(item, cssWidth || (THUMB[settings.profile.thumb_size] || THUMB.m))}" onerror="this.parentNode.classList.add('fail');this.remove()">`
       : "";
-    const retry = item.kind === "album" ? `<button class="retry" type="button" data-retry="${item.id}" title="Rescanner ce fichier : relu sur le disque, couverture refaite" aria-label="Rescanner ce fichier">↻</button>` : "";
+    const retry = item.kind === "album" && isAdmin() ? `<button class="retry" type="button" data-retry="${item.id}" title="Rescanner ce fichier : relu sur le disque, couverture refaite" aria-label="Rescanner ce fichier">↻</button>` : "";
     return `<div class="cover ${item.kind === "folder" ? "folder" : ""} ${item.error ? "err" : ""}">${ph}${img}${retry}${inner}</div>`;
   }
   const FORMAT_EXT = { zip: ["CBZ", "ZIP"], rar: ["CBR", "RAR"], pdf: ["PDF"], "7z": ["CB7", "7Z"], tar: ["CBT", "TAR", "TGZ"], ace: ["ACE"] };
@@ -1897,11 +1897,15 @@
         const name = prompt("Votre nom :", btn.dataset.name); if (!name) return;
         await putJson(`/api/profiles/${btn.dataset.id}`, { name }); await loadSettings(); updateProfileButton(); route();
       } else if (action === "account-pin") {
-        const pin = prompt("Nouveau mot de passe (4 caractères au moins) :"); if (!pin) return;
-        await putJson(`/api/profiles/${btn.dataset.id}`, { pin }); toast("Mot de passe enregistré"); await loadSettings(); route();
+        const hasPin = (settings.meta.profiles || []).some(pr => pr.id === +btn.dataset.id && pr.has_pin);
+        let old_pin = "";
+        if (hasPin) { old_pin = prompt("Ancien mot de passe :"); if (old_pin === null) return; }
+        const pin = prompt(`Nouveau mot de passe (${settings.global.account_login ? 8 : 4} caractères au moins) :`); if (!pin) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, hasPin ? { pin, old_pin } : { pin }); toast("Mot de passe enregistré"); await loadSettings(); route();
       } else if (action === "account-pin-clear") {
         if (!confirm("Supprimer le mot de passe de ce profil ?")) return;
-        await putJson(`/api/profiles/${btn.dataset.id}`, { pin: "" }); await loadSettings(); route();
+        const old_pin = prompt("Mot de passe actuel :"); if (old_pin === null) return;
+        await putJson(`/api/profiles/${btn.dataset.id}`, { pin: "", old_pin }); await loadSettings(); route();
       } else if (action === "avatar-text") {
         const a = prompt("Un emoji ou quelques lettres (8 maxi) :"); if (a === null) return;
         await putJson(`/api/profiles/${btn.dataset.id}`, { avatar: a.trim().slice(0, 8) }); await loadSettings(); updateProfileButton(); route();
@@ -1916,8 +1920,12 @@
       } else if (action === "profile-edit") {
         const name = prompt("Nom du profil :", btn.dataset.name); if (name === null) return;
         const acc = settings.global.account_login;
-        const pin = prompt(acc ? "Nouveau mot de passe (8 caractères au moins ; vide = ne pas changer) :" : "Nouveau mot de passe (vide = aucun, 4 caractères au moins) :"); if (pin === null) return;
-        await putJson(`/api/profiles/${btn.dataset.id}`, acc && !pin ? { name } : { name, pin });
+        const pin = prompt(acc ? "Nouveau mot de passe (8 caractères au moins ; vide = ne pas changer) :" : "Nouveau mot de passe (vide = ne pas changer, 4 caractères au moins) :"); if (pin === null) return;
+        const body = pin ? { name, pin } : { name };
+        if (pin && +btn.dataset.id === settings.meta.profile_id && (settings.meta.profiles || []).some(pr => pr.id === +btn.dataset.id && pr.has_pin)) {
+          body.old_pin = prompt("Votre mot de passe actuel :"); if (body.old_pin === null) return;
+        }
+        await putJson(`/api/profiles/${btn.dataset.id}`, body);
         await loadSettings(); updateProfileButton(); route();
       } else if (action === "profile-delete") {
         if (!confirm(`Supprimer le profil « ${btn.dataset.name} » et sa progression de lecture ?`)) return;
@@ -2032,7 +2040,7 @@
           <div class="sa-row sa-minor">
             ${parent && parent.id ? `<a class="btn mini" href="#/f/${parent.id}" data-close>📁 Ouvrir le dossier</a>` : ""}
             <a class="btn mini" href="/api/download/${it.id}">${ICON.down} Télécharger</a>
-            <button class="btn mini" type="button" data-recover="${it.id}" title="Relire ce fichier sur le disque : format, taille, pages, couverture (rattrape un raté du scan)">↻ Rescanner</button>
+            ${isAdmin() ? `<button class="btn mini" type="button" data-recover="${it.id}" title="Relire ce fichier sur le disque : format, taille, pages, couverture (rattrape un raté du scan)">↻ Rescanner</button>` : ""}
           </div>
         </div>
       </div></div></div>`;
