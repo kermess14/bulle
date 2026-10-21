@@ -1105,7 +1105,10 @@
   let resizeTimer = null;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (current >= 0 && mode !== "scroll" && (fit !== "original" || mode === "panels")) { images.clear(); go(current, { save: false, panel: "keep" }); } }, 300);
+    // les images déjà chargées sont gardées : loadImage / loadImageAt rechargent d'elles-mêmes celles dont la largeur
+    // voulue a changé (adresse différente), et réutilisent les autres (barre d'adresse du téléphone qui apparaît,
+    // clavier, fenêtre un peu agrandie : la planche affichée et ses voisines n'étaient pas à rejeter)
+    resizeTimer = setTimeout(() => { if (current >= 0 && mode !== "scroll" && (fit !== "original" || mode === "panels")) go(current, { save: false, panel: "keep" }); }, 300);
   });
 
   init();
