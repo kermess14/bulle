@@ -216,8 +216,11 @@
       // même image d'écran : jamais de planche mal cadrée ni de fond noir pendant le chargement.
       list = [n];
       const hi = images.get(n);
-      const ready = hi && hi.complete && hi.naturalWidth && hi.src.endsWith(pageUrl(n));
-      const imageP = ready ? loadImage(n) : loadImageAt(n, baseWidth(n));
+      // la version nette déjà là convient si c'est celle qu'on voudrait, ou une plus grande (après un redimensionnement
+      // qui a baissé la largeur voulue d'un palier, on garde la plus nette plutôt que d'en recharger une)
+      const want = wantedWidth(n);
+      const ready = hi && hi.complete && hi.naturalWidth && (hi.src.endsWith(pageUrl(n)) || (want > 0 && hi.naturalWidth >= want));
+      const imageP = ready ? (hi.decoded || (hi.decoded = waitFor(hi, n))) : loadImageAt(n, baseWidth(n));
       const panelsP = getPanels(n);
       const a = await imageP;
       if (token !== loadToken) return;
@@ -866,7 +869,12 @@
   async function refineZoom() {
     if (refining) { refineAgain = true; return; }
     if (navBusy) { scheduleRefine(); return; }   // une planche arrive : on affinera celle-là, plus tard
-    if (mode === "panels" && hiPending === current) { scheduleRefine(); return; }   // la version nette de la planche arrive déjà
+    if (mode === "panels" && userZoom === 1) {
+      // sans zoom manuel, la version nette des cases est la version ×2 (wantedWidth) : si elle est là, ou en route
+      // (son échange attend peut-être la fin d'un glissement), on ne demande pas une troisième largeur
+      const hi = images.get(current), want = wantedWidth(current);
+      if (hiPending === current || (hi && want > 0 && hi.naturalWidth >= 0.9 * want)) return;
+    }
     const effective = userZoom * (mode === "panels" && panelIdx >= 0 ? panelScale : 1);
     if (effective <= 1.15 || mode === "scroll" || prefs.reader_quality === "original") return;
     const token = loadToken;
@@ -878,6 +886,10 @@
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const want = Math.ceil(el.getBoundingClientRect().width * dpr);   // largeur affichée réelle en pixels physiques
         if (el.naturalWidth >= want * 0.8) continue;
+        // le serveur n'agrandit jamais : une image plus petite que la largeur demandée, c'est la page d'origine qui est
+        // petite (vignette, dernière page) ; il n'en existe pas de plus nette
+        const asked = +((el.src.match(/[?&]w=(\d+)/) || [])[1] || 0);
+        if (asked && el.naturalWidth && el.naturalWidth < asked) continue;
         const ladder = mode === "panels" && userZoom === 1 ? REFINE_LADDER.slice(0, 2) : REFINE_LADDER;   // cases : 2000 px maxi, le serveur souffle
         const w = ladder.find(x => x >= want) || ladder[ladder.length - 1];
         if (el.naturalWidth >= w) continue;
