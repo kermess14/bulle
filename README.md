@@ -142,10 +142,12 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 - **Case par case : les mêmes cases à chaque fois (v0.34.1)**. Le serveur analysait la planche à 600 px, ou à la
   taille de la version qui traînait dans le cache (600 à 1 400 px) : d'une fois sur l'autre, la même planche pouvait
   donner d'autres cases, et surtout pas celles vérifiées sur le banc d'essai (qui travaille à 800 px). Il part
-  maintenant toujours d'une page d'au moins 800 px, ramenée à 800 px pour la détection. Sur le banc, entre 600 et
-  800 px : 61 planches sur 223 n'avaient pas le même nombre de cases, 29 avaient des cases déplacées. Les cases déjà
-  en base sont recalculées à la prochaine ouverture (`PANELS_VERSION` 14). Et un raté passager (archive en cours
-  d'extraction, cache plein) n'est plus gardé en base comme « pas de cases » : il est réessayé à la lecture suivante.
+  maintenant toujours de la page rendue à 800 px, par le même chemin (gardée dans le cache des pages). Mesuré : entre
+  600 et 800 px, 61 planches du banc sur 223 n'avaient pas le même nombre de cases et 29 des cases déplacées ; et
+  même entre deux versions de plus de 800 px (1 200 px réduite, 2 400 px décodée en réduit), 9 planches sur 28 n'ont
+  pas le même nombre de cases, la détection étant sensible au rééchantillonnage au pixel près. Les cases déjà en base
+  sont recalculées à la prochaine ouverture (`PANELS_VERSION` 14). Et un raté passager (archive en cours d'extraction,
+  cache plein) n'est plus gardé en base comme « pas de cases » : il est réessayé à la lecture suivante.
 - **Case par case plus rapide (v0.34.0)**, sans rien changer aux cases trouvées : la recherche des cadres testait
   des milliers de fois les mêmes bords (le résultat est maintenant gardé), vérifiait « est-ce deux cases côte à
   côte ? » sur des milliers de rectangles quasi identiques avant de les dédoublonner (après, désormais), lisait les

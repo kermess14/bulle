@@ -35,8 +35,8 @@ from .panels import PANELS_VERSION, detect_panels
 
 VERSION = "0.34.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
-PANELS_WIDTH = 800   # largeur de l'image analysée pour trouver les cases : la largeur de travail de panels.py, pour que
-                     # les cases ne dépendent pas de la version de la page qui traîne dans le cache (= WORK_WIDTH)
+PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
+                     # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
 log = logging.getLogger("bulle")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -871,11 +871,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if cached is not None and cached.get("v") == PANELS_VERSION:
             return jsonify(cached)
         try:
-            # une version de la page déjà en cache (celle que le lecteur vient d'afficher) évite une conversion de plus ;
-            # jamais plus petite que la largeur de travail (la détection la réduit ensuite à cette largeur)
-            path, data = comics.cached_page_at_least(node, index, PANELS_WIDTH), None
-            if path is None:
-                path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
+            # toujours la page rendue à PANELS_WIDTH par le même chemin (gardée dans le cache des pages) : partir d'une
+            # autre version en cache (plus grande, réduite ensuite) donne d'autres cases sur une planche sur trois,
+            # la détection étant sensible au rééchantillonnage au pixel près
+            path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
             with Image.open(path or io.BytesIO(data)) as im:
                 im.load()
                 with panels_sem:   # deux détections à la fois au plus : les autres requêtes (pages, interface) gardent des fils
