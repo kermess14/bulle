@@ -108,6 +108,9 @@
 
   // ---------------------------------------------------------------- largeur d'image demandée au serveur
   const stepW = w => Math.min(3840, Math.ceil(w / 160) * 160);   // paliers de 160 px : URLs stables, caches réutilisés
+  // téléphone ou tablette (tactile, petit écran) : la carte graphique y peine sur une image de 3840 px qu'on fait glisser
+  // et zoomer en case par case (case noire le temps qu'elle la redessine) ; 2560 px suffisent à une case nette
+  const smallTouch = () => navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 1100;
   function wantedWidth(n) {
     if (prefs.reader_quality === "original" || (mode === "single" && fit === "original")) return 0;
     const dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -118,7 +121,8 @@
     else if (mode === "double") css = Math.min(vw / 2, vh * asp);
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
     const factor = mode === "panels" ? 2 : prefs.reader_quality === "high" ? 1.5 : 1;   // cases : nettes dès la première image, sans recharger
-    return stepW(css * dpr * factor);
+    const w = stepW(css * dpr * factor);
+    return mode === "panels" && smallTouch() ? Math.min(2560, w) : w;
   }
   let imgTag = "";
   // marges blanches rognées (réglage) : pas en case par case, où les cases sont repérées sur la page entière
