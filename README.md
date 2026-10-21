@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.7)
+# Bulle — lecteur de BD maison (v0.34.8)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,16 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case : mise en page en escalier (v0.34.8)**, idée qualité n° 2. Quand une case déborde un peu sur la
+  gouttière de la rangée suivante (son cadre descend de quelques dizaines de pixels dans la bande, ou se pose sur la
+  case du dessous), la gouttière n'était plus « traversante » et les deux rangées restaient soudées en un seul bloc.
+  La coupe le long des bords de cadre accepte maintenant un bord interrompu, à condition que ce qui l'interrompt
+  soit une case voisine qui déborde juste un peu (son cadre réapparaît à moins de 10 % de la zone) : une vraie case
+  haute sur deux rangées n'est pas coupée. Et quand une rangée ainsi retrouvée ne se laisse pas redécouper, les cases
+  que le découpage précédent y trouvait déjà sont gardées. Banc d'essai : 1 planche sur 223 change (b-12736 : 4 → 8
+  cases justes sur 8), score 83 → 87 justes sur 139, 25 → 24 en trop ; bibliothèque : 240 pages intérieures au
+  hasard, 1 change (mêmes 8 cases, cartouches au-dessus du cadre exclus comme sur les autres rangées) ; 160
+  couvertures et pages de garde : 0. Les cases en base sont recalculées (`PANELS_VERSION` 16).
 - **Réglage « remplir l'écran » retiré (v0.34.7)** : essayé sur la tablette, une case plus haute que l'écran devait
   défiler, et c'est justement ce qu'on ne veut pas en case par case ; sans défilement, l'option revenait au
   comportement normal (la case tient toujours entière). Le fond **Flou** reste. Un réglage « remplir l'écran »
