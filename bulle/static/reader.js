@@ -282,9 +282,22 @@
   }
 
   // ---------------------------------------------------------------- case par case
-  async function getPanels(n, lazy) {
+  async function getPanels(n, lazy, attempt = 0) {
     if (panelsCache.has(n)) return panelsCache.get(n);
-    const p = fetch(`/api/panels/${id}/${n}`, { priority: lazy ? "low" : "high" }).then(r => r.ok ? r.json() : { panels: [], rtl: [] }).catch(() => ({ panels: [], rtl: [] }));
+    const p = (async () => {
+      try {
+        const r = await fetch(`/api/panels/${id}/${n}`, { priority: lazy ? "low" : "high" });
+        if (r.status === 503 && attempt < 4) {
+          // serveur occupé (cette planche déjà en cours ailleurs, ou trop de détections à la fois) : on redemande
+          // un peu plus tard, sans garder cette réponse
+          const wait = Math.max(500, 1000 * (+r.headers.get("Retry-After") || 2));
+          await new Promise(res => setTimeout(res, wait));
+          panelsCache.delete(n);
+          return getPanels(n, lazy, attempt + 1);
+        }
+        return r.ok ? await r.json() : { panels: [], rtl: [] };
+      } catch { return { panels: [], rtl: [] }; }
+    })();
     panelsCache.set(n, p);
     const d = await p;
     panelsCache.set(n, d);

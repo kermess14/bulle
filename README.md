@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.1)
+# Bulle — lecteur de BD maison (v0.34.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,15 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case : le serveur ne se laisse plus engorger (v0.34.2)**. Quand la même planche était demandée deux
+  fois en même temps (affichage + préchargement, deux lecteurs, un clic répété), elle était détectée deux fois : la
+  seconde demande attend maintenant le résultat de la première. Et une demande qui ne trouve pas de place pour
+  détecter (deux détections à la fois au plus) attendait sans limite en occupant un fil du serveur ; sur un serveur
+  chargé, tous les fils pouvaient finir par attendre là et plus rien ne répondait, pas même le contrôle de santé
+  de Docker. Elle attend au plus 12 secondes, puis répond « occupé » : le lecteur redemande 2 secondes plus tard
+  (jusqu'à 4 fois), sans garder cette réponse. Vérifié en local : 8 demandes simultanées de la même planche = une
+  seule détection, réponses identiques ; les demandes en trop reçoivent bien « occupé » et le serveur reste
+  joignable.
 - **Case par case : les mêmes cases à chaque fois (v0.34.1)**. Le serveur analysait la planche à 600 px, ou à la
   taille de la version qui traînait dans le cache (600 à 1 400 px) : d'une fois sur l'autre, la même planche pouvait
   donner d'autres cases, et surtout pas celles vérifiées sur le banc d'essai (qui travaille à 800 px). Il part
