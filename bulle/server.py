@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.33.2"
+VERSION = "0.33.3"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 600   # largeur de l'image analysée pour trouver les cases
 log = logging.getLogger("bulle")
@@ -323,7 +323,23 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 fails.pop(k, None)
 
     def secure_request() -> bool:
-        return request.is_secure or (request.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+        """La visite est-elle en HTTPS ? Directement, ou d'après ce que dit le proxy (le plus courant : X-Forwarded-Proto ;
+        selon le proxy ou le tunnel : X-Forwarded-Ssl, X-Forwarded-Scheme, Forwarded, CF-Visitor de Cloudflare)."""
+        if request.is_secure:
+            return True
+        h = request.headers
+        first = lambda name: (h.get(name) or "").split(",")[0].strip().lower()
+        return (first("X-Forwarded-Proto") == "https" or first("X-Forwarded-Scheme") == "https"
+                or first("X-Forwarded-Ssl") == "on" or first("Front-End-Https") == "on"
+                or "proto=https" in (h.get("Forwarded") or "").lower().replace(" ", "").replace('"', "")
+                or '"scheme":"https"' in (h.get("CF-Visitor") or "").lower().replace(" ", ""))
+
+    def proxy_says() -> str:
+        """Ce que le proxy annonce, pour le message d'erreur (aide à régler le proxy)."""
+        h = request.headers
+        seen = [f"{n} = {h.get(n)}" for n in ("X-Forwarded-Proto", "X-Forwarded-Scheme", "X-Forwarded-Ssl", "Forwarded", "CF-Visitor")
+                if h.get(n)]
+        return "; ".join(seen) if seen else "aucun en-tête X-Forwarded-Proto reçu"
 
     def lan_host(host: str) -> bool:
         """Adresse « de la maison » (192.168.x.x, localhost, nom court, .local) : jamais redirigée vers HTTPS, sinon on
@@ -971,8 +987,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if ("adult_paths" in g or "adult_hide_tab" in g) and adult_pin_hash() and not adult_unlocked():
                 abort(403, description="adult_locked")
             if g.get("force_https") is True and not settings().get("force_https") and not secure_request():
-                abort(400, description="Ouvrez d'abord Bulle en https:// (par votre adresse sur Internet) pour activer "
-                                       "cette option : sinon vous ne pourriez plus vous connecter.")
+                abort(400, description="Bulle ne voit pas cette visite comme du HTTPS (" + proxy_says() + "). Ouvrez Bulle en "
+                                       "https:// par votre adresse sur Internet ; si c'est déjà le cas, le proxy doit dire à Bulle "
+                                       "que la connexion est en HTTPS (Nginx Proxy Manager : onglet Advanced de l'hôte, ajoutez "
+                                       "proxy_set_header X-Forwarded-Proto https;).")
             if g.get("account_login") is True and not account_mode():
                 me = lib.profile(current_profile())
                 if not me or not me.get("pin_hash"):
