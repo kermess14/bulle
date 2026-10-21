@@ -29,7 +29,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 15       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 16       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 RETRY_BG = 225            # second essai, page claire sans cases trouvées : fond de référence plus sombre (voir detect_panels)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
@@ -735,27 +735,71 @@ def detect_blobs(mask: Image.Image, leaf: tuple) -> list[tuple]:
 
 LINE_EDGE = 32            # écart de gris entre deux pixels de part et d'autre d'un bord net
 LINE_COVER = 0.6          # part de la longueur de la zone que le bord doit couvrir (marges, bulles et cartouches tolérés)
+LINE_STRONG = 0.67        # … au moins un des deux bords d'une gouttière doit couvrir ceci, sauf si ce qui manque est une
+LINE_SHALLOW = 0.10       #   case voisine qui déborde juste un peu (son cadre réapparaît à moins de 10 % de la zone)
 
 
-def _edge_rows(gray: Image.Image, box: tuple, axis: int) -> list[float]:
-    """Pour chaque ligne (axis=0) ou colonne (axis=1) de la zone : part de sa longueur où l'image change nettement de
-    part et d'autre (un bord de case, quelle que soit sa couleur)."""
+def _edge_map(gray: Image.Image, box: tuple, axis: int) -> Optional[Image.Image]:
+    """Masque des bords horizontaux de la zone (lignes ; axis=1 : la zone est transposée, ses colonnes deviennent des
+    lignes) : 255 là où l'image change nettement entre deux pixels superposés (un bord de case, quelle que soit sa
+    couleur)."""
     region = gray.crop(box)
     if axis == 1:
         region = region.transpose(Image.Transpose.TRANSPOSE)
     w, h = region.size
     if w < 10 or h < 10:
-        return []
+        return None
     up = Image.new("L", (w, h), 0); up.paste(region.crop((0, 0, w, h - 2)), (0, 2))
-    diff = ImageChops.difference(region, up).point([255 if i >= LINE_EDGE else 0 for i in range(256)], "L")
-    return [v / 255.0 for v in diff.resize((1, h), Image.Resampling.BOX).getdata()]
+    return ImageChops.difference(region, up).point([255 if i >= LINE_EDGE else 0 for i in range(256)], "L")
+
+
+def _edge_rows(gray: Image.Image, box: tuple, axis: int) -> list[float]:
+    """Pour chaque ligne (axis=0) ou colonne (axis=1) de la zone : part de sa longueur où l'image change nettement de
+    part et d'autre (un bord de case, quelle que soit sa couleur)."""
+    diff = _edge_map(gray, box, axis)
+    if diff is None:
+        return []
+    return [v / 255.0 for v in diff.resize((1, diff.height), Image.Resampling.BOX).getdata()]
+
+
+def _shallow_gaps(diff: Image.Image, y0: int, y1: int, depth: int) -> bool:
+    """Un bord qui ne couvre pas toute la zone (lignes [y0, y1) du masque des bords) : ce qui l'interrompt est-il une
+    case voisine qui déborde juste un peu (mise en page en escalier, case posée sur la gouttière) ? Oui si, pour chaque
+    trou du bord, un autre bord traverse les mêmes colonnes à moins de `depth` lignes au-dessus ou au-dessous : le
+    cadre de cette case s'arrête là. Une case haute sur deux rangées, elle, n'a pas de bord si près."""
+    w, h = diff.size
+    cols = diff.crop((0, y0, w, y1)).resize((w, 1), Image.Resampling.BOX).getdata()
+    gaps, start = [], None
+    for x, v in enumerate(list(cols) + [255]):
+        if v == 0:
+            if start is None:
+                start = x
+        elif start is not None:
+            if x - start >= 0.08 * w:
+                gaps.append((start, x))
+            start = None
+    for i, j in gaps:
+        if i < 2 or j > w - 2:
+            continue   # (jusqu'au bord de la zone : marge ou bout de case, pas un obstacle)
+        found = False
+        for r0, r1 in ((y1, min(h, y1 + depth)), (max(0, y0 - depth), y0)):
+            if r1 - r0 < 2:
+                continue
+            rows = diff.crop((i, r0, j, r1)).resize((1, r1 - r0), Image.Resampling.BOX).getdata()
+            if any(v >= 0.7 * 255 for v in rows):
+                found = True
+                break
+        if not found:
+            return False
+    return bool(gaps)
 
 
 def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int) -> list[tuple]:
     """Coupe une zone le long des bords de case rectilignes qui la traversent de part en part : deux bords parallèles
     rapprochés (le bas d'une case, le haut de la suivante), même quand la gouttière entre les deux n'est pas du fond
     (décor peint, couleur qui change en cours de page) et même si un cartouche la chevauche."""
-    prof = _edge_rows(gray, box, axis)
+    diff = _edge_map(gray, box, axis)
+    prof = [v / 255.0 for v in diff.resize((1, diff.height), Image.Resampling.BOX).getdata()] if diff is not None else []
     n = len(prof)
     rows = [i for i, v in enumerate(prof) if v >= LINE_COVER and i >= 3]
     # bords regroupés (un trait donne deux ou trois lignes voisines)
@@ -773,7 +817,11 @@ def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int) -> list[
     cuts = []
     for (a0, a1), (b0, b1) in zip(edges, edges[1:]):
         gap = b0 - a1
-        strong = max(max(prof[a0:a1]), max(prof[b0:b1])) >= 0.67   # au moins un des deux bords bien net
+        best = max(max(prof[a0:a1]), max(prof[b0:b1]))
+        # au moins un des deux bords bien net ; un bord moins couvert (0,60 à 0,67) n'est accepté que si ce qui
+        # l'interrompt est une case voisine qui déborde juste un peu (son cadre réapparaît tout près) : une case haute
+        # sur deux rangées ne doit pas être coupée
+        strong = best >= LINE_STRONG or (best >= LINE_COVER and _shallow_gaps(diff, a0, b1, max(10, round(LINE_SHALLOW * n))))
         if strong and 2 <= gap <= max(30, round(0.035 * n)) and a0 >= min_side and n - b1 >= min_side:
             # entre les deux bords, une gouttière : une bande unie sur l'essentiel de sa longueur (un cartouche peut la
             # chevaucher) ; deux traits d'un décor (plancher, poutre) ont du dessin entre eux
@@ -1392,12 +1440,20 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
                 # seulement si le découpage trouvé contredit ces bords (une case trouvée les enjambe) ou s'il n'y en a pas
                 crossed = parts == [leaf] or any(p[1] < r[1] - min_side and p[3] > r[1] + min_side for p in parts for r in rows[1:])
                 if len(rows) >= 2 and crossed:
+                    before = parts
                     parts = []
                     for row in rows:
                         sub = (_split(mask, row, 1, 1, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [row]) or [row]
+                        pieces = []
                         for r in sub:
-                            parts.extend(_refine_leaf(r, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None,
-                                                      min_gutter, min_side))
+                            pieces.extend(_refine_leaf(r, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None,
+                                                       min_gutter, min_side))
+                        # une rangée que ce redécoupage laisse entière alors que le découpage d'avant y trouvait déjà
+                        # plusieurs cases (toutes dans la rangée) : on garde celles-là, elles étaient bonnes
+                        kept = [p for p in before if _inter(p, row) >= 0.9 * _area(p)]
+                        if len(pieces) <= 1 and len(kept) >= 2:
+                            pieces = kept
+                        parts.extend(pieces)
             if bg >= 200:
                 # gouttières noires sur une page blanche (une colonne de cases encadrée de noir, une rangée posée sur
                 # un bandeau noir) : chaque grande case encore entière est redécoupée en prenant aussi le noir pur
