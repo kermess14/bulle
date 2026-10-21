@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.34.9"
+VERSION = "0.34.10"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -886,8 +886,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     def api_panels(node_id: int, index: int):
         """Cases de la planche (détectées une fois, puis gardées en base) pour la lecture case par case."""
         node = get_node(node_id, "album")
+        # ?rtl=1 : le lecteur est en sens manga, il lui faut l'ordre de droite à gauche (une seconde passe de
+        # découpage, 16 % du temps) ; sinon on s'en passe, et un résultat sans cet ordre (« rtl_full »: false) est
+        # recalculé le jour où un lecteur en sens manga le demande (les cases, elles, sont les mêmes)
+        want_rtl = request.args.get("rtl") == "1"
         cached = lib.panels_get(node_id, index)
-        if cached is not None and cached.get("v") == PANELS_VERSION:
+        if cached is not None and cached.get("v") == PANELS_VERSION and (cached.get("rtl_full", True) or not want_rtl):
             return panels_json(cached)
         key = (node_id, index)
         with panels_running_lock:
@@ -899,7 +903,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             # son résultat au lieu de la détecter une deuxième fois
             running.wait(panels_wait)
             cached = lib.panels_get(node_id, index)
-            if cached is not None and cached.get("v") == PANELS_VERSION:
+            if cached is not None and cached.get("v") == PANELS_VERSION and (cached.get("rtl_full", True) or not want_rtl):
                 return panels_json(cached)
             return panels_busy()
         try:
@@ -916,7 +920,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 try:
                     # couverture, pages de garde et dernière page : pas de second essai (il y invente des cases)
                     last = (node.get("page_count") or 0) - 1
-                    result = detect_panels(im, retry=index >= 3 and (last < 0 or index < last))
+                    result = detect_panels(im, retry=index >= 3 and (last < 0 or index < last), manga=want_rtl)
                 finally:
                     panels_sem.release()
             lib.panels_set(node_id, index, result)
@@ -926,7 +930,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         except Exception as e:  # noqa: BLE001
             # pas gardé en base : un raté passager (archive en cours d'extraction, cache plein) sera réessayé
             log.warning("Détection des cases %s p.%d : %s", node["path"], index, e)
-            return jsonify({"panels": [], "rtl": [], "v": PANELS_VERSION})
+            # « error » : le lecteur ne garde pas cette réponse pour la séance (il redemandera)
+            return jsonify({"panels": [], "rtl": [], "v": PANELS_VERSION, "error": True})
         finally:
             with panels_running_lock:
                 panels_running.pop(key, None)
