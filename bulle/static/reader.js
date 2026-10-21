@@ -286,7 +286,8 @@
     if (panelsCache.has(n)) return panelsCache.get(n);
     const p = (async () => {
       try {
-        const r = await fetch(`/api/panels/${id}/${n}`, { priority: lazy ? "low" : "high" });
+        // date du fichier et version de la détection dans l'adresse : le navigateur peut garder la réponse pour toujours
+        const r = await fetch(`/api/panels/${id}/${n}?v=${item.mtime}&pv=${item.panels_v || 0}`, { priority: lazy ? "low" : "high" });
         if (r.status === 503 && attempt < 4) {
           // serveur occupé (cette planche déjà en cours ailleurs, ou trop de détections à la fois) : on redemande
           // un peu plus tard, sans garder cette réponse
