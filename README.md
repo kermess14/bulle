@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.34.5)
+# Bulle — lecteur de BD maison (v0.34.6)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -139,6 +139,13 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Case par case : fond flou et « remplir l'écran » (v0.34.6)**, demandés par kermess et fusor : une case haute et
+  étroite restait centrée entre deux grandes bandes noires. Réglages › Lecteur › « autour de la case » a une
+  nouvelle valeur **Flou** : à la place du noir, la planche floutée et assombrie, comme une vidéo verticale (un seul
+  calque fixe par planche, léger pour la tablette : le trou du masque bouge par-dessus). Et un nouveau réglage
+  **« remplir l'écran »** : la case est agrandie jusqu'à la largeur de l'écran même si elle dépasse en bas ; un pas en
+  avant (touche, molette, tape) la fait alors défiler d'un peu moins d'un écran, puis passe à la suivante ; un pas
+  en arrière remonte. Désactivé par défaut (la case tient toujours entière). Vérifié dans Edge, PC et iPad émulé.
 - **Case par case : second essai sur les planches claires sans cases (v0.34.5)**. Des gouttières blanches fines,
   salies par la réduction de la page (aquarelle, fond peint jusqu'aux bords, scan jauni), sortaient de la tolérance
   autour du blanc : la planche restait entière. Quand rien n'est trouvé sur une page claire, Bulle refait la

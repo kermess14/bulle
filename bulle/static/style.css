@@ -584,6 +584,12 @@ body.reader.bg-gray #stage .dim { background: rgba(90, 94, 104, var(--dim, 0)); 
 body.reader.bg-white #stage .dim { background: rgba(243, 241, 234, var(--dim, 0)); }
 #stage .dim.nofx { transition: none; }
 body:not(.mode-panels) #stage .dim, body.zoomed #stage .dim { display: none; }
+/* « Flou » : la planche en cours, floutée et assombrie, remplit le masque (débordement de 40 px : le flou n'éclaircit
+   pas les bords). Un seul calque fixe par planche, le trou du masque bouge par-dessus. */
+#stage .dim .dimbg { display: none; }
+body.dimblur #stage .dim { background: #000; }
+body.dimblur #stage .dim .dimbg { display: block; position: absolute; inset: -40px; background: #000 center / cover no-repeat; filter: blur(22px) brightness(.55); will-change: transform; }
+body.dimblur.bg-white #stage .dim .dimbg { filter: blur(22px) brightness(1.1) opacity(.7); }
 body.mode-panels:not(.zoomed) #stage { cursor: grab; }
 body.mode-panels:not(.zoomed) #stage:active { cursor: grabbing; }
 body.mode-panels .rbtn#panels, body.mode-panels #panels { color: var(--accent); }
