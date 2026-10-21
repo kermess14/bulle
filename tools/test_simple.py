@@ -33,6 +33,33 @@ VNU = None
 EVIL = '<b>x</b> & "q" \'z\''   # un titre piégé : doit ressortir échappé
 
 
+FORM_RE = re.compile(r'<form method="get" action="([^"]*)" class="nav[^"]*">((?:<input type="hidden" name="[^"]*" value="[^"]*">)*)'
+                     r'<button type="submit"(?: class="([^"]*)")?([^>]*)>')
+HIDDEN_RE = re.compile(r'<input type="hidden" name="([^"]*)" value="([^"]*)">')
+
+
+def nav_buttons(html):
+    """Toute la navigation de /simple : [(adresse visitée, classe du bouton)]. En mode application (iPad), iOS rouvre Safari
+    pour un <a href> touché : la navigation passe donc par des formulaires GET (action + champs cachés = l'adresse)."""
+    import html as htmllib
+    out = []
+    for action, hidden, cls, _rest in FORM_RE.findall(html):
+        fields = [(htmllib.unescape(k), htmllib.unescape(v)) for k, v in HIDDEN_RE.findall(hidden)]
+        url = htmllib.unescape(action) + ("?" + "&".join(f"{k}={v}" for k, v in fields) if fields else "")
+        out.append((url, cls or ""))
+    return out
+
+
+def targets(html):
+    return [u for u, _ in nav_buttons(html)]
+
+
+def button_target(html, cls):
+    """L'adresse du bouton de classe `cls` (ex. « zone zl », « back »), ou None."""
+    found = [u for u, c in nav_buttons(html) if c == cls]
+    return found[0] if found else None
+
+
 def make_cbz(path, sizes):
     """CBZ de pages JPEG dessinées (traits et texte, pour un poids réaliste)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -131,6 +158,14 @@ class SimpleTests(unittest.TestCase):
         # en mode application (iPad), les liens doivent rester dans l'application : jamais de nouvelle fenêtre ni de
         # redirection par la page elle-même
         self.assertIsNone(re.search(r"\starget\s*=", low), f"target= dans {where}")
+        # aucun <a> : en mode application iOS (avant 11.3) un lien touché rouvre Safari, avec sa barre d'adresse ; seuls
+        # les formulaires restent dans l'application (navigation = formulaires GET, voir nav_buttons)
+        self.assertIsNone(re.search(r"<a[\s>]", low), f"lien <a> dans {where}")
+        for form in re.findall(r"<form\b[^>]*>", html):
+            self.assertTrue(re.fullmatch(r'<form method="(get|post)" action="/simple[^"]*"( class="[^"]*")?>', form),
+                            f"formulaire inattendu dans {where} : {form}")
+        for m in re.finditer(r'<form method="get"[^>]*>', html):   # un formulaire GET est de navigation : classe « nav »
+            self.assertIn('class="nav', m.group(0), f"formulaire GET sans classe nav dans {where}")
         self.assertIsNone(re.search(r'http-equiv\s*=\s*["\']?refresh', low), f"meta refresh dans {where}")
         # seuls <link> permis : les trois icônes de l'écran d'accueil
         links = re.findall(r"<link\b[^>]*>", html)
@@ -187,8 +222,9 @@ class SimpleTests(unittest.TestCase):
         s = self.get("/simple/series").get_data(as_text=True)
         self.assertIn("Page 1 / 3", s)       # 47 entrées, 20 par page
         self.assertIn('class="letters"', s)
-        self.assertIn("/simple/series?l=S", s)
-        self.assertIn("/simple/series?l=0", s)   # « # » : les noms qui commencent par un chiffre
+        self.assertIn("/simple/series?l=S", targets(s))
+        self.assertIn("/simple/series?l=0", targets(s))   # « # » : les noms qui commencent par un chiffre
+        self.assertIn("/simple/series?p=2", targets(s))   # la page suivante : même adresse qu'avec un lien
         p3 = self.get("/simple/series?p=3").get_data(as_text=True)
         self.assertIn("Page 3 / 3", p3)
         z = self.get("/simple/series?l=Z").get_data(as_text=True)
@@ -216,12 +252,11 @@ class SimpleTests(unittest.TestCase):
         a = self.t01["id"]
         h = self.get(f"/simple/lire/{a}?p=2").get_data(as_text=True)
         # QUE la planche : aucun titre, aucun bouton « précédent / suivant », aucune barre, aucun tableau
-        for word in ("<h1", "<table", "<form", "<button", 'class="btn', "crumb", "« Précédente", "Suivante »", "Album suivant",
-                     "Fin de l'album", "page 2 / 3</div>"):
+        for word in ("<h1", "<table", 'class="btn', "crumb", "« Précédente", "Suivante »", "Album suivant", "Fin de l'album",
+                     "page 2 / 3</div>"):
             self.assertFalse(word in h, f"{word!r} autour de la planche")
-        # seul « texte » : la flèche du petit bouton ; les libellés des deux zones sont envoyés hors de l'écran
-        self.assertEqual(self.visible_text(h), ["Page précédente", "Page suivante", "‹"])
-        self.assertIn("text-indent:-9999px", h)
+        # aucun texte à l'écran, sauf la flèche du petit bouton (les zones n'ont qu'un libellé pour les lecteurs d'écran)
+        self.assertEqual(self.visible_text(h), ["‹"])
         # fond noir, plein écran, la planche entière centrée (image de fond « contain »), sans défilement
         self.assertIn("html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}", h)
         self.assertIn("background-size:contain", h)
@@ -231,24 +266,47 @@ class SimpleTests(unittest.TestCase):
         # ni zoom ni défilement (et pas de bogue de zoom à la rotation d'iOS)
         self.assertIn("maximum-scale=1", h)
         self.assertIn("user-scalable=no", h)
-        # les deux grandes zones (moitié gauche / moitié droite de l'écran), de simples liens
-        self.assertIn(f'<a class="zone zl" href="/simple/lire/{a}?p=1">', h)
-        self.assertIn(f'<a class="zone zr" href="/simple/lire/{a}?p=3">', h)
-        self.assertIn("a.zone{position:fixed;top:0;bottom:0;width:50%", h)
-        # le petit bouton discret : en haut à gauche, 44 px au total, semi-transparent, vers la liste des albums
-        self.assertIn(f'<a class="back" href="/simple/serie/{self.astx["id"]}?p=1"', h)
-        self.assertIn("a.back{position:fixed;left:6px;top:6px;width:42px;height:42px", h)   # 42 + 2 de bordure = 44 px
-        self.assertRegex(h, r"a\.back\{[^}]*opacity:\.\d+")
+        # les deux grandes zones (moitié gauche / moitié droite de l'écran) : des boutons de formulaires GET, vides, étiquetés
+        self.assertEqual(button_target(h, "zone zl"), f"/simple/lire/{a}?p=1")
+        self.assertEqual(button_target(h, "zone zr"), f"/simple/lire/{a}?p=3")
+        self.assertIn('class="zone zl" aria-label="Page précédente" title="Page précédente"></button>', h)
+        self.assertIn("button.zone{position:fixed;top:0;height:100%;width:50%", h)
+        # le petit bouton discret : en haut à gauche, 44 px, semi-transparent, vers la liste des albums
+        self.assertEqual(button_target(h, "back"), f"/simple/serie/{self.astx['id']}?p=1")
+        self.assertIn("button.back{position:fixed;left:6px;top:6px;width:44px;height:44px", h)
+        self.assertRegex(h, r"button\.back\{[^}]*opacity:\.\d+")
+        self.assertEqual(sorted(c for _, c in nav_buttons(h)), ["back", "zone zl", "zone zr"])   # et rien d'autre
         self.assertIn(f'class="pre" src="/simple/img/{a}/2?v=', h)   # la suivante, préchargée
         # première page : rien avant ; dernière page : la zone de droite ouvre l'album suivant du dossier, ou ramène à la liste
         first = self.get(f"/simple/lire/{a}?p=1").get_data(as_text=True)
-        self.assertNotIn('class="zone zl"', first)
-        self.assertEqual(self.visible_text(first), ["Page suivante", "‹"])
+        self.assertIsNone(button_target(first, "zone zl"))
+        self.assertEqual(self.visible_text(first), ["‹"])
         last = self.get(f"/simple/lire/{a}?p=3").get_data(as_text=True)
-        self.assertIn(f'<a class="zone zr" href="/simple/lire/{self.t02["id"]}">', last)
+        self.assertEqual(button_target(last, "zone zr"), f"/simple/lire/{self.t02['id']}")
         self.assertNotIn('class="pre"', last)
-        end = self.get(f'/simple/lire/{self.t02["id"]}?p=2').get_data(as_text=True)
-        self.assertIn(f'<a class="zone zr" href="/simple/serie/{self.astx["id"]}?p=1">', end)
+        end = self.get(f"/simple/lire/{self.t02['id']}?p=2").get_data(as_text=True)
+        self.assertEqual(button_target(end, "zone zr"), f"/simple/serie/{self.astx['id']}?p=1")
+
+    def test_navigation_par_formulaires_sans_lien(self):
+        """Application de l'écran d'accueil sur iOS (avant 11.3) : un <a href> touché rouvre Safari avec sa barre d'adresse ;
+        seul un formulaire reste dans l'application. Toute la navigation est donc faite de formulaires GET."""
+        for url in ("/simple", "/simple/series", f'/simple/serie/{self.astx["id"]}', f'/simple/lire/{self.t01["id"]}?p=2',
+                    "/simple/serie/999999"):
+            html = self.c.get(url).get_data(as_text=True)
+            self.assertNotRegex(html, r"<a[\s>]", f"lien <a> sur {url}")
+            self.assertTrue(nav_buttons(html), f"aucun bouton de navigation sur {url}")
+            for u in targets(html):
+                self.assertTrue(u.startswith("/simple"), f"{u} sur {url}")
+        # une ligne de liste : la couverture ET le titre mènent au même endroit, comme avec un lien
+        s = self.get(f'/simple/serie/{self.astx["id"]}').get_data(as_text=True)
+        row = [(u, c) for u, c in nav_buttons(s) if c in ("cvbtn", "rowbtn")]
+        self.assertEqual(sorted(row), sorted([(f'/simple/lire/{self.t01["id"]}', "cvbtn"), (f'/simple/lire/{self.t01["id"]}', "rowbtn"),
+                                              (f'/simple/lire/{self.t02["id"]}', "cvbtn"), (f'/simple/lire/{self.t02["id"]}', "rowbtn")]))
+        # les paramètres de l'adresse deviennent des champs cachés : l'adresse visitée est la même qu'avec un lien
+        self.assertIn('<form method="get" action="/simple/series" class="nav "><input type="hidden" name="p" value="2">',
+                      self.get("/simple/series").get_data(as_text=True))
+        self.assertIn('<form method="get" action="/simple" class="nav "><input type="hidden" name="choix" value="1">',
+                      self.get("/simple").get_data(as_text=True)) if len(self.lib.profiles()) > 1 else None
 
     # ---- application sur l'écran d'accueil de l'iPad (iOS 5 : balises Apple, pas de manifest) ---------------------
     def test_icones_de_l_ecran_d_accueil(self):
@@ -286,15 +344,14 @@ class SimpleTests(unittest.TestCase):
         self.assertIn("apple-touch-icon", fresh.get("/simple").get_data(as_text=True))
 
     def test_aucune_impasse_en_mode_application(self):
-        """En mode application il n'y a pas de bouton « retour » du navigateur : chaque page doit offrir un lien pour sortir."""
+        """En mode application il n'y a pas de bouton « retour » du navigateur : chaque page doit offrir un bouton pour sortir."""
         home = self.get("/simple").get_data(as_text=True)
-        self.assertIn('href="/simple/series"', home)
+        self.assertIn("/simple/series", targets(home))
         for url in ("/simple/series", f'/simple/serie/{self.astx["id"]}', "/simple/serie/999999", "/simple/lire/999999"):
-            r = self.c.get(url)
-            html = r.get_data(as_text=True)
-            self.assertIn('href="/simple"', html, f"pas de lien vers l'accueil sur {url}")
+            html = self.c.get(url).get_data(as_text=True)
+            self.assertIn("/simple", targets(html), f"pas de bouton vers l'accueil sur {url}")
         reader = self.get(f'/simple/lire/{self.t02["id"]}?p=1').get_data(as_text=True)
-        self.assertIn('class="back" href="/simple/serie/', reader)
+        self.assertTrue(button_target(reader, "back").startswith("/simple/serie/"))
 
     def test_cookies_persistants_session_gardee(self):
         """En mode application l'appli est quittée et relancée : la session doit tenir dans des cookies PERSISTANTS (une
@@ -329,12 +386,12 @@ class SimpleTests(unittest.TestCase):
         self.assertNotIn("Secure", sess)
 
     def test_liens_internes_seulement(self):
-        """Tous les liens de toutes les pages restent dans /simple (pas de nouvelle fenêtre en mode application)."""
+        """Toute la navigation de toutes les pages reste dans /simple (pas de nouvelle fenêtre en mode application)."""
         for url in ("/simple", "/simple/series", f'/simple/serie/{self.astx["id"]}', f'/simple/lire/{self.t01["id"]}?p=2'):
             html = self.get(url).get_data(as_text=True)
-            for href in re.findall(r'<a [^>]*href="([^"]*)"', html):
-                self.assertTrue(href.startswith("/simple"), f"{href} sur {url}")
-
+            self.assertNotRegex(html, r"<a[\s>]")
+            for u in targets(html):
+                self.assertTrue(u.startswith("/simple"), f"{u} sur {url}")
     def test_images_1024_jpeg_de_base_avec_cache(self):
         v = int(self.t01.get("mtime") or 0)
         seen = []
