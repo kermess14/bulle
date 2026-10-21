@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.34.1"
+VERSION = "0.34.2"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -861,7 +861,17 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         resp = send_file(path, mimetype="image/jpeg", conditional=True)
         return cache_headers(resp, immutable="v" in request.args)
 
-    panels_sem = threading.BoundedSemaphore(2)
+    panels_sem = threading.BoundedSemaphore(2)   # deux détections à la fois au plus : les autres requêtes gardent des fils
+    panels_wait = 12.0                           # secondes d'attente au plus (une place, ou la détection déjà en cours)
+    panels_running: dict[tuple[int, int], threading.Event] = {}   # (album, page) en cours de détection
+    panels_running_lock = threading.Lock()
+
+    def panels_busy():
+        """Pas de place pour détecter maintenant : le lecteur redemande un peu plus tard (il ne garde pas cette réponse)."""
+        resp = jsonify({"panels": [], "rtl": [], "v": PANELS_VERSION, "retry": True})
+        resp.status_code = 503
+        resp.headers["Retry-After"] = "2"
+        return resp
 
     @app.route("/api/panels/<int:node_id>/<int:index>")
     def api_panels(node_id: int, index: int):
@@ -870,6 +880,19 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         cached = lib.panels_get(node_id, index)
         if cached is not None and cached.get("v") == PANELS_VERSION:
             return jsonify(cached)
+        key = (node_id, index)
+        with panels_running_lock:
+            running = panels_running.get(key)
+            if running is None:
+                panels_running[key] = mine = threading.Event()
+        if running is not None:
+            # la même planche est déjà en cours (affichage + préchargement, deux lecteurs, requête répétée) : on attend
+            # son résultat au lieu de la détecter une deuxième fois
+            running.wait(panels_wait)
+            cached = lib.panels_get(node_id, index)
+            if cached is not None and cached.get("v") == PANELS_VERSION:
+                return jsonify(cached)
+            return panels_busy()
         try:
             # toujours la page rendue à PANELS_WIDTH par le même chemin (gardée dans le cache des pages) : partir d'une
             # autre version en cache (plus grande, réduite ensuite) donne d'autres cases sur une planche sur trois,
@@ -877,16 +900,26 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
             with Image.open(path or io.BytesIO(data)) as im:
                 im.load()
-                with panels_sem:   # deux détections à la fois au plus : les autres requêtes (pages, interface) gardent des fils
+                # une place pour détecter, sans bloquer ce fil indéfiniment (sinon, sur un serveur chargé, tous les fils
+                # finissent par attendre ici et plus rien ne répond, pas même le contrôle de santé)
+                if not panels_sem.acquire(timeout=panels_wait):
+                    return panels_busy()
+                try:
                     result = detect_panels(im)
+                finally:
+                    panels_sem.release()
+            lib.panels_set(node_id, index, result)
+            return jsonify(result)
         except AlbumError as e:
             abort(415, description=str(e))
         except Exception as e:  # noqa: BLE001
             # pas gardé en base : un raté passager (archive en cours d'extraction, cache plein) sera réessayé
             log.warning("Détection des cases %s p.%d : %s", node["path"], index, e)
             return jsonify({"panels": [], "rtl": [], "v": PANELS_VERSION})
-        lib.panels_set(node_id, index, result)
-        return jsonify(result)
+        finally:
+            with panels_running_lock:
+                panels_running.pop(key, None)
+            mine.set()
 
     @app.route("/api/page/<int:node_id>/<int:index>")
     def api_page(node_id: int, index: int):
