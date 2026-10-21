@@ -110,26 +110,49 @@ class SimpleTests(unittest.TestCase):
     def post(self, url, data, status=303):
         r = self.c.post(url, data=data)
         self.assertEqual(r.status_code, status, f"POST {url} → {r.status_code}")
-        if r.mimetype == "text/html":
+        if r.mimetype == "text/html" and not 300 <= r.status_code < 400:   # (le corps d'une redirection n'est pas une page)
             self.check_html(r.get_data(as_text=True), "POST " + url)
         return r
 
     def check_html(self, html, where):
         low = html.lower()
-        self.assertNotIn("<script", low, f"balise script dans {where}")
-        self.assertNotIn("<noscript", low)
+
+        def absent(needle, what):   # (sans recopier toute la page dans le message d'échec)
+            self.assertFalse(needle in low, f"{what} dans {where}")
+
+        absent("<script", "balise script")
+        absent("<noscript", "balise noscript")
         self.assertIsNone(re.search(r"<[^>]+\son[a-z]+\s*=", low), f"attribut on… dans {where}")
-        self.assertNotIn("javascript:", low)
-        for tag in ("<link", "<iframe", "<object", "<embed", "<form action=\"http", "@import"):
-            self.assertNotIn(tag, low, f"{tag} dans {where}")
-        self.assertNotIn("http://", low, f"adresse externe dans {where}")
-        self.assertNotIn("https://", low, f"adresse externe dans {where}")
+        absent("javascript:", "lien javascript:")
+        for tag in ("<iframe", "<object", "<embed", '<form action="http', "@import"):
+            absent(tag, tag)
+        absent("http://", "adresse externe")
+        absent("https://", "adresse externe")
+        # en mode application (iPad), les liens doivent rester dans l'application : jamais de nouvelle fenêtre ni de
+        # redirection par la page elle-même
+        self.assertIsNone(re.search(r"\starget\s*=", low), f"target= dans {where}")
+        self.assertIsNone(re.search(r'http-equiv\s*=\s*["\']?refresh', low), f"meta refresh dans {where}")
+        # seuls <link> permis : les trois icônes de l'écran d'accueil
+        links = re.findall(r"<link\b[^>]*>", html)
+        self.assertEqual(len(links), 3, f"{len(links)} <link> dans {where}")
+        for ln in links:
+            self.assertTrue(re.fullmatch(r'<link rel="apple-touch-icon"( sizes="(72x72|144x144)")? href="/simple/icone-(72|144)\.png">', ln),
+                            f"<link> inattendu dans {where} : {ln}")
+        # balises Apple propres à iOS 5 (pas de manifest web avant iOS 11.3), dans TOUTES les pages /simple
+        for tag in ('<meta name="apple-mobile-web-app-capable" content="yes">',
+                    '<meta name="apple-mobile-web-app-status-bar-style" content="black">',
+                    '<meta name="apple-mobile-web-app-title" content="Bulle">',
+                    '<link rel="apple-touch-icon" href="/simple/icone-72.png">',
+                    '<link rel="apple-touch-icon" sizes="144x144" href="/simple/icone-144.png">'):
+            self.assertTrue(tag in html, f"{tag} manque dans {where}")
         for attr, val in re.findall(r'\b(src|href|action)="([^"]*)"', html):
             ok = (re.match(r"^/simple(/|\?|$)", val) or re.match(r"^/api/cover/\d+\?w=100$", val))
             self.assertTrue(ok, f"{attr}={val!r} sort de /simple dans {where}")
-        self.assertNotIn("<b>x</b>", html, f"texte non échappé dans {where}")
+        for url in re.findall(r"url\(([^)]*)\)", html):   # la planche, image de fond de la page de lecture
+            self.assertTrue(re.fullmatch(r"&#39;/simple/img/\d+/\d+\?v=\d+&#39;", url), f"url({url}) dans {where}")
+        absent("<b>x</b>", "texte non échappé")
         for banned in ("/api/scan", "/api/settings", "admin", "reglages", "rescan"):
-            self.assertNotIn(banned, low, f"{banned} dans {where}")
+            absent(banned, banned)
         SimpleTests.pages_seen[where] = html
 
     def album(self, name="Tome 02"):
@@ -184,24 +207,133 @@ class SimpleTests(unittest.TestCase):
         self.assertIn("&lt;i&gt;Zoé&lt;/i&gt; &amp; &quot;co&quot;", ch)
         self.assertNotIn("<i>Zoé</i>", ch)
 
-    def test_lecteur_boutons_et_zones(self):
-        h = self.get(f'/simple/lire/{self.t01["id"]}?p=2').get_data(as_text=True)
-        self.assertEqual(h.count("« Précédente"), 2)      # les deux boutons (haut et bas)
-        self.assertEqual(h.count("Page précédente"), 1)   # + la zone cliquable de gauche
-        self.assertIn('class="zone zl"', h)
-        self.assertIn('class="zone zr"', h)
-        self.assertIn(f'href="/simple/lire/{self.t01["id"]}?p=1"', h)
-        self.assertIn(f'href="/simple/lire/{self.t01["id"]}?p=3"', h)
-        self.assertIn("Album</a>", h)
-        self.assertIn("page 2 / 3", h)
-        self.assertIn(f'src="/simple/img/{self.t01["id"]}/1?v=', h)
-        self.assertIn(f'class="pre" src="/simple/img/{self.t01["id"]}/2?v=', h)   # la suivante, préchargée
-        first = self.get(f'/simple/lire/{self.t01["id"]}?p=1').get_data(as_text=True)
-        self.assertNotIn('class="zone zl"', first)        # pas de page avant la première
-        self.assertIn("btn off", first)
-        last = self.get(f'/simple/lire/{self.t02["id"]}?p=2').get_data(as_text=True)
-        self.assertIn("Album suivant", last) if self.lib.siblings(self.t02)[1] else self.assertIn("Fin de l", last)
-        self.assertNotIn('class="pre"', last)             # rien à précharger après la dernière
+    def visible_text(self, html):
+        """Le texte qu'une page affiche : sans <head>, ni balises. Les libellés des zones sont cachés hors de l'écran."""
+        body = html.split("<body>", 1)[1]
+        return [t.strip() for t in re.sub(r"<[^>]+>", "\n", body).split("\n") if t.strip()]
+
+    def test_lecteur_plein_ecran_sans_texte(self):
+        a = self.t01["id"]
+        h = self.get(f"/simple/lire/{a}?p=2").get_data(as_text=True)
+        # QUE la planche : aucun titre, aucun bouton « précédent / suivant », aucune barre, aucun tableau
+        for word in ("<h1", "<table", "<form", "<button", 'class="btn', "crumb", "« Précédente", "Suivante »", "Album suivant",
+                     "Fin de l'album", "page 2 / 3</div>"):
+            self.assertFalse(word in h, f"{word!r} autour de la planche")
+        # seul « texte » : la flèche du petit bouton ; les libellés des deux zones sont envoyés hors de l'écran
+        self.assertEqual(self.visible_text(h), ["Page précédente", "Page suivante", "‹"])
+        self.assertIn("text-indent:-9999px", h)
+        # fond noir, plein écran, la planche entière centrée (image de fond « contain »), sans défilement
+        self.assertIn("html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}", h)
+        self.assertIn("background-size:contain", h)
+        self.assertIn("background-position:center center", h)
+        self.assertIn("position:fixed;left:0;top:0;right:0;bottom:0", h)
+        self.assertRegex(h, rf'class="screen"[^>]*style="background-image:url\(&#39;/simple/img/{a}/1\?v=\d+&#39;\)"')
+        # ni zoom ni défilement (et pas de bogue de zoom à la rotation d'iOS)
+        self.assertIn("maximum-scale=1", h)
+        self.assertIn("user-scalable=no", h)
+        # les deux grandes zones (moitié gauche / moitié droite de l'écran), de simples liens
+        self.assertIn(f'<a class="zone zl" href="/simple/lire/{a}?p=1">', h)
+        self.assertIn(f'<a class="zone zr" href="/simple/lire/{a}?p=3">', h)
+        self.assertIn("a.zone{position:fixed;top:0;bottom:0;width:50%", h)
+        # le petit bouton discret : en haut à gauche, 44 px au total, semi-transparent, vers la liste des albums
+        self.assertIn(f'<a class="back" href="/simple/serie/{self.astx["id"]}?p=1"', h)
+        self.assertIn("a.back{position:fixed;left:6px;top:6px;width:42px;height:42px", h)   # 42 + 2 de bordure = 44 px
+        self.assertRegex(h, r"a\.back\{[^}]*opacity:\.\d+")
+        self.assertIn(f'class="pre" src="/simple/img/{a}/2?v=', h)   # la suivante, préchargée
+        # première page : rien avant ; dernière page : la zone de droite ouvre l'album suivant du dossier, ou ramène à la liste
+        first = self.get(f"/simple/lire/{a}?p=1").get_data(as_text=True)
+        self.assertNotIn('class="zone zl"', first)
+        self.assertEqual(self.visible_text(first), ["Page suivante", "‹"])
+        last = self.get(f"/simple/lire/{a}?p=3").get_data(as_text=True)
+        self.assertIn(f'<a class="zone zr" href="/simple/lire/{self.t02["id"]}">', last)
+        self.assertNotIn('class="pre"', last)
+        end = self.get(f'/simple/lire/{self.t02["id"]}?p=2').get_data(as_text=True)
+        self.assertIn(f'<a class="zone zr" href="/simple/serie/{self.astx["id"]}?p=1">', end)
+
+    # ---- application sur l'écran d'accueil de l'iPad (iOS 5 : balises Apple, pas de manifest) ---------------------
+    def test_icones_de_l_ecran_d_accueil(self):
+        for size in (72, 144):
+            r = self.get(f"/simple/icone-{size}.png")
+            self.assertEqual(r.mimetype, "image/png")
+            self.assertIn("max-age=", r.headers["Cache-Control"])
+            im = Image.open(io.BytesIO(r.data))
+            self.assertEqual(im.format, "PNG")
+            self.assertEqual(im.size, (size, size), "l'icône est carrée")
+            self.assertEqual(im.mode, "RGB", "pas de transparence (iOS la remplacerait par du noir)")
+            bg = im.getpixel((size // 2, 1))
+            for corner in ((0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)):
+                self.assertEqual(im.getpixel(corner), bg, "coins pleins, pas arrondis : iOS les arrondit lui-même")
+        self.get("/simple/icone-100.png", 404)
+        self.assertEqual(self.c.get("/simple/icone-72.png", headers={"If-None-Match": "x"}).status_code, 200)
+        r = self.get("/simple/icone-72.png")
+        r2 = self.c.get("/simple/icone-72.png", headers={"If-None-Match": r.headers["ETag"]})
+        self.assertEqual(r2.status_code, 304)
+
+    def test_icones_sans_authentification(self):
+        """L'iPad demande l'icône en ajoutant l'application, avant toute connexion : jamais de code ni de profil exigé."""
+        self.lib.add_profile("Bob", hash_pin("secret1"), None, "reader")
+        self.lib.set_settings({"access_pin_hash": hash_pin("sesame"), "require_profile": True}, None)
+        fresh = self.app.test_client()
+        fresh.environ_base["REMOTE_ADDR"] = "192.168.0.51"
+        self.assertEqual(fresh.get("/simple/series").status_code, 302)        # le reste est bien protégé
+        for size in (72, 144):
+            r = fresh.get(f"/simple/icone-{size}.png")
+            self.assertEqual((r.status_code, r.mimetype), (200, "image/png"))
+        self.lib.set_settings({"access_pin_hash": "", "require_profile": False, "account_login": True}, None)
+        for size in (72, 144):
+            self.assertEqual(fresh.get(f"/simple/icone-{size}.png").status_code, 200)   # même en mode comptes
+        # la page de connexion elle-même porte déjà les balises (l'icône s'ajoute depuis n'importe quelle page /simple)
+        self.assertIn("apple-touch-icon", fresh.get("/simple").get_data(as_text=True))
+
+    def test_aucune_impasse_en_mode_application(self):
+        """En mode application il n'y a pas de bouton « retour » du navigateur : chaque page doit offrir un lien pour sortir."""
+        home = self.get("/simple").get_data(as_text=True)
+        self.assertIn('href="/simple/series"', home)
+        for url in ("/simple/series", f'/simple/serie/{self.astx["id"]}', "/simple/serie/999999", "/simple/lire/999999"):
+            r = self.c.get(url)
+            html = r.get_data(as_text=True)
+            self.assertIn('href="/simple"', html, f"pas de lien vers l'accueil sur {url}")
+        reader = self.get(f'/simple/lire/{self.t02["id"]}?p=1').get_data(as_text=True)
+        self.assertIn('class="back" href="/simple/serie/', reader)
+
+    def test_cookies_persistants_session_gardee(self):
+        """En mode application l'appli est quittée et relancée : la session doit tenir dans des cookies PERSISTANTS (une
+        date d'expiration), valables pour tout le site (Path=/), sans « Secure » en http (le réseau local n'a pas de TLS)."""
+        self.lib.set_settings({"require_profile": True}, None)
+        bob = self.lib.add_profile("Bob", None, None, "reader")["id"]
+        r = self.post("/simple/profil", {"id": bob}, 303)
+        ck = r.headers["Set-Cookie"]
+        self.assertIn("bulle_profile=", ck)
+        self.assertIn("Max-Age=315360000", ck)                       # 10 ans : pas un cookie de session
+        self.assertIn("Expires=", ck)
+        self.assertIn("Path=/", ck)
+        self.assertIn("HttpOnly", ck)
+        self.assertNotIn("Secure", ck)
+        # « relance de l'application » : un tout nouveau client qui n'a QUE ce cookie est toujours Bob
+        value = ck.split("bulle_profile=", 1)[1].split(";", 1)[0]
+        relaunch = self.app.test_client()
+        relaunch.environ_base["REMOTE_ADDR"] = "192.168.0.52"
+        relaunch.set_cookie("bulle_profile", value)
+        h = relaunch.get("/simple").get_data(as_text=True)
+        self.assertIn("Bonjour <b>Bob</b>", h)
+        self.assertEqual(relaunch.get("/simple/series").status_code, 200)
+        # idem pour le code d'accès (10 ans) et la session d'un compte (30 jours)
+        self.lib.set_settings({"require_profile": False, "access_pin_hash": hash_pin("sesame")}, None)
+        r = self.post("/simple/connexion", {"pin": "sesame"}, 303)
+        self.assertIn("Max-Age=315360000", r.headers["Set-Cookie"])
+        self.lib.set_settings({"access_pin_hash": "", "account_login": True}, None)
+        ann = self.lib.add_profile("Ann", hash_pin("motdepasse1"), None, "reader")["id"]
+        cookies = self.post("/simple/connexion", {"name": "Ann", "password": "motdepasse1"}, 303).headers.getlist("Set-Cookie")
+        sess = [c for c in cookies if c.startswith("bulle_session=")][0]
+        self.assertIn("Max-Age=2592000", sess)                       # 30 jours
+        self.assertNotIn("Secure", sess)
+
+    def test_liens_internes_seulement(self):
+        """Tous les liens de toutes les pages restent dans /simple (pas de nouvelle fenêtre en mode application)."""
+        for url in ("/simple", "/simple/series", f'/simple/serie/{self.astx["id"]}', f'/simple/lire/{self.t01["id"]}?p=2'):
+            html = self.get(url).get_data(as_text=True)
+            for href in re.findall(r'<a [^>]*href="([^"]*)"', html):
+                self.assertTrue(href.startswith("/simple"), f"{href} sur {url}")
 
     def test_images_1024_jpeg_de_base_avec_cache(self):
         v = int(self.t01.get("mtime") or 0)
