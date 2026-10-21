@@ -33,7 +33,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.34.2"
+VERSION = "0.34.3"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -834,6 +834,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         j["prev"], j["next"] = prev_, next_
         j["meta"] = meta_json(lib.bdt_album(node_id))
         j["lists"] = lib.list_membership(node_id, current_profile())
+        j["panels_v"] = PANELS_VERSION   # le lecteur le met dans l'adresse des cases, pour pouvoir les garder en cache
         if node.get("parent_id"):
             link = lib.bdt_series_get(node["parent_id"])
             parent = lib.node(node["parent_id"])
@@ -873,13 +874,21 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         resp.headers["Retry-After"] = "2"
         return resp
 
+    def panels_json(result: dict) -> Response:
+        """Les cases, que le navigateur peut garder pour toujours si l'adresse porte la date du fichier (`v`) et la
+        version de la détection (`pv`) : l'une ou l'autre change, l'adresse aussi."""
+        resp = jsonify(result)
+        if "v" in request.args and request.args.get("pv") == str(PANELS_VERSION):
+            cache_headers(resp, immutable=True)
+        return resp
+
     @app.route("/api/panels/<int:node_id>/<int:index>")
     def api_panels(node_id: int, index: int):
         """Cases de la planche (détectées une fois, puis gardées en base) pour la lecture case par case."""
         node = get_node(node_id, "album")
         cached = lib.panels_get(node_id, index)
         if cached is not None and cached.get("v") == PANELS_VERSION:
-            return jsonify(cached)
+            return panels_json(cached)
         key = (node_id, index)
         with panels_running_lock:
             running = panels_running.get(key)
@@ -891,7 +900,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             running.wait(panels_wait)
             cached = lib.panels_get(node_id, index)
             if cached is not None and cached.get("v") == PANELS_VERSION:
-                return jsonify(cached)
+                return panels_json(cached)
             return panels_busy()
         try:
             # toujours la page rendue à PANELS_WIDTH par le même chemin (gardée dans le cache des pages) : partir d'une
@@ -909,7 +918,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 finally:
                     panels_sem.release()
             lib.panels_set(node_id, index, result)
-            return jsonify(result)
+            return panels_json(result)
         except AlbumError as e:
             abort(415, description=str(e))
         except Exception as e:  # noqa: BLE001
