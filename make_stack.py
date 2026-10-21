@@ -82,6 +82,8 @@ def build_blob() -> str:
                 ti.uid = ti.gid = 0
                 ti.uname = ti.gname = "root"
                 ti.mtime = 0
+                # modes fixes : les mêmes sous Linux et Windows (qui rapporte 0o666 / 0o777), archive reproductible
+                ti.mode = 0o755 if ti.isdir() or ti.name.endswith(".sh") else 0o644
                 return ti
             tar.add(path, arcname=arcname, filter=filt)
         add(os.path.join(HERE, "bulle"), "bulle")
@@ -100,7 +102,7 @@ def main() -> None:
     if "$" in out:
         raise SystemExit("Le fichier généré contient un « $ » : Docker Compose l'interpréterait, abandon.")
     dest = os.path.join(HERE, "stack-autonome.yml")
-    with open(dest, "w", encoding="utf-8") as f:
+    with open(dest, "w", encoding="utf-8", newline="\n") as f:   # toujours en LF, même sous Windows
         f.write(out)
     size = max(sum(len(line.strip()) + 1 for line in b.split("\n")) for b in (blob, blob2, blob3))   # taille réelle par variable
     print(f"{dest} écrit : code embarqué en trois variables de {size // 1024} Ko au plus en base64 (limite 128 Ko chacune), port {PORT}")
