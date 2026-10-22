@@ -150,7 +150,7 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
         region = region.transpose(Image.Transpose.TRANSPOSE)
     w, h = region.size
     if w == 0 or b <= a:
-        return 0.0, 0.0, 0.0
+        return (0.0, 0.0, 0.0, False) if blockers else (0.0, 0.0, 0.0)
     # colonne par colonne, le minimum des lignes de la bande (255 : colonne entièrement fond), calculé par Pillow
     band = _column_min(region, a, b)
     # au-dessus et au-dessous : un 0 dans la colonne = du dessin (None : rien de ce côté, bord de la zone)
