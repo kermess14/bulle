@@ -30,6 +30,9 @@ de réglage) :
   lignes nettement plus claires que le reste est examinée comme une bande à part ;
 - une gouttière barrée dont seuls les bords sont mordus par l'anticrénelage est jugée sur son cœur (part de fond et
   bords compris), pas sur la bande entière.
+Version 20 : une rangée de cases posée sur une grande image, dont les cadres dépassent de quelques pixels la zone
+rognée par la gouttière voisine (cadre de 11 à 14 px au-delà du bord), était manquée par un test d'alignement trop
+strict à 10 px ; le test accepte maintenant ce dépassement (cas b-18821_11 : une case perdue au lot 2).
 """
 from __future__ import annotations
 
@@ -39,7 +42,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 19       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 20       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 RETRY_BG = 225            # second essai, page claire sans cases trouvées : fond de référence plus sombre (voir detect_panels)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
@@ -1253,9 +1256,9 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
             if _area(f) < 0.02 * w * h:
                 continue
             for edge in ("top", "bottom"):
-                if edge == "top" and abs(f[1] - leaf[1]) <= 10 and leaf[3] - f[3] >= min_side:
+                if edge == "top" and -10 <= f[1] - leaf[1] <= 10 and leaf[3] - f[3] >= min_side:
                     strip, rest_box = (leaf[0], leaf[1], leaf[2], f[3]), (leaf[0], f[3], leaf[2], leaf[3])
-                elif edge == "bottom" and abs(f[3] - leaf[3]) <= 10 and f[1] - leaf[1] >= min_side:
+                elif edge == "bottom" and -14 <= leaf[3] - f[3] <= 10 and f[1] - leaf[1] >= min_side:
                     strip, rest_box = (leaf[0], f[1], leaf[2], leaf[3]), (leaf[0], leaf[1], leaf[2], f[1])
                 else:
                     continue
