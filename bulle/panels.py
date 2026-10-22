@@ -30,7 +30,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 17       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 18       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 RETRY_BG = 225            # second essai, page claire sans cases trouvées : fond de référence plus sombre (voir detect_panels)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
@@ -832,7 +832,37 @@ def _shallow_gaps(diff: Image.Image, y0: int, y1: int, depth: int) -> bool:
     return bool(gaps)
 
 
-def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int) -> list[tuple]:
+THIN_INK = 60             # un trait de gouttière mince : trait d'encre (gris en dessous de ceci) continu et rectiligne…
+THIN_COVER = 0.7          # … sur au moins cette part de la longueur de la zone, et bien plus sombre que ce qui le borde
+
+
+def _thin_line(region: Image.Image, a0: int, a1: int, cover: float = THIN_COVER) -> Optional[tuple]:
+    """Autour des lignes [a0, a1) d'un bord net : un trait d'encre d'un ou deux pixels, continu et rectiligne (le cadre
+    d'une case collée à la suivante, sans gouttière) ? Il doit couvrir THIN_COVER de la longueur de la zone sur une seule
+    ligne, et les lignes à 3 px au-dessus et au-dessous doivent être bien moins sombres (un trait, pas une zone noire).
+    Alors [début, fin) de ce trait (élargi d'un pixel de chaque côté), sinon None. Un horizon ou un bord de meuble
+    dessiné n'est ni aussi droit ni aussi continu sur une telle longueur."""
+    w, h = region.size
+    best = None
+    for r in range(max(3, a0 - 2), min(h - 3, a1 + 2)):
+        row = region.crop((0, r, w, r + 1)).tobytes()
+        ink = sum(1 for v in row if v <= THIN_INK)
+        if ink < cover * w:
+            continue
+        up = sum(1 for v in region.crop((0, r - 3, w, r - 2)).tobytes() if v <= THIN_INK)
+        down = sum(1 for v in region.crop((0, r + 3, w, r + 4)).tobytes() if v <= THIN_INK)
+        if max(up, down) > 0.6 * ink:
+            continue
+        if best is None or ink > best[0]:
+            best = (ink, r)
+    if best is None:
+        return None
+    r = best[1]
+    return (max(0, r - 1), min(h, r + 2))
+
+
+def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int, thin_cover: float = THIN_COVER,
+               pairs: bool = True) -> list[tuple]:
     """Coupe une zone le long des bords de case rectilignes qui la traversent de part en part : deux bords parallèles
     rapprochés (le bas d'une case, le haut de la suivante), même quand la gouttière entre les deux n'est pas du fond
     (décor peint, couleur qui change en cours de page) et même si un cartouche la chevauche."""
@@ -853,7 +883,7 @@ def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int) -> list[
         region = region.transpose(Image.Transpose.TRANSPOSE)
     rw = region.size[0]
     cuts = []
-    for (a0, a1), (b0, b1) in zip(edges, edges[1:]):
+    for (a0, a1), (b0, b1) in (zip(edges, edges[1:]) if pairs else []):
         gap = b0 - a1
         best = max(max(prof[a0:a1]), max(prof[b0:b1]))
         # au moins un des deux bords bien net ; un bord moins couvert (0,60 à 0,67) n'est accepté que si ce qui
@@ -868,6 +898,18 @@ def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int) -> list[
             med = sorted(vals)[len(vals) // 2]
             if sum(1 for v in vals if abs(v - med) <= 28) >= 0.45 * len(vals):
                 cuts.append((a0, b1))
+    # un seul bord, bien net : deux cases collées, séparées par le seul trait de leur cadre (un ou deux pixels d'encre à
+    # la largeur de travail), si mince que ses deux bords se confondent
+    taken = [r for c in cuts for r in range(c[0], c[1])]
+    for a0, a1 in edges:
+        if max(prof[a0:a1]) < LINE_COVER or any(a0 <= r < a1 for r in taken):
+            continue
+        if a0 < min_side or n - a1 < min_side:
+            continue
+        line = _thin_line(region, a0, a1, thin_cover)
+        if line is not None:
+            cuts.append(line)
+    cuts.sort()
     if not cuts:
         return [box]
     x0, y0, x1, y1 = box
@@ -885,18 +927,124 @@ def _line_cuts(gray: Image.Image, box: tuple, axis: int, min_side: int) -> list[
     return [(x0 + a, y0, x0 + b, y1) for a, b in parts]
 
 
-def split_lines(gray: Image.Image, box: tuple, min_side: int, rtl: bool, depth: int = 0) -> list[tuple]:
-    """Découpage récursif le long des bords rectilignes (rangées, puis cases de chaque rangée)."""
+def _framed_sides(gray: Image.Image, box: tuple, x_left: int, x_right: int) -> bool:
+    """Une gouttière verticale entre deux morceaux d'une rangée bordée de traits de cadre (la rangée elle-même est
+    délimitée par des traits) : y a-t-il, juste à gauche et juste à droite de la gouttière, un bord net vertical (le
+    cadre de chaque case, quelle que soit sa couleur) sur l'essentiel de la hauteur ? Un blanc à l'intérieur d'une case
+    (ciel, bulle) n'en a pas."""
+    if box[3] - box[1] < 10:
+        return True
+    prof = _edge_rows(gray, box, 1)
+    if not prof:
+        return True
+
+    def framed(xa: int, xb: int) -> bool:
+        xa, xb = max(box[0], xa) - box[0], min(box[2], xb) - box[0]
+        return xb > xa and max(prof[xa:xb]) >= LINE_COVER
+
+    return framed(x_left - 6, x_left + 2) and framed(x_right - 1, x_right + 7)
+
+
+def _uncovered_bands(mask: Image.Image, leaf: tuple, parts: list[tuple], min_side: int) -> list[tuple]:
+    """Les cases trouvées dans une zone, plus ce qu'elles laissent de côté : une bande de la zone, haute d'au moins deux
+    cases minimales, qu'aucune case ne touche et qui est surtout du dessin (pas du fond), devient une case à son tour,
+    à sa place dans l'ordre de lecture. Mieux vaut montrer une bande entière que de sauter un bout de la planche."""
+    if len(parts) <= 1:
+        return parts
+    x0, y0, x1, y1 = leaf
+    covered = [False] * (y1 - y0)
+    for p in parts:
+        for y in range(max(y0, p[1]), min(y1, p[3])):
+            covered[y - y0] = True
+    bands, start = [], None
+    for i, c in enumerate(covered + [True]):
+        if not c and start is None:
+            start = i
+        elif c and start is not None:
+            if i - start >= 2 * min_side:
+                band = _trim(mask, (x0, y0 + start, x1, y0 + i))
+                if band and band[3] - band[1] >= 2 * min_side and ImageStat.Stat(mask.crop(band)).mean[0] < 0.5 * 255:
+                    bands.append(band)
+            start = None
+    if not bands:
+        return parts
+    out = parts + bands
+    out.sort(key=lambda b: (b[1], b[0]))   # (une bande est au-dessus ou au-dessous des cases qu'elle sépare)
+    return out
+
+
+MARGIN_FRACTION = 0.9     # marge de la page : colonnes (ou lignes) au bord de la page qui sont du fond à 90 % au moins
+
+
+def _trim_margins(mask: Image.Image, box: tuple) -> tuple:
+    """Enlève la marge de la page des côtés d'une zone qui touchent le bord de la page : des colonnes (ou lignes) presque
+    entièrement fond (blanc, ou noir pur sur une page blanche), que _trim n'enlève pas quand un bout de la case voisine
+    (qui déborde jusqu'au bord) y traîne."""
+    W, H = mask.size
+    x0, y0, x1, y1 = box
+    if x0 <= 3:
+        cols = _profile(mask, box, 1)
+        while x0 < x1 - 1 and cols[x0 - box[0]] >= MARGIN_FRACTION:
+            x0 += 1
+    if x1 >= W - 3:
+        cols = _profile(mask, box, 1)
+        while x1 > x0 + 1 and cols[x1 - 1 - box[0]] >= MARGIN_FRACTION:
+            x1 -= 1
+    if y0 <= 3:
+        rows = _profile(mask, (x0, y0, x1, y1), 0)
+        while y0 < y1 - 1 and rows[y0 - box[1]] >= MARGIN_FRACTION:
+            y0 += 1
+    if y1 >= H - 3:
+        rows = _profile(mask, (x0, box[1], x1, y1), 0)
+        while y1 > y0 + 1 and rows[y1 - 1 - box[1]] >= MARGIN_FRACTION:
+            y1 -= 1
+    return (x0, y0, x1, y1)
+
+
+def _no_margin(parts: list[tuple], axis: int, mask: Image.Image) -> list[tuple]:
+    """Une bande mince laissée au bord de la page par une coupe : ce n'est pas une case. Si c'est la marge (surtout du
+    fond), elle est écartée ; sinon (le décor qui déborde, un fond de couleur), elle est rendue à la case voisine.
+    `axis` : 1 si les morceaux sont côte à côte, 0 s'ils sont empilés."""
+    if len(parts) < 2:
+        return parts
+    W, H = mask.size
+    thin = 0.08 * (W if axis == 1 else H)
+
+    def union(a: tuple, b: tuple) -> tuple:
+        return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+    def margin(b: tuple) -> bool:
+        return ImageStat.Stat(mask.crop(b)).mean[0] >= 0.7 * 255
+
+    first = parts[0]
+    if (axis == 1 and first[0] <= 3 and first[2] - first[0] < thin) or (axis == 0 and first[1] <= 3 and first[3] - first[1] < thin):
+        parts = parts[1:] if margin(first) else [union(first, parts[1])] + parts[2:]
+    last = parts[-1]
+    if len(parts) >= 2 and ((axis == 1 and last[2] >= W - 3 and last[2] - last[0] < thin)
+                            or (axis == 0 and last[3] >= H - 3 and last[3] - last[1] < thin)):
+        parts = parts[:-1] if margin(last) else parts[:-2] + [union(parts[-2], last)]
+    return parts
+
+
+def split_lines(gray: Image.Image, mask: Image.Image, box: tuple, min_side: int, rtl: bool, depth: int = 0) -> list[tuple]:
+    """Découpage récursif d'un morceau déjà isolé par les gouttières, le long des seuls traits minces qui le traversent
+    d'un bord à l'autre (cases collées, séparées par le trait de leur cadre) ; pas par des paires de bords, qu'un
+    carrelage, un store ou un escalier dessinés dans la case fourniraient à foison."""
     if depth > 4:
         return [box]
+    bw, bh = box[2] - box[0], box[3] - box[1]
     for axis in ((0, 1) if depth % 2 == 0 else (1, 0)):
-        parts = _line_cuts(gray, box, axis, min_side)
+        # dans une rangée (bien plus large que haute), un trait vertical qui la traverse aux trois quarts sépare deux
+        # cases dont l'une déborde sur l'autre ; dans un morceau quelconque, seul un trait de bord à bord compte
+        strip = (bw >= 2.5 * bh) if axis == 1 else (bh >= 2.5 * bw)
+        parts = _line_cuts(gray, box, axis, min_side, thin_cover=0.75 if strip else 0.92, pairs=False)
+        parts = _no_margin(parts, axis, mask)
         if len(parts) >= 2:
             if axis == 1 and rtl:
                 parts = parts[::-1]
             out = []
             for p in parts:
-                out.extend(split_lines(gray, p, min_side, rtl, depth + 1))
+                out.extend(split_lines(gray, mask, p, min_side, rtl, depth + 1))
             return out
     return [box]
 
@@ -957,7 +1105,7 @@ def _row_order(rects: list[tuple], rtl: bool) -> list[tuple]:
 
 
 def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[Image.Image] = None,
-                 min_gutter: int = 2, min_side: int = 6) -> list[tuple]:
+                 min_gutter: int = 2, min_side: int = 6, gray: Optional[Image.Image] = None) -> list[tuple]:
     """Une zone issue des gouttières, redécoupée d'après les cadres qu'elle contient (cases incrustées, cases bien
     entourées de fond dans une mise en page sans gouttière traversante). Quand les cadres sont sûrs, ils sont « effacés »
     et le reste de la zone est redécoupé par les gouttières : la grande case qui déborde jusqu'au bord de la page devient
@@ -1016,7 +1164,7 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
                     rest_parts = []
                     if rest_t and _area(rest_t) >= MIN_AREA * w * h:
                         # le reste peut contenir d'autres cases (une autre rangée posée sur l'image) : même traitement
-                        rest_parts = _refine_leaf(rest_t, inside, w, h, rtl, mask, min_gutter, min_side) \
+                        rest_parts = _refine_leaf(rest_t, inside, w, h, rtl, mask, min_gutter, min_side, gray) \
                             if _area(rest_t) < la else [rest_t]
                     # le reste doit être une grande image : s'il contient lui-même plusieurs cadres de case qu'on n'a
                     # pas su séparer, c'est une planche ordinaire aux gouttières barrées, pas une rangée sur une image
@@ -1033,7 +1181,7 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
         # un rectangle avec du texte n'est pas une case : une bulle rectangulaire ou un cartouche (petit cadre dont
         # l'intérieur est surtout du fond : papier et lettres) n'est pas rendu comme une case, il fait partie de la
         # case qui le porte (les cadres gardent leur rôle de repères pour la bande restante ci-dessous)
-        ordered = [f for f in ordered if not _is_text_box(mask, f, w, h)]
+        ordered = [f for f in ordered if not _is_text_box(mask, f, w, h, gray)]
     bx0, by0 = min(f[0] for f in inside), min(f[1] for f in inside)
     bx1, by1 = max(f[2] for f in inside), max(f[3] for f in inside)
     # la partie de l'image qui reste visible autour des cadres : au-dessus, en dessous, à gauche, à droite
@@ -1043,7 +1191,20 @@ def _refine_leaf(leaf: tuple, frames, w: int, h: int, rtl: bool, mask: Optional[
     }
     name, band = max(bands.items(), key=lambda kv: _area(kv[1]))
     out = list(ordered)
-    if _area(band) >= 0.2 * la and (band[2] - band[0]) >= MIN_PANEL * w and (band[3] - band[1]) >= MIN_PANEL * h:
+
+    def big(b: tuple) -> bool:
+        return _area(b) >= 0.2 * la and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h
+
+    if ordered:
+        # une rangée dont les cadres (bulles et cartouches mis à part) vont du haut en bas de la zone : ce qui reste à
+        # gauche et à droite, ce sont deux cases qui débordent jusqu'aux bords de la page, pas un seul fond autour
+        lh = leaf[3] - leaf[1]
+        cy0, cy1 = min(f[1] for f in ordered), max(f[3] for f in ordered)
+        left = (leaf[0], leaf[1], min(f[0] for f in ordered), leaf[3])
+        right = (max(f[2] for f in ordered), leaf[1], leaf[2], leaf[3])
+        if big(left) and big(right) and cy0 - leaf[1] <= 0.1 * lh and leaf[3] - cy1 <= 0.1 * lh:
+            return [right if rtl else left] + out + [left if rtl else right]
+    if big(band):
         if name == "top" or (name == "left" and not rtl) or (name == "right" and rtl):
             out = [band] + out
         else:
@@ -1364,9 +1525,12 @@ def text_bridges(img: Image.Image, gray: Image.Image, mask: Image.Image, boxes: 
 TEXT_ATTACH = 0.01        # un cartouche hors de toute case est rattaché à la case qu'il touche (écart ≤ 1 % de la page)
 
 
-def _is_text_box(mask: Image.Image, f: tuple, w: int, h: int) -> bool:
-    """Un cadre petit dont l'intérieur est surtout du fond (papier et lettres) : bulle rectangulaire, cartouche."""
-    return _area(f) < TEXT_BOX * w * h and ImageStat.Stat(mask.crop(f)).mean[0] >= TEXT_PAPER * 255
+def _is_text_box(mask: Image.Image, f: tuple, w: int, h: int, gray: Optional[Image.Image] = None) -> bool:
+    """Un cadre petit dont l'intérieur est surtout du fond (papier et lettres) : bulle rectangulaire, cartouche ; ou,
+    si la page en niveaux de gris est fournie, un petit cadre dont l'encre est rangée en lignes de lettres."""
+    if _area(f) < TEXT_BOX * w * h and ImageStat.Stat(mask.crop(f)).mean[0] >= TEXT_PAPER * 255:
+        return True
+    return gray is not None and _text_leaf(gray, mask, f)
 
 
 def attach_text_boxes(mask: Image.Image, frames: list, boxes: list[tuple], grown: dict) -> dict:
@@ -1404,6 +1568,73 @@ def attach_text_boxes(mask: Image.Image, frames: list, boxes: list[tuple], grown
             continue
         grown[best] = u
     return grown
+
+
+TEXT_LEAF_GAP = 0.02      # un morceau isolé qui n'est que du texte est rendu à la case voisine à moins de 2 % de la page
+TEXT_LEAF_PAPER = 0.4     # … « que du texte » : au moins 40 % de fond (une bulle très remplie en a moins qu'un cartouche)
+
+
+def _text_leaf(gray: Image.Image, mask: Image.Image, b: tuple) -> bool:
+    """Un morceau découpé par les gouttières (ou un cadre trouvé) qui n'est pas une case mais un rectangle de texte
+    (cartouche, bulle rectangulaire, titre) : petit, surtout du fond, et son encre rangée en lignes de lettres (des
+    bandes de 4 à 20 px, séparées par des interlignes presque vides, qui portent presque toute l'encre)."""
+    w, h = mask.size
+    if _area(b) >= TEXT_BOX * w * h or ImageStat.Stat(mask.crop(b)).mean[0] < TEXT_LEAF_PAPER * 255:
+        return False
+    x0, y0, x1, y1 = b[0] + 3, b[1] + 3, b[2] - 3, b[3] - 3
+    if x1 - x0 < 20 or y1 - y0 < 8:
+        return False
+    ink = gray.crop((x0, y0, x1, y1)).point([255 if v < 110 else 0 for v in range(256)], "L")
+    rows = [v / 255.0 for v in ink.resize((1, ink.height), Image.Resampling.BOX).getdata()]
+    n = len(rows)
+    total = sum(rows)
+    if not 0.02 * n <= total <= 0.45 * n:
+        return False
+    lines, carried, y = 0, 0.0, 0
+    while y < n:
+        if rows[y] < 0.08:
+            y += 1
+            continue
+        a = y
+        while y < n and rows[y] >= 0.08:
+            y += 1
+        if 4 <= y - a <= 20:
+            lines += 1
+            carried += sum(rows[a:y])
+        elif y - a < 4 and (a <= 2 or y >= n - 2):
+            carried += sum(rows[a:y])   # (un reste du cadre ou du décor, au bord du rectangle)
+        else:
+            return False   # une bande d'encre trop haute (un dessin) ou trop fine (un trait)
+    return lines >= 1 and carried >= 0.8 * total
+
+
+def merge_text_leaves(gray: Image.Image, mask: Image.Image, boxes: list[tuple]) -> list[tuple]:
+    """Les morceaux qui ne sont que du texte sont réunis à la case voisine qu'ils bordent (la plus proche, puis celle
+    qui partage avec eux le plus long côté, à TEXT_LEAF_GAP près), si la case ainsi agrandie ne mord sur aucune autre."""
+    w, h = mask.size
+    near = TEXT_LEAF_GAP * max(w, h)
+    out = list(boxes)
+    for b in boxes:
+        if b not in out or not _text_leaf(gray, mask, b):
+            continue
+        best, best_key, best_len = None, None, 0
+        for c in out:
+            if c == b:
+                continue
+            dx = max(b[0], c[0]) - min(b[2], c[2])   # < 0 : chevauchement en x
+            dy = max(b[1], c[1]) - min(b[3], c[3])
+            if dx <= near and dy <= near and (dx <= 0) != (dy <= 0):
+                shared = -dx if dx <= 0 else -dy
+                key = (max(dx, dy), -shared)   # la plus proche, puis le plus long côté commun
+                if best_key is None or key < best_key:
+                    best, best_key, best_len = c, key, shared
+        if best is None or best_len < 0.5 * min(b[2] - b[0], b[3] - b[1]):
+            continue
+        u = (min(best[0], b[0]), min(best[1], b[1]), max(best[2], b[2]), max(best[3], b[3]))
+        if any(c not in (b, best) and _inter(u, c) > 0.1 * _area(c) for c in out):
+            continue
+        out = [u if c == best else c for c in out if c != b]
+    return out
 
 
 BUBBLE_REACH = 0.3        # une bulle qui dépasse du cadre : on élargit la case d'au plus 30 % de sa taille…
@@ -1511,12 +1742,22 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
 
     dark = ImageChops.lighter(mask, gray.point([255 if i <= 24 else 0 for i in range(256)], "L")) if bg >= 200 else mask
 
+    def resplit(parts: list[tuple], leaf: tuple, rtl: bool) -> list[tuple]:
+        """Les cases venues des cadres (pas des gouttières) peuvent encore en cacher deux : un cadre englobe parfois
+        deux cases empilées séparées par une gouttière franche. On repasse chacune par le découpage par gouttières."""
+        if not (bg >= 200 or bg <= 55) or parts == [leaf]:
+            return parts
+        out_: list[tuple] = []
+        for p_ in parts:
+            out_.extend(_split(mask, p_, 0, 3, min_gutter, min_side, rtl) or [p_])
+        return out_
+
     def leaves(rtl: bool) -> list[tuple]:
         # fond ni blanc ni noir (dessin jusqu'aux bords) : les gouttières n'ont pas de sens, seuls les cadres comptent
         res = (_split(mask, full, 0, 0, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [full]) or [full]
         out: list[tuple] = []
         for leaf in res:
-            parts = _refine_leaf(leaf, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None, min_gutter, min_side)
+            parts = resplit(_refine_leaf(leaf, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None, min_gutter, min_side, gray), leaf, rtl)
             if parts == [leaf] and (bg >= 200 or bg <= 55) and _area(leaf) >= 0.3 * page_area:
                 # grande zone indécoupable : peut-être des cases aux bords tracés à main levée, séparées par le fond
                 blobs = detect_blobs(mask, leaf)
@@ -1528,16 +1769,34 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
                 # découpée normalement
                 rows = _line_cuts(gray, leaf, 0, 2 * min_side)   # des rangées franches, pas une bande de texte
                 # seulement si le découpage trouvé contredit ces bords (une case trouvée les enjambe) ou s'il n'y en a pas
-                crossed = parts == [leaf] or any(p[1] < r[1] - min_side and p[3] > r[1] + min_side for p in parts for r in rows[1:])
+                crossed = parts == [leaf] or any(p[1] < r[1] - min_side and p[3] > r[1] + min_side for p in parts for r in rows[1:]) \
+                    or sum(_area(p) for p in parts) < 0.7 * _area(leaf)   # (ou s'il laisse une bonne part de la zone sans case)
                 if len(rows) >= 2 and crossed:
                     before = parts
                     parts = []
                     for row in rows:
                         sub = (_split(mask, row, 1, 1, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [row]) or [row]
+                        sub = sub[::-1] if rtl else sub
+                        # les gouttières d'une rangée délimitée par des traits de cadre doivent être bordées de traits
+                        # elles aussi ; sinon c'est un blanc à l'intérieur d'une case : on recolle les deux morceaux
+                        joined: list[tuple] = []
+                        for piece in sub:
+                            if joined and piece[0] >= joined[-1][2] and not _framed_sides(gray, row, joined[-1][2], piece[0]):
+                                prev = joined.pop()
+                                piece = (min(prev[0], piece[0]), min(prev[1], piece[1]), max(prev[2], piece[2]), max(prev[3], piece[3]))
+                            joined.append(piece)
+                        sub = _no_margin(joined, 1, mask)
+                        if rtl:
+                            sub = sub[::-1]
                         pieces = []
                         for r in sub:
-                            pieces.extend(_refine_leaf(r, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None,
-                                                       min_gutter, min_side))
+                            got = _refine_leaf(r, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None,
+                                               min_gutter, min_side, gray)
+                            if got == [r] and _area(r) >= 0.08 * page_area:
+                                # un morceau encore entier : des cases collées, séparées par le seul trait de leur cadre
+                                # (voir _line_cuts) ; on les sépare le long de ces traits, dans les deux sens
+                                got = split_lines(gray, mask, r, min_side, rtl)
+                            pieces.extend(got)
                         # une rangée que ce redécoupage laisse entière alors que le découpage d'avant y trouvait déjà
                         # plusieurs cases (toutes dans la rangée) : on garde celles-là, elles étaient bonnes
                         kept = [p for p in before if _inter(p, row) >= 0.9 * _area(p)]
@@ -1558,7 +1817,11 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
                             continue
                     again.append(p_)
                 parts = again
-            out.extend(parts)
+            out.extend(_uncovered_bands(mask, leaf, parts, min_side))
+        if bg >= 200 or bg <= 55:
+            # (sur une page blanche, une bande de noir pur au bord d'une case est le fond noir de la planche, pas la case)
+            edge = ImageChops.lighter(mask, gray.point([255 if i <= 40 else 0 for i in range(256)], "L")) if bg >= 200 else mask
+            out = [_trim_margins(edge, b) for b in out]
         return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 
     def flat_sliver(b: tuple) -> bool:
@@ -1568,7 +1831,7 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         # d'une seule teinte, ou surtout du fond (marge de la page prise avec un bout de décor)
         return narrow and (ImageStat.Stat(gray.crop(b)).stddev[0] < 14 or ImageStat.Stat(mask.crop(b)).mean[0] >= 0.7 * 255)
 
-    ltr = [b for b in leaves(False) if not flat_sliver(b)]
+    ltr = merge_text_leaves(gray, mask, [b for b in leaves(False) if not flat_sliver(b)])
     empty = {"panels": [], "rtl": [], "v": PANELS_VERSION}
     if (len(ltr) < 2 or max(_area(b) for b in ltr) > 0.85 * page_area or sum(_area(b) for b in ltr) < 0.35 * page_area) \
             and retry and _bg is None and bg > 55 and bg != RETRY_BG:
@@ -1583,6 +1846,14 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         return empty
     if max(_area(b) for b in ltr) > 0.85 * page_area:
         return empty
+    if max(_area(b) for b in ltr) > 0.4 * page_area and retry and _bg is None and bg > 55 and bg != RETRY_BG:
+        # des cases trouvées, mais l'une d'elles couvre encore 40 % de la planche ou plus : le second essai (fond
+        # de référence plus sombre, voir plus haut) est gardé s'il la découpe en plus de cases sans rien perdre ailleurs
+        second = detect_panels(img, False, RETRY_BG, manga)
+        if len(second["panels"]) > len(ltr) and second["panels"] \
+                and max((r[2] - r[0]) * (r[3] - r[1]) for r in second["panels"]) < 0.45 \
+                and sum((r[2] - r[0]) * (r[3] - r[1]) for r in second["panels"]) >= 0.6:
+            return second
     if sum(_area(b) for b in ltr) < 0.35 * page_area:
         return empty   # couverture, page de titre, crédits : quelques blocs isolés sur du vide, pas des cases
     pad_x, pad_y = PAD * w, PAD * h
@@ -1596,7 +1867,7 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
     if manga:
         # ordre manga : le même découpage refait de droite à gauche (les cadres, déjà calculés, sont partagés), puis
         # apparié aux cases ci-dessus ; en cas de désaccord, l'ordre occidental
-        rtl = [b for b in leaves(True) if not flat_sliver(b)]
+        rtl = merge_text_leaves(gray, mask, [b for b in leaves(True) if not flat_sliver(b)])
         index = {tuple(rel(b)): i for i, b in enumerate(ltr)}
         order = [index.get(tuple(rel(b)), i) for i, b in enumerate(rtl)]
         if sorted(order) != list(range(len(panels))):

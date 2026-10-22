@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.36.1)
+# Bulle — lecteur de BD maison (v0.37.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -142,6 +142,17 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Détection des cases : cases collées, rectangles de texte, bords de planche (v0.37.0)**. Mise au point sur les
+  21 premières planches de « La nuit des morts-vivants », corrigées case par case à la main et ajoutées au banc
+  d'essai. Quatre défauts corrigés : deux cases **collées**, séparées par le seul trait de leur cadre (sans gouttière),
+  sont maintenant séparées le long de ce trait ; une **bulle ou un cartouche rectangulaire** posé à côté des cases
+  n'est plus une case, il est réuni à la case voisine (reconnu à ses lignes de lettres) ; la **marge de la page** qui
+  traînait au bord d'une case ne la déborde plus ; et une case restée **cachée dans un cadre** (deux cases empilées
+  dans un même rectangle) est redécoupée par ses gouttières. Une bande de planche qu'aucune case ne couvrait (la case
+  large « RÉANIMATION ! » de la page 6, jamais montrée) redevient une case à part entière. Sur l'album : 162 cases
+  justes sur 167 (135 avant) et 5 cases en trop (20 avant). Sur les 40 planches corrigées du banc : 265 justes sur
+  315 (230 avant), 28 en trop (38 avant) ; aucune planche corrigée ne régresse. Les cases sont recalculées à la
+  première lecture de chaque planche (PANELS_VERSION 18).
 - **Lecture simple : l'application reste en plein écran (v0.36.1)**. Sur l'iPad 1, l'icône s'ouvrait bien en plein
   écran sur `/simple`, mais le premier lien touché rouvrait Safari, avec sa barre d'adresse. Avant iOS 11.3, dans une
   application de l'écran d'accueil, iOS envoie à Safari tout lien `<a href>` touché ; seuls un changement d'adresse par
