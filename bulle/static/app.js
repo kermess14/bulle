@@ -1116,8 +1116,8 @@
     if (item.kind === "ghost") return ghostCard(item);
     const letter = esc(letterOf(item.name));
     if (item.kind === "folder") {
-      let read = item.read_count ? `<div class="sub">${item.read_count}/${item.album_count} lus${item.reading_count ? " · " + plural(item.reading_count, "en cours", "en cours") : ""}</div>`
-        : item.reading_count ? `<div class="sub">${plural(item.reading_count, "album en cours", "albums en cours")}</div>` : "";
+      const read = item.read_count ? `${item.read_count}/${item.album_count} lus${item.reading_count ? " · " + plural(item.reading_count, "en cours", "en cours") : ""}`
+        : item.reading_count ? plural(item.reading_count, "album en cours", "albums en cours") : "";
       const done = item.album_count && item.read_count >= item.album_count ? `<span class="badge ok" title="Tout lu">${ICON.check}</span>` : "";
       let bdt = "";
       const oneShot = !!item.oneshot;   // décidé par le serveur : fiche Bédéthèque d'un tome unique, ou dossier d'un seul album sans numéro de tome
@@ -1126,9 +1126,11 @@
         const full = item.bdt.present >= item.bdt.total;
         bdt = `<div class="sub bdt ${full ? "full" : ""}" title="Bédéthèque : ${esc(item.bdt.title || "")}${item.bdt.status ? " · " + esc(item.bdt.status) : ""}">${full ? "Série complète" : `${item.bdt.present}/${item.bdt.total} tomes`}<i style="width:${pct}%"></i></div>`;
       }
+      const info = read || (bdt ? "" : plural(item.album_count, "album", "albums"));
+      const blue = oneShot && !bdt;
       return `<a class="card folder${oneShot ? " os-linked" : ""}" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}" draggable="true"${colorStyle(item)}>
         ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${qualityBadge(item)}${item.adult ? `<span class="badge adult" title="Rubrique Adulte">18+</span>` : ""}${item.fav ? FAV : ""}`)}
-        <div class="title">${esc(item.name)}</div>${read || (bdt ? "" : `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`)}${bdt}
+        <div class="title">${esc(item.name)}</div>${info ? `<div class="sub${blue ? " os-status" : ""}">${info}${blue ? '<i aria-hidden="true"></i>' : ""}</div>` : ""}${bdt}
       </a>`;
     }
     const badge = (item.error ? `<span class="badge warn" title="${esc(item.error)}">${ICON.warn}</span>` : progressHtml(item.progress)) + (item.fav ? FAV : "");

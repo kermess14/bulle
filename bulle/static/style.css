@@ -1576,8 +1576,8 @@ img.pavatar { object-fit: cover; padding: 0; }
 /* icône d'un message (⚠) : taille d'une lettre, quel que soit l'habillage */
 .toast > svg { width: 20px; height: 20px; flex: none; }
 /* one shot : trait bleu sous les informations du dossier, comme le trait vert des collections */
-.card.folder.os-linked .sub:last-child { position: relative; padding-bottom: 6px; }
-.card.folder.os-linked .sub:last-child::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: #2f8cff; }
+.card.folder .sub.os-status { position: relative; padding-bottom: 6px; }
+.card.folder .sub.os-status i { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: #2f8cff; }
 /* recherche : albums regroupés par auteur */
 h3.byauthor { margin: 18px 0 10px; font-size: 15px; font-weight: 700; }
 h3.byauthor small { font-weight: 400; margin-left: 6px; }
