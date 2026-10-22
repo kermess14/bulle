@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.37.0)
+# Bulle — lecteur de BD maison (v0.38.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -142,6 +142,7 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Page « Tâches » et trait bleu des one shots (v0.38.0)**. Réglages → **Tâches** (administrateur) : la liste de tout ce que Bulle fait en arrière-plan (scan, couvertures et nombre de pages, mesure HD/SD, résumés et fiches Bédéthèque), avec l'avancement, la dernière exécution et un bouton **Arrêter** par tâche (et « Tout arrêter »). L'arrêt est coopératif : la tâche termine l'élément en cours, puis s'interrompt, rien n'est laissé à moitié écrit. La page se rafraîchit toute seule toutes les 2 secondes. Côté grille, un dossier qui contient un one shot (fiche Bédéthèque d'un seul tome) reçoit le même **trait bleu** que les one shots d'un dossier « One shots ».
 - **Détection des cases : cases collées, rectangles de texte, bords de planche (v0.37.0)**. Mise au point sur les
   21 premières planches de « La nuit des morts-vivants », corrigées case par case à la main et ajoutées au banc
   d'essai. Quatre défauts corrigés : deux cases **collées**, séparées par le seul trait de leur cadre (sans gouttière),
