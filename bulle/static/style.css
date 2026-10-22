@@ -1575,8 +1575,9 @@ img.pavatar { object-fit: cover; padding: 0; }
 
 /* icône d'un message (⚠) : taille d'une lettre, quel que soit l'habillage */
 .toast > svg { width: 20px; height: 20px; flex: none; }
-/* one shot trouvé sur Bédéthèque (ou BDfugue) : un trait bleu sous la couverture du fichier (dans un dossier « One shots ») et sous celle de son dossier */
-.card.album.os-linked .title::before, .card.folder.os-linked .title::before { content: ""; display: block; height: 4px; border-radius: 2px; background: #2f8cff; margin: 0 0 5px; }
+/* one shot trouvé sur Bédéthèque (ou BDfugue) : un trait bleu uniquement sous le titre de son dossier */
+.card.folder.os-linked .title { position: relative; padding-bottom: 9px; }
+.card.folder.os-linked .title::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; border-radius: 2px; background: #2f8cff; }
 /* recherche : albums regroupés par auteur */
 h3.byauthor { margin: 18px 0 10px; font-size: 15px; font-weight: 700; }
 h3.byauthor small { font-weight: 400; margin-left: 6px; }
