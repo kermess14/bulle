@@ -1268,6 +1268,21 @@ class Library:
                               (node_id, page, json.dumps(data)))
             self.conn.commit()
 
+    def panels_delete(self, node_id: int, page: int) -> None:
+        with self._write_lock:
+            self.conn.execute("DELETE FROM panels WHERE node_id=? AND page=?", (node_id, page))
+            self.conn.commit()
+
+    def panels_manual_stamp(self, node_id: int) -> str:
+        """Empreinte des cases corrigées à la main d'un album : change à chaque correction ou rétablissement ; le lecteur
+        la met dans l'adresse des cases (le navigateur garde les réponses pour toujours)."""
+        try:
+            r = self.conn.execute("SELECT COUNT(*), COALESCE(SUM(json_extract(data, '$.t')), 0) FROM panels "
+                                  "WHERE node_id=? AND json_extract(data, '$.manual') = 1", (node_id,)).fetchone()
+            return f"{r[0]}-{int(r[1])}"
+        except Exception:  # noqa: BLE001  (SQLite sans JSON1 : pas d'empreinte, le lecteur redemande à chaque séance)
+            return "0"
+
     def panels_clear(self, node_ids) -> None:
         ids = list(node_ids)
         if not ids:

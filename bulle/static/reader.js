@@ -294,7 +294,7 @@
     if (mode === "panels") {
       const d = panelsCache.get(current);
       const v = d && d.panels instanceof Array && d.panels.length ? viewsOf(d)[panelIdx] : null;
-      if (d && d.panels instanceof Array && d.panels.length) { const nb = d._count || d.panels.length; extra = !v ? ` · ${nb} cases` : ` · case ${v.p + 1}/${nb}` + (v.parts > 1 ? ` (${v.part + 1}/${v.parts})` : ""); }
+      if (d && d.panels instanceof Array && d.panels.length) { const nb = d._count || d.panels.length; extra = !v ? ` · ${nb} cases` : ` · case ${v.p + 1}/${nb}` + (v.parts > 1 ? ` (${v.part + 1}/${v.parts})` : ""); if (d.manual) extra += " ✎"; }
     }
     countEl.textContent = `${label} / ${pages}${extra}`;
     slider.value = current + 1;
@@ -307,7 +307,7 @@
       try {
         // date du fichier et version de la détection dans l'adresse : le navigateur peut garder la réponse pour toujours ;
         // en sens manga, l'ordre de droite à gauche est demandé en plus (le serveur ne le calcule que sur demande)
-        const r = await fetch(`/api/panels/${id}/${n}?v=${item.mtime}&pv=${item.panels_v || 0}${manga ? "&rtl=1" : ""}`, { priority: lazy ? "low" : "high" });
+        const r = await fetch(`/api/panels/${id}/${n}?v=${item.mtime}&pv=${item.panels_v || 0}&pm=${encodeURIComponent(item.panels_m || 0)}${manga ? "&rtl=1" : ""}`, { priority: lazy ? "low" : "high" });
         if (r.status === 503 && attempt < 4) {
           // serveur occupé (cette planche déjà en cours ailleurs, ou trop de détections à la fois) : on redemande
           // un peu plus tard, sans garder cette réponse
@@ -709,6 +709,7 @@
     modeBtn.textContent = MODE_LABEL[mode];
     single.hidden = mode !== "single" && mode !== "panels"; spread.hidden = mode !== "double"; scrollEl.hidden = mode !== "scroll";
     if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; pendingStep = 0; dimEl.hidden = true; }
+    $("#pedit").hidden = mode !== "panels";
     if (mode === "scroll") buildScroll();
     applyFit();
   }
@@ -1097,7 +1098,7 @@
 
   // ---------------------------------------------------------------- clavier
   document.addEventListener("keydown", e => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || editorOpen()) return;
     if (e.repeat && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ")) { e.preventDefault(); return; }
     if (busy() && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === " ") && mode === "panels") { queueStep((e.key === "ArrowLeft") !== manga ? -1 : 1); e.preventDefault(); return; }
     if (!endEl.hidden && e.key === "Enter" && item && item.next) { location.href = `/read/${item.next.id}?page=0`; return; }
@@ -1128,6 +1129,7 @@
       case "f": case "F": cycleFit(); break;
       case "d": case "D": cycleMode(); break;
       case "c": case "C": togglePanels(); break;
+      case "e": case "E": if (mode === "panels") openEditor(); else flash("Passez en case par case (C) pour corriger les cases"); break;
       case "m": case "M": toggleManga(); break;
       case "r": case "R": toggleTrim(); break;
       case "p": case "P": toggleFullscreen(); break;
@@ -1142,11 +1144,194 @@
     e.preventDefault();
   });
 
+
+  // ---------------------------------------------------------------- correction manuelle des cases
+  /* Éditeur plein écran : la planche entière, les cases actuelles en rectangles numérotés. On trace un nouveau
+     rectangle sur le fond, on touche une case pour la choisir (la déplacer, tirer ses bords et ses coins), « Suppr »
+     l'enlève. « Enregistrer » garde ces cases pour cette planche (le serveur les range dans l'ordre de lecture et ne
+     les recalcule plus) ; « Rétablir l'automatique » efface la correction. */
+  const PE_MIN = 0.02;   // côté minimal d'une case (fraction de la page), comme côté serveur
+  let pe = null;         // éléments de l'éditeur, créés à la première ouverture
+  const peState = { rects: [], sel: -1, drag: null, page: -1, dirty: false, busy: false, draw: false };
+  const editorOpen = () => !!pe && !pe.root.hidden;
+
+  function peBuild() {
+    const root = document.createElement("div");
+    root.className = "pe"; root.hidden = true;
+    root.innerHTML = `<div class="pe-bar"><div class="pe-title">Corriger les cases <span class="pe-count"></span></div>
+      <div class="pe-actions"><button type="button" data-a="draw">+ Nouvelle case</button>
+      <button type="button" data-a="del" disabled>Supprimer la case</button>
+      <button type="button" data-a="auto">Rétablir l'automatique</button>
+      <button type="button" data-a="cancel">Annuler</button>
+      <button type="button" data-a="save" class="primary">Enregistrer</button></div></div>
+      <div class="pe-stage"><div class="pe-page"><img alt="" draggable="false"><div class="pe-layer"></div></div></div>
+      <div class="pe-help">« + Nouvelle case » (ou Maj + glisser) puis tracez un rectangle, même sur une grande case (encart) · touchez une case pour la choisir, déplacez-la ou tirez ses poignées · Suppr pour l'enlever · Entrée pour enregistrer · Échap pour annuler</div>`;
+    document.body.appendChild(root);
+    pe = { root, img: root.querySelector("img"), layer: root.querySelector(".pe-layer"), count: root.querySelector(".pe-count"),
+           del: root.querySelector('[data-a="del"]'), save: root.querySelector('[data-a="save"]'), auto: root.querySelector('[data-a="auto"]') };
+    root.addEventListener("click", e => {
+      const a = e.target.closest("[data-a]"); if (!a || peState.busy) return;
+      ({ draw: peToggleDraw, del: peDelete, cancel: peClose, save: peSave, auto: peAuto })[a.dataset.a]();
+    });
+    pe.layer.addEventListener("pointerdown", pePointerDown);
+    pe.layer.addEventListener("pointermove", pePointerMove);
+    pe.layer.addEventListener("pointerup", pePointerUp);
+    pe.layer.addEventListener("pointercancel", pePointerUp);
+    for (const t of ["contextmenu", "wheel"]) root.addEventListener(t, e => { if (t === "contextmenu") e.preventDefault(); e.stopPropagation(); }, { passive: t !== "contextmenu" });
+    document.addEventListener("keydown", e => {
+      if (!editorOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "Escape") { if (peState.draw) peToggleDraw(); else peClose(); }
+      else if (e.key === "Delete" || e.key === "Backspace") peDelete();
+      else if (e.key === "Enter") peSave();
+      else if (e.key === "Tab" && peState.rects.length) { peState.sel = (peState.sel + (e.shiftKey ? -1 : 1) + peState.rects.length) % peState.rects.length; peDraw(); }
+      else return;
+      e.preventDefault();
+    });
+  }
+  async function openEditor() {
+    if (mode !== "panels" || current < 0 || peState.busy) return;
+    if (!pe) peBuild();
+    const n = current;
+    const d = await getPanels(n);
+    if (!d || d.error) { flash("Cases indisponibles pour le moment"); return; }
+    // ce que le lecteur montre : cases dans l'ordre de lecture, textes à cheval réunis ou élargis
+    const rects = [];
+    if (d.panels instanceof Array && d.panels.length) {
+      const { panels, order } = readingPanels(d);
+      for (const i of order) if (panels[i] && panels[i].length === 4) rects.push(panels[i].map(v => Math.max(0, Math.min(1, +v))));
+    }
+    Object.assign(peState, { rects, sel: -1, drag: null, page: n, dirty: false, draw: false });
+    pe.root.classList.remove("drawing"); pe.root.querySelector('[data-a="draw"]').classList.remove("on");
+    pe.img.onload = peDraw;
+    pe.img.src = img.currentSrc || img.src || `/api/page/${id}/${n}?w=1600&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
+    pe.auto.hidden = !d.manual;
+    pe.root.hidden = false;
+    body.classList.add("pe-open");
+    peDraw();
+  }
+  function peClose() {
+    if (!pe) return;
+    pe.root.hidden = true; body.classList.remove("pe-open");
+    peState.drag = null;
+  }
+  function peToggleDraw() {
+    peState.draw = !peState.draw;
+    pe.root.classList.toggle("drawing", peState.draw);
+    pe.root.querySelector('[data-a="draw"]').classList.toggle("on", peState.draw);
+    if (peState.draw) { peState.sel = -1; peDraw(); }
+  }
+  const peRound = v => Math.round(v * 10000) / 10000;
+  function peDraw() {
+    if (!pe) return;
+    const L = pe.layer; L.textContent = "";
+    peState.rects.forEach((r, i) => {
+      const el = document.createElement("div");
+      el.className = "pe-r" + (i === peState.sel ? " sel" : "");
+      el.dataset.i = i;
+      el.style.cssText = `left:${r[0] * 100}%;top:${r[1] * 100}%;width:${(r[2] - r[0]) * 100}%;height:${(r[3] - r[1]) * 100}%`;
+      el.innerHTML = `<b>${i + 1}</b>` + (i === peState.sel ? ["nw", "n", "ne", "e", "se", "s", "sw", "w"].map(h => `<i class="pe-h pe-${h}" data-h="${h}"></i>`).join("") : "");
+      L.appendChild(el);
+    });
+    pe.count.textContent = peState.rects.length ? `· ${peState.rects.length} case${peState.rects.length > 1 ? "s" : ""}` : "· aucune (la planche reste entière)";
+    pe.del.disabled = peState.sel < 0;
+  }
+  function peDelete() {
+    if (peState.sel < 0) return;
+    peState.rects.splice(peState.sel, 1);
+    peState.sel = -1; peState.dirty = true; peDraw();
+  }
+  function pePoint(e) {
+    const b = pe.layer.getBoundingClientRect();
+    return { x: Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)), y: Math.max(0, Math.min(1, (e.clientY - b.top) / b.height)), w: b.width, h: b.height };
+  }
+  function pePointerDown(e) {
+    if (e.button > 0 || peState.busy) return;
+    const p = pePoint(e), hit = e.target.closest(".pe-r"), hnd = e.target.closest(".pe-h");
+    pe.layer.setPointerCapture(e.pointerId);
+    if (hit && hnd) { peState.sel = +hit.dataset.i; peState.drag = { kind: "size", h: hnd.dataset.h, start: p, orig: peState.rects[peState.sel].slice() }; }
+    else if (hit && !peState.draw && !e.shiftKey) { peState.sel = +hit.dataset.i; peState.drag = { kind: "move", start: p, orig: peState.rects[peState.sel].slice() }; }
+    else { peState.sel = -1; peState.drag = { kind: "new", start: p, cur: p }; }
+    if (hnd && peState.draw) peState.drag = { kind: "new", start: p, cur: p };
+    peDraw();
+    e.preventDefault();
+  }
+  function pePointerMove(e) {
+    const d = peState.drag; if (!d) return;
+    const p = pePoint(e), dx = p.x - d.start.x, dy = p.y - d.start.y;
+    if (d.kind === "new") {
+      d.cur = p;
+      let g = pe.layer.querySelector(".pe-r.ghost");
+      if (!g) { g = document.createElement("div"); g.className = "pe-r ghost"; pe.layer.appendChild(g); }
+      const x0 = Math.min(d.start.x, p.x), x1 = Math.max(d.start.x, p.x), y0 = Math.min(d.start.y, p.y), y1 = Math.max(d.start.y, p.y);
+      g.style.cssText = `left:${x0 * 100}%;top:${y0 * 100}%;width:${(x1 - x0) * 100}%;height:${(y1 - y0) * 100}%`;
+      return;
+    }
+    const o = d.orig, r = peState.rects[peState.sel];
+    if (!r) return;
+    if (d.kind === "move") {
+      const w = o[2] - o[0], h = o[3] - o[1];
+      const x0 = Math.max(0, Math.min(1 - w, o[0] + dx)), y0 = Math.max(0, Math.min(1 - h, o[1] + dy));
+      r[0] = x0; r[1] = y0; r[2] = x0 + w; r[3] = y0 + h;
+    } else {
+      let [x0, y0, x1, y1] = o;
+      if (d.h.includes("w")) x0 = Math.max(0, Math.min(x1 - PE_MIN, o[0] + dx));
+      if (d.h.includes("e")) x1 = Math.min(1, Math.max(x0 + PE_MIN, o[2] + dx));
+      if (d.h.includes("n")) y0 = Math.max(0, Math.min(y1 - PE_MIN, o[1] + dy));
+      if (d.h.includes("s")) y1 = Math.min(1, Math.max(y0 + PE_MIN, o[3] + dy));
+      r[0] = x0; r[1] = y0; r[2] = x1; r[3] = y1;
+    }
+    d.moved = true;
+    const el = pe.layer.querySelector(`.pe-r[data-i="${peState.sel}"]`);
+    if (el) el.style.cssText = `left:${r[0] * 100}%;top:${r[1] * 100}%;width:${(r[2] - r[0]) * 100}%;height:${(r[3] - r[1]) * 100}%`;
+  }
+  function pePointerUp(e) {
+    const d = peState.drag; peState.drag = null;
+    if (!d) return;
+    if (d.kind === "new") {
+      const p = d.cur || d.start;
+      const x0 = Math.min(d.start.x, p.x), x1 = Math.max(d.start.x, p.x), y0 = Math.min(d.start.y, p.y), y1 = Math.max(d.start.y, p.y);
+      if (x1 - x0 >= PE_MIN && y1 - y0 >= PE_MIN) { peState.rects.push([x0, y0, x1, y1]); peState.sel = peState.rects.length - 1; peState.dirty = true; if (peState.draw) peToggleDraw(); }
+    } else if (d.moved) peState.dirty = true;
+    peDraw();
+  }
+  function peOrdered() { return peState.rects.map(r => r.map(peRound)); }
+  async function peSave() {
+    if (peState.busy) return;
+    peState.busy = true; pe.save.disabled = true;
+    try {
+      const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ panels: peOrdered() }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { flash(d.error || "Enregistrement impossible"); return; }
+      item.panels_m = d.stamp || item.panels_m;
+      panelsCache.set(peState.page, d);
+      peClose();
+      if (peState.page === current) { const d2 = panelsCache.get(current); panelIdx = d2 && d2.panels.length ? 0 : -1; applyPanel(false); updateCounter(); }
+      flash(d.panels.length ? `Cases enregistrées (${d.panels.length})` : "Planche entière enregistrée");
+    } catch (e) { flash("Enregistrement impossible"); }
+    finally { peState.busy = false; pe.save.disabled = false; }
+  }
+  async function peAuto() {
+    if (peState.busy) return;
+    peState.busy = true;
+    try {
+      const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { flash(d.error || "Rétablissement impossible"); return; }
+      item.panels_m = d.stamp || item.panels_m;
+      panelsCache.delete(peState.page);
+      peClose();
+      flash("Détection automatique rétablie");
+      if (peState.page === current) go(current, { save: false });
+    } catch (e) { flash("Rétablissement impossible"); }
+    finally { peState.busy = false; }
+  }
+
   // ---------------------------------------------------------------- boutons
   $("#prev").addEventListener("click", e => { e.stopPropagation(); prev(); });
   $("#next").addEventListener("click", e => { e.stopPropagation(); next(); });
   modeBtn.addEventListener("click", cycleMode);
   $("#panels").addEventListener("click", togglePanels);
+  $("#pedit").addEventListener("click", e => { e.stopPropagation(); openEditor(); });
   $("#thumbs").addEventListener("click", e => { e.stopPropagation(); toggleStrip(); });
   fitBtn.addEventListener("click", cycleFit);
   mangaBtn.addEventListener("click", toggleManga);

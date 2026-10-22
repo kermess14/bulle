@@ -1998,3 +1998,50 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         if grown:   # cases élargies pour ne pas couper une bulle qui déborde (même ordre, mêmes indices)
             out["grow"] = {str(k): rel(v) for k, v in grown.items()}
     return out
+
+
+# ----------------------------------------------------------------------------
+# 5. Cases corrigées à la main (éditeur du lecteur)
+# ----------------------------------------------------------------------------
+MANUAL_MAX = 60           # nombre maximal de cases tracées sur une planche
+MANUAL_MIN = 0.02         # côté minimal d'une case tracée (fraction de la page)
+
+
+def manual_panels(rects) -> dict:
+    """Cases tracées à la main : liste de [x0, y0, x1, y1] en fractions de la page. Vérifie, borne et arrondit chaque
+    rectangle, les range dans l'ordre de lecture (occidental) et calcule l'ordre manga. Résultat de la même forme que
+    `detect_panels`, plus "manual": True ; lève ValueError si la liste est inadmissible."""
+    if not isinstance(rects, (list, tuple)) or len(rects) > MANUAL_MAX:
+        raise ValueError("liste de cases inadmissible")
+    clean: list[tuple] = []
+    for r in rects:
+        if not isinstance(r, (list, tuple)) or len(r) != 4:
+            raise ValueError("une case doit avoir quatre coordonnées")
+        try:
+            x0, y0, x1, y1 = (float(v) for v in r)
+        except (TypeError, ValueError):
+            raise ValueError("coordonnées de case inadmissibles") from None
+        if not all(v == v and abs(v) < 10 for v in (x0, y0, x1, y1)):   # (pas de NaN, pas d'infini)
+            raise ValueError("coordonnées de case inadmissibles")
+        x0, x1 = sorted((min(1.0, max(0.0, x0)), min(1.0, max(0.0, x1))))
+        y0, y1 = sorted((min(1.0, max(0.0, y0)), min(1.0, max(0.0, y1))))
+        if x1 - x0 < MANUAL_MIN or y1 - y0 < MANUAL_MIN:
+            raise ValueError("une case est trop petite")
+        clean.append((round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4)))
+    scale = 10000
+    big = [tuple(round(v * scale) for v in r) for r in clean]
+    west = _reading_order(big, False)
+    east = _reading_order(big, True)
+    index = {b: i for i, b in enumerate(west)}   # (deux cases identiques : le premier indice, le second suit)
+    used: dict[tuple, int] = {}
+    order = []
+    for b in east:
+        k = used.get(b, 0)
+        used[b] = k + 1
+        base = [i for i, w in enumerate(west) if w == b]
+        order.append(base[min(k, len(base) - 1)])
+    panels = [[round(v / scale, 4) for v in b] for b in west]
+    if sorted(order) != list(range(len(panels))):
+        order = list(range(len(panels)))
+    return {"panels": panels, "rtl": order, "v": PANELS_VERSION, "manual": True}
+
