@@ -38,7 +38,7 @@ from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe
 from .panels import PANELS_VERSION, detect_panels, manual_panels
 from . import lots as lots_mod
 
-VERSION = "0.41.0"
+VERSION = "0.41.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -1192,7 +1192,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/panels/<int:node_id>/<int:index>/manual", methods=["PUT", "POST"])
     def api_panels_manual_set(node_id: int, index: int):
-        """Cases d'une planche corrigées à la main (éditeur du lecteur) : gardées en base à la place de la détection."""
+        """Cases d'une planche corrigées à la main (éditeur du lecteur) : gardées en base à la place de la détection.
+        Réservé à l'administrateur (la correction vaut pour tous les profils) ; tout le monde la lit."""
+        require_admin()
         node = get_node(node_id, "album")
         body = request.get_json(force=True, silent=True) or {}
         if index < 0 or (node.get("page_count") and index >= node["page_count"]):
@@ -1210,7 +1212,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
     @app.route("/api/panels/<int:node_id>/<int:index>/manual", methods=["DELETE"])
     def api_panels_manual_delete(node_id: int, index: int):
-        """Rétablit la détection automatique pour cette planche (la correction est effacée ; les cases sont recalculées)."""
+        """Rétablit la détection automatique pour cette planche (la correction est effacée ; les cases sont recalculées).
+        Réservé à l'administrateur."""
+        require_admin()
         get_node(node_id, "album")
         cached = lib.panels_get(node_id, index)
         if cached is not None and cached.get("manual"):

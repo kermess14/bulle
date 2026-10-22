@@ -62,6 +62,8 @@
   const busy = () => navBusy && Date.now() - navSince < 4000;   // garde-fou : jamais bloqué plus de 4 s
   let panelIdx = -1;             // case par case : -1 = page entière, sinon index dans l'ordre de lecture
   const panelsCache = new Map(); // n -> {panels, rtl}
+  let panelsGen = 0;             // change à chaque bascule du sens de lecture : une réponse demandée avant n'est plus bonne
+  let isAdmin = false;           // la correction manuelle des cases est réservée à l'administrateur
 
   function showMessage(title, text, actions = "") {
     const el = document.createElement("div");
@@ -81,6 +83,7 @@
     if (r.status === 401) { showMessage("Connexion requise", "Ouvrez d'abord la bibliothèque pour vous connecter.", `<a class="btn" href="/">Ouvrir Bulle</a>`); return; }
     if (s && s.profile) { Object.assign(prefs, pick(s.profile)); fit = prefs.reader_fit; manga = !!prefs.reader_manga; mode = MODES.includes(prefs.reader_mode) ? prefs.reader_mode : "single"; applyPrefs(); }
     if (s && s.global && s.global.img_tag) imgTag = s.global.img_tag;
+    isAdmin = !!(s && s.role === "admin");
     loadAlbumMemory();
     if (!r.ok) { showMessage("Introuvable", item.error || "", `<a class="btn" href="/">Retour</a>`); return; }
     nameEl.textContent = item.meta && item.meta.title ? `${item.meta.number != null ? "T" + item.meta.number + " · " : ""}${item.meta.title}` : item.name;
@@ -110,9 +113,13 @@
   }
 
   // ---------------------------------------------------------------- largeur d'image demandée au serveur
-  const stepW = w => Math.min(3840, Math.ceil(w / 160) * 160);   // paliers de 160 px : URLs stables, caches réutilisés
-  // téléphone ou tablette (tactile, petit écran) : la carte graphique y peine sur une image de 3840 px qu'on fait glisser
-  // et zoomer en case par case (case noire le temps qu'elle la redessine) ; 2560 px suffisent à une case nette
+  // mêmes paliers que le serveur (comics.pick_width : multiples de 100 px, de 300 à 3000) : une adresse par image réellement
+  // servie ; avant, des paliers de 160 px jusqu'à 3840 donnaient plusieurs adresses (donc plusieurs copies dans le cache du
+  // navigateur et des requêtes en double) pour la même image à 3000 px
+  const MIN_W = 300, MAX_W = 3000, STEP_W = 100;
+  const stepW = w => Math.min(MAX_W, Math.max(MIN_W, Math.ceil(w / STEP_W) * STEP_W));
+  // téléphone ou tablette (tactile, petit écran) : la carte graphique y peine sur une image de 3000 px qu'on fait glisser
+  // et zoomer en case par case (case noire le temps qu'elle la redessine) ; 2600 px suffisent à une case nette
   const smallTouch = () => navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 1100;
   function wantedWidth(n) {
     if (prefs.reader_quality === "original" || (mode === "single" && fit === "original")) return 0;
@@ -125,7 +132,7 @@
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
     const factor = mode === "panels" ? 2 : prefs.reader_quality === "high" ? 1.5 : 1;   // cases : nettes dès la première image, sans recharger
     const w = stepW(css * dpr * factor);
-    return mode === "panels" && smallTouch() ? Math.min(2560, w) : w;
+    return mode === "panels" && smallTouch() ? Math.min(2600, w) : w;
   }
   let imgTag = "";
   // marges blanches rognées (réglage) : pas en case par case, où les cases sont repérées sur la page entière
@@ -303,6 +310,7 @@
   // ---------------------------------------------------------------- case par case
   async function getPanels(n, lazy, attempt = 0) {
     if (panelsCache.has(n)) return panelsCache.get(n);
+    const gen = panelsGen;
     const p = (async () => {
       try {
         // date du fichier et version de la détection dans l'adresse : le navigateur peut garder la réponse pour toujours ;
@@ -321,6 +329,9 @@
     })();
     panelsCache.set(n, p);
     const d = await p;
+    // le sens de lecture a changé pendant la requête : cette réponse n'a pas l'ordre voulu (en manga, l'ordre de droite à
+    // gauche ne vient que si on l'a demandé) ; on ne la garde pas, on redemande dans le bon sens
+    if (gen !== panelsGen) { if (panelsCache.get(n) === p) panelsCache.delete(n); return getPanels(n, lazy, attempt); }
     // une réponse du serveur (même « pas de cases ») porte sa version « v » ; un échec (réseau, erreur du serveur,
     // marquée « error ») n'est pas gardé : la planche sera redemandée à la prochaine visite
     if (d && d.v !== undefined && !d.error) panelsCache.set(n, d); else if (panelsCache.get(n) === p) panelsCache.delete(n);
@@ -586,6 +597,19 @@
 
   // ---------------------------------------------------------------- défilement continu
   let scrollBuilt = false, scrollObserver = null, scrollTicking = false;
+  const SCROLL_KEEP = 4;   // défilement continu : pages gardées de part et d'autre de la page lue (le reste est libéré)
+  const scrollNear = new Set();   // pages dans la zone chargée d'avance (visibles ou presque)
+  /* Libère les images loin de la page lue : hors de la zone chargée d'avance et à plus de SCROLL_KEEP pages (le cadre garde
+     sa hauteur) ; elles reviennent du cache du navigateur si on remonte. Sans cela, un album de 200 pages parcouru
+     jusqu'au bout garde toutes ses pages décodées en mémoire (tablette, téléphone). */
+  function sweepScroll() {
+    for (const d of scrollEl.children) {
+      const n = +d.dataset.n;
+      if (Math.abs(n - current) <= SCROLL_KEEP || scrollNear.has(n)) continue;
+      const im = d.firstElementChild;
+      if (im && im.getAttribute("src")) im.removeAttribute("src");
+    }
+  }
   function buildScroll() {
     if (scrollBuilt) return;
     scrollBuilt = true;
@@ -601,6 +625,7 @@
     scrollObserver = new IntersectionObserver(entries => {
       for (const e of entries) {
         const im = e.target.querySelector("img"), n = +e.target.dataset.n;
+        if (e.isIntersecting) scrollNear.add(n); else scrollNear.delete(n);
         if (e.isIntersecting && !im.src) {
           im.src = pageUrl(n);
           im.onload = () => { aspects[n] = im.naturalWidth / im.naturalHeight; e.target.style.aspectRatio = String(aspects[n]); };
@@ -618,7 +643,7 @@
     const mid = stage.scrollTop + stage.clientHeight / 2;
     let best = 0;
     for (const d of scrollEl.children) { if (d.offsetTop <= mid) best = +d.dataset.n; else break; }
-    if (best !== current) { current = best; shown = [best]; updateCounter(); saveProgress(best); const u = new URL(location.href); u.searchParams.set("page", best); history.replaceState(null, "", u); }
+    if (best !== current) { current = best; shown = [best]; sweepScroll(); updateCounter(); saveProgress(best); const u = new URL(location.href); u.searchParams.set("page", best); history.replaceState(null, "", u); }
     if (stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2 && current === pages - 1) markEndReached();
   }
   function scrollToPage(n, save = true) {
@@ -709,7 +734,7 @@
     modeBtn.textContent = MODE_LABEL[mode];
     single.hidden = mode !== "single" && mode !== "panels"; spread.hidden = mode !== "double"; scrollEl.hidden = mode !== "scroll";
     if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; pendingStep = 0; dimEl.hidden = true; }
-    $("#pedit").hidden = mode !== "panels";
+    $("#pedit").hidden = mode !== "panels" || !isAdmin;
     if (mode === "scroll") buildScroll();
     applyFit();
   }
@@ -761,7 +786,7 @@
     if (mode === "panels") {
       // les cases gardées n'ont l'ordre manga que si on l'a demandé : on les redemande (le navigateur a déjà les
       // réponses sans cet ordre, le serveur ne calcule que l'ordre manquant)
-      panelsCache.clear();
+      panelsCache.clear(); panelsGen++;
       const n = current;
       getPanels(n).then(() => { if (current === n) { applyPanel(true); updateCounter(); } preloadAround(n); });
     }
@@ -1129,7 +1154,7 @@
       case "f": case "F": cycleFit(); break;
       case "d": case "D": cycleMode(); break;
       case "c": case "C": togglePanels(); break;
-      case "e": case "E": if (mode === "panels") openEditor(); else flash("Passez en case par case (C) pour corriger les cases"); break;
+      case "e": case "E": if (!isAdmin) break; if (mode === "panels") openEditor(); else flash("Passez en case par case (C) pour corriger les cases"); break;
       case "m": case "M": toggleManga(); break;
       case "r": case "R": toggleTrim(); break;
       case "p": case "P": toggleFullscreen(); break;
@@ -1189,7 +1214,7 @@
     });
   }
   async function openEditor() {
-    if (mode !== "panels" || current < 0 || peState.busy) return;
+    if (!isAdmin || mode !== "panels" || current < 0 || peState.busy) return;
     if (!pe) peBuild();
     const n = current;
     const d = await getPanels(n);
@@ -1301,7 +1326,7 @@
     try {
       const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ panels: peOrdered() }) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { flash(d.error || "Enregistrement impossible"); return; }
+      if (!r.ok) { flash(r.status === 403 ? "Réservé à l'administrateur" : d.error || "Enregistrement impossible"); return; }
       item.panels_m = d.stamp || item.panels_m;
       panelsCache.set(peState.page, d);
       peClose();
@@ -1316,7 +1341,7 @@
     try {
       const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "DELETE" });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { flash(d.error || "Rétablissement impossible"); return; }
+      if (!r.ok) { flash(r.status === 403 ? "Réservé à l'administrateur" : d.error || "Rétablissement impossible"); return; }
       item.panels_m = d.stamp || item.panels_m;
       panelsCache.delete(peState.page);
       peClose();

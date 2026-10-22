@@ -618,6 +618,25 @@ class SimpleTests(unittest.TestCase):
         self.assertNotEqual(d.get_json()["stamp"], j["stamp"])
         self.assertIsNone(self.lib.panels_get(nid, 0))
 
+    def test_manual_admin_only(self):
+        """Un lecteur ne corrige pas les cases (la correction vaut pour tous) mais les lit."""
+        nid = self.t02["id"]
+        self.lib.panels_clear([nid])
+        self.assertEqual(self.c.put(f"/api/panels/{nid}/0/manual", json={"panels": [[0, 0, 0.5, 0.5]]}).status_code, 200)
+        with self.lib._write_lock:
+            self.lib.conn.execute("UPDATE profiles SET role='reader' WHERE id=?", (DEFAULT_PROFILE,))
+            self.lib.conn.commit()
+        try:
+            self.assertEqual(self.c.put(f"/api/panels/{nid}/0/manual", json={"panels": [[0, 0, 0.9, 0.9]]}).status_code, 403)
+            self.assertEqual(self.c.delete(f"/api/panels/{nid}/0/manual").status_code, 403)
+            self.assertTrue(self.c.get(f"/api/panels/{nid}/0").get_json()["manual"])   # lecture libre
+            self.assertEqual(self.c.get(f"/api/panels/{nid}/0").get_json()["panels"], [[0.0, 0.0, 0.5, 0.5]])
+        finally:
+            with self.lib._write_lock:
+                self.lib.conn.execute("UPDATE profiles SET role='admin' WHERE id=?", (DEFAULT_PROFILE,))
+                self.lib.conn.commit()
+            self.lib.panels_clear([nid])
+
     def test_manual_validation(self):
         nid = self.t02["id"]
         url = f"/api/panels/{nid}/0/manual"
