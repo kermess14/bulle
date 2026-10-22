@@ -1587,3 +1587,5 @@ h3.byauthor small { font-weight: 400; margin-left: 6px; }
 .coltable.tasks tr.run td:first-child { border-left: 3px solid var(--accent); }
 .pbar.indet i { width: 35%; animation: tasks-slide 1.2s ease-in-out infinite alternate; }
 @keyframes tasks-slide { from { margin-left: 0; } to { margin-left: 65%; } }
+
+.btn.danger { border-color: var(--warn); color: var(--warn); }

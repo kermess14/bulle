@@ -37,7 +37,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.38.1"
+VERSION = "0.38.2"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -2940,6 +2940,18 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         require_admin()
         stopped = task_stop(tid)
         return jsonify({"stopped": stopped, "tasks": task_list(), "recent": list(task_log)[:15]})
+
+    @app.route("/api/tasks/kill", methods=["POST"])
+    def api_tasks_kill():
+        """Dernier recours : une tâche qui ne s'arrête pas malgré « Arrêter » (réseau bloqué, fichier illisible). Python ne
+        sait pas tuer un fil de l'intérieur : Bulle redémarre donc entièrement (le conteneur est relancé tout seul par
+        Docker, `restart: unless-stopped`). Les fichiers BD ne sont jamais modifiés ; un scan reprend au démarrage."""
+        require_admin()
+        if not (request.get_json(force=True, silent=True) or {}).get("confirm"):
+            abort(400, description="Confirmation manquante")
+        log.warning("Arrêt forcé demandé : redémarrage de Bulle")
+        threading.Timer(0.6, lambda: os._exit(1)).start()
+        return jsonify({"restarting": True})
 
     @app.route("/api/tasks/stop", methods=["POST"])
     def api_tasks_stop_all():
