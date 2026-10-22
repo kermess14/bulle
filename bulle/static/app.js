@@ -1139,8 +1139,7 @@
       if (!sub) line2 = esc(item.name);
     }
     const tip = item.meta && item.meta.summary ? ` title="${esc(item.meta.summary.length > 320 ? item.meta.summary.slice(0, 320) + "…" : item.meta.summary)}"` : "";
-    const linked = item.meta && item.meta.oneshot ? " os-linked" : "";   // one shot trouvé : trait bleu sous la couverture
-    return `<a class="card album${linked}" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
+    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
       ${coverHtml(item, badge + qualityBadge(item) + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>${item.meta ? `<button class="info sum" type="button" data-sum="${item.id}" title="Résumé" aria-label="Résumé">…</button>` : ""}`)}
       <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;
@@ -1819,7 +1818,8 @@
     const prog = running ? (t.total ? `${t.done || 0} / ${t.total}<div class="pbar"><i style="width:${pct}%"></i></div>` : `<div class="pbar indet"><i></i></div>`) : "";
     const when = running ? (t.started_at ? "depuis " + fmtDate(t.started_at) : "en cours") : t.finished_at ? "terminée " + fmtDate(t.finished_at) : "pas encore lancée";
     const state = t.state === "stopping" ? "Arrêt en cours…" : running ? "En cours" : "Au repos";
-    const btn = t.state === "running" ? `<button class="btn" type="button" data-task-stop="${t.id}">Arrêter</button>` : "";
+    const btn = t.state === "running" ? `<button class="btn" type="button" data-task-stop="${t.id}">Arrêter</button>`
+      : t.state === "stopping" ? `<button class="btn danger" type="button" data-task-kill title="La tâche ne s'arrête pas ? Redémarre Bulle pour la couper net">Forcer l'arrêt…</button>` : "";
     return `<tr class="${running ? "run" : ""}"><td><b>${esc(t.label)}</b>${t.detail ? `<br><small class="muted">${esc(t.detail)}</small>` : ""}</td><td>${state}</td><td class="num">${prog}</td><td>${esc(when)}</td><td class="act">${btn}</td></tr>`;
   }
   function renderTasks(box, list, recent = []) {
@@ -1841,7 +1841,18 @@
     tasksTimer = setTimeout(pollTasks, 2000);
   }
   main.addEventListener("click", async e => {
-    const one = e.target.closest("[data-task-stop]"), all = e.target.closest("[data-tasks-stopall]");
+    const one = e.target.closest("[data-task-stop]"), all = e.target.closest("[data-tasks-stopall]"), kill = e.target.closest("[data-task-kill]");
+    if (kill) {
+      if (!confirm("Forcer l'arrêt redémarre Bulle.\n\nToutes les tâches en cours sont coupées net et le site est inaccessible quelques secondes. Un scan reprendra au démarrage. Vos fichiers BD ne sont jamais modifiés.\n\nÀ utiliser seulement si « Arrêter » n'aboutit pas. Redémarrer Bulle ?")) return;
+      try {
+        await api("/api/tasks/kill", { method: "POST", body: JSON.stringify({ confirm: true }), headers: { "Content-Type": "application/json" } });
+      } catch (_) { /* le serveur coupe la connexion en redémarrant */ }
+      clearTimeout(tasksTimer);
+      toast(`<div class="spinner"></div> Bulle redémarre…`, { sticky: true });
+      const back = async () => { try { await api("/api/auth/status"); location.reload(); } catch (_) { setTimeout(back, 2000); } };
+      setTimeout(back, 3000);
+      return;
+    }
     if (!one && !all) return;
     try {
       const j = await api(one ? `/api/tasks/${one.dataset.taskStop}/stop` : "/api/tasks/stop", { method: "POST" });

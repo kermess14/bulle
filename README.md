@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.38.1)
+# Bulle — lecteur de BD maison (v0.38.3)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -142,6 +142,8 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Trait bleu des one shots sur le répertoire (v0.38.3)**. Le trait bleu n'est plus posé sur la carte du fichier (album) mais seulement sous la couverture du **dossier** d'un one shot (fiche Bédéthèque d'un tome unique).
+- **Tâches : « Forcer l'arrêt » (v0.38.2)**. Quand une tâche ne s'arrête pas après « Arrêter » (elle passe en « Arrêt en cours… »), un bouton **Forcer l'arrêt…** apparaît sur sa ligne. Après un avertissement, il redémarre Bulle (Docker relance le conteneur tout seul) : toutes les tâches sont coupées net, le site est inaccessible quelques secondes et un scan reprend au démarrage. Les fichiers BD ne sont jamais modifiés. La page se recharge toute seule quand Bulle est revenu.
 - **Tâches : les recherches faites à la main apparaissent (v0.38.1)**. Une recherche de série ou de one shot, ou la lecture d'un résumé, se fait en quelques secondes : elle ne « tourne » donc jamais assez longtemps pour figurer dans la liste. La page Tâches garde désormais un journal d'**Activité récente** (les 15 dernières actions : recherches, résumés, lots, avec l'heure) et la « dernière exécution » des lignes Bédéthèque et Résumés en est tirée. Le journal est en mémoire : il repart de zéro au redémarrage.
 - **Page « Tâches » et trait bleu des one shots (v0.38.0)**. Réglages → **Tâches** (administrateur) : la liste de tout ce que Bulle fait en arrière-plan (scan, couvertures et nombre de pages, mesure HD/SD, résumés et fiches Bédéthèque), avec l'avancement, la dernière exécution et un bouton **Arrêter** par tâche (et « Tout arrêter »). L'arrêt est coopératif : la tâche termine l'élément en cours, puis s'interrompt, rien n'est laissé à moitié écrit. La page se rafraîchit toute seule toutes les 2 secondes. Côté grille, un dossier qui contient un one shot (fiche Bédéthèque d'un seul tome) reçoit le même **trait bleu** que les one shots d'un dossier « One shots ».
 - **Détection des cases : cases collées, rectangles de texte, bords de planche (v0.37.0)**. Mise au point sur les

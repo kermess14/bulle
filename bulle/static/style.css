@@ -1575,8 +1575,8 @@ img.pavatar { object-fit: cover; padding: 0; }
 
 /* icône d'un message (⚠) : taille d'une lettre, quel que soit l'habillage */
 .toast > svg { width: 20px; height: 20px; flex: none; }
-/* one shot déjà trouvé sur Bédéthèque (ou BDfugue) : un trait bleu sous la couverture */
-.card.album.os-linked .title::before, .card.folder.os-linked .title::before { content: ""; display: block; height: 4px; border-radius: 2px; background: #2f8cff; margin: 0 0 5px; }
+/* one shot trouvé sur Bédéthèque (ou BDfugue) : un trait bleu sous la couverture de son dossier (jamais sur le fichier) */
+.card.folder.os-linked .title::before { content: ""; display: block; height: 4px; border-radius: 2px; background: #2f8cff; margin: 0 0 5px; }
 /* recherche : albums regroupés par auteur */
 h3.byauthor { margin: 18px 0 10px; font-size: 15px; font-weight: 700; }
 h3.byauthor small { font-weight: 400; margin-left: 6px; }
@@ -1587,3 +1587,5 @@ h3.byauthor small { font-weight: 400; margin-left: 6px; }
 .coltable.tasks tr.run td:first-child { border-left: 3px solid var(--accent); }
 .pbar.indet i { width: 35%; animation: tasks-slide 1.2s ease-in-out infinite alternate; }
 @keyframes tasks-slide { from { margin-left: 0; } to { margin-left: 65%; } }
+
+.btn.danger { border-color: var(--warn); color: var(--warn); }
