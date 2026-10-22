@@ -58,10 +58,13 @@
   let item = null, pages = 0, current = -1, shown = [], folderHref = "/";
   const aspects = {};            // n -> largeur/hauteur de la page (connue après chargement)
   const images = new Map();      // n -> Image (préchargées / chargées)
-  let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1, navBusy = false, navSince = 0;
+  let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1, lastSavedPanel = -1, navBusy = false, navSince = 0;
   const busy = () => navBusy && Date.now() - navSince < 4000;   // garde-fou : jamais bloqué plus de 4 s
+  let resume = null;            // reprise à la case près {page, panel, count}, utilisée une seule fois à l'ouverture
   let panelIdx = -1;             // case par case : -1 = page entière, sinon index dans l'ordre de lecture
   const panelsCache = new Map(); // n -> {panels, rtl}
+  let panelsGen = 0;             // change à chaque bascule du sens de lecture : une réponse demandée avant n'est plus bonne
+  let isAdmin = false;           // la correction manuelle des cases est réservée à l'administrateur
 
   function showMessage(title, text, actions = "") {
     const el = document.createElement("div");
@@ -81,6 +84,7 @@
     if (r.status === 401) { showMessage("Connexion requise", "Ouvrez d'abord la bibliothèque pour vous connecter.", `<a class="btn" href="/">Ouvrir Bulle</a>`); return; }
     if (s && s.profile) { Object.assign(prefs, pick(s.profile)); fit = prefs.reader_fit; manga = !!prefs.reader_manga; mode = MODES.includes(prefs.reader_mode) ? prefs.reader_mode : "single"; applyPrefs(); }
     if (s && s.global && s.global.img_tag) imgTag = s.global.img_tag;
+    isAdmin = !!(s && s.role === "admin");
     loadAlbumMemory();
     if (!r.ok) { showMessage("Introuvable", item.error || "", `<a class="btn" href="/">Retour</a>`); return; }
     nameEl.textContent = item.meta && item.meta.title ? `${item.meta.number != null ? "T" + item.meta.number + " · " : ""}${item.meta.title}` : item.name;
@@ -99,20 +103,30 @@
     slider.max = pages;
     let start = 0;
     if (params.has("page")) start = +params.get("page") || 0;
-    else if (item.progress && !item.progress.completed) start = item.progress.page || 0;
+    else if (item.progress && !item.progress.completed) {
+      start = item.progress.page || 0;
+      // reprise à la case près : seulement si le nombre de cases est le même qu'à l'enregistrement (sinon début de page)
+      if (item.progress.panel != null && item.progress.panel_count) resume = { page: start, panel: item.progress.panel, count: item.progress.panel_count };
+    }
     applyFit(); applyMode(); applyManga(false);
     // iPad / iPhone : le plein écran de Safari ajoute une croix de fermeture impossible à masquer ; la vraie solution
     // est d'installer Bulle sur l'écran d'accueil (manifeste), donc pas de bouton plein écran sur iOS
     const isIOS = /iP(ad|hone|od)/.test(navigator.platform) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
     if (!document.fullscreenEnabled || isIOS) fsBtn.hidden = true;
-    go(Math.min(Math.max(0, start), pages - 1), { save: false });
+    const st0 = Math.min(Math.max(0, start), pages - 1);
+    go(st0, { save: false, resume: resume && resume.page === st0 ? resume : null });
+    resume = null;
     scheduleHide();
   }
 
   // ---------------------------------------------------------------- largeur d'image demandée au serveur
-  const stepW = w => Math.min(3840, Math.ceil(w / 160) * 160);   // paliers de 160 px : URLs stables, caches réutilisés
-  // téléphone ou tablette (tactile, petit écran) : la carte graphique y peine sur une image de 3840 px qu'on fait glisser
-  // et zoomer en case par case (case noire le temps qu'elle la redessine) ; 2560 px suffisent à une case nette
+  // mêmes paliers que le serveur (comics.pick_width : multiples de 100 px, de 300 à 3000) : une adresse par image réellement
+  // servie ; avant, des paliers de 160 px jusqu'à 3840 donnaient plusieurs adresses (donc plusieurs copies dans le cache du
+  // navigateur et des requêtes en double) pour la même image à 3000 px
+  const MIN_W = 300, MAX_W = 3000, STEP_W = 100;
+  const stepW = w => Math.min(MAX_W, Math.max(MIN_W, Math.ceil(w / STEP_W) * STEP_W));
+  // téléphone ou tablette (tactile, petit écran) : la carte graphique y peine sur une image de 3000 px qu'on fait glisser
+  // et zoomer en case par case (case noire le temps qu'elle la redessine) ; 2600 px suffisent à une case nette
   const smallTouch = () => navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 1100;
   function wantedWidth(n) {
     if (prefs.reader_quality === "original" || (mode === "single" && fit === "original")) return 0;
@@ -125,7 +139,7 @@
     else css = fit === "width" ? vw : Math.min(vw, vh * asp);
     const factor = mode === "panels" ? 2 : prefs.reader_quality === "high" ? 1.5 : 1;   // cases : nettes dès la première image, sans recharger
     const w = stepW(css * dpr * factor);
-    return mode === "panels" && smallTouch() ? Math.min(2560, w) : w;
+    return mode === "panels" && smallTouch() ? Math.min(2600, w) : w;
   }
   let imgTag = "";
   // marges blanches rognées (réglage) : pas en case par case, où les cases sont repérées sur la page entière
@@ -188,7 +202,7 @@
     if (mode !== "double") return [n];
     return computeSpreads().find(sp => sp.includes(n)) || [n];
   }
-  async function go(n, { save = true, panel = "first" } = {}) {
+  async function go(n, { save = true, panel = "first", resume: rs = null } = {}) {
     if (n < 0) { pendingStep = 0; flash("Début de l'album"); return; }
     if (n >= pages) { pendingStep = 0; showEnd(); return; }
     hideEnd();
@@ -243,6 +257,7 @@
       fitImages();
       stage.scrollTop = 0; stage.scrollLeft = 0;
       const count = data ? viewsOf(data, n).length : 0;
+      if (rs && count === rs.count && rs.panel < count) panelIdx = rs.panel; else
       panelIdx = panel === "keep" ? Math.min(panelIdx, count - 1) : panel === "last" ? count - 1 : (prefs.reader_panels_full_first || !count ? -1 : 0);
       applyPanel(false);
       if (!data) panelsP.then(d => {        // cases arrivées après coup : on glisse sur la bonne case
@@ -303,6 +318,7 @@
   // ---------------------------------------------------------------- case par case
   async function getPanels(n, lazy, attempt = 0) {
     if (panelsCache.has(n)) return panelsCache.get(n);
+    const gen = panelsGen;
     const p = (async () => {
       try {
         // date du fichier et version de la détection dans l'adresse : le navigateur peut garder la réponse pour toujours ;
@@ -321,6 +337,9 @@
     })();
     panelsCache.set(n, p);
     const d = await p;
+    // le sens de lecture a changé pendant la requête : cette réponse n'a pas l'ordre voulu (en manga, l'ordre de droite à
+    // gauche ne vient que si on l'a demandé) ; on ne la garde pas, on redemande dans le bon sens
+    if (gen !== panelsGen) { if (panelsCache.get(n) === p) panelsCache.delete(n); return getPanels(n, lazy, attempt); }
     // une réponse du serveur (même « pas de cases ») porte sa version « v » ; un échec (réseau, erreur du serveur,
     // marquée « error ») n'est pas gardé : la planche sera redemandée à la prochaine visite
     if (d && d.v !== undefined && !d.error) panelsCache.set(n, d); else if (panelsCache.get(n) === p) panelsCache.delete(n);
@@ -535,11 +554,11 @@
     if (d && typeof d.then === "function") { queueStep(dir); return; }   // cases pas encore connues : pas gardé
     const count = d && d.panels instanceof Array ? viewsOf(d).length : 0;
     if (dir > 0) {
-      if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); drainStep(); return; }
+      if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); saveProgress(current); drainStep(); return; }
       go(current + 1);
     } else {
       // en arrière : case précédente ; la page entière n'est une étape que si l'option « page entière d'abord » est active
-      if (panelIdx > 0 || (panelIdx === 0 && prefs.reader_panels_full_first)) { panelIdx -= 1; applyPanel(true); updateCounter(); drainStep(); return; }
+      if (panelIdx > 0 || (panelIdx === 0 && prefs.reader_panels_full_first)) { panelIdx -= 1; applyPanel(true); updateCounter(); saveProgress(current); drainStep(); return; }
       if (current <= 0) { pendingStep = 0; flash("Début de l'album"); return; }
       go(current - 1, { panel: "last" });
     }
@@ -586,6 +605,19 @@
 
   // ---------------------------------------------------------------- défilement continu
   let scrollBuilt = false, scrollObserver = null, scrollTicking = false;
+  const SCROLL_KEEP = 4;   // défilement continu : pages gardées de part et d'autre de la page lue (le reste est libéré)
+  const scrollNear = new Set();   // pages dans la zone chargée d'avance (visibles ou presque)
+  /* Libère les images loin de la page lue : hors de la zone chargée d'avance et à plus de SCROLL_KEEP pages (le cadre garde
+     sa hauteur) ; elles reviennent du cache du navigateur si on remonte. Sans cela, un album de 200 pages parcouru
+     jusqu'au bout garde toutes ses pages décodées en mémoire (tablette, téléphone). */
+  function sweepScroll() {
+    for (const d of scrollEl.children) {
+      const n = +d.dataset.n;
+      if (Math.abs(n - current) <= SCROLL_KEEP || scrollNear.has(n)) continue;
+      const im = d.firstElementChild;
+      if (im && im.getAttribute("src")) im.removeAttribute("src");
+    }
+  }
   function buildScroll() {
     if (scrollBuilt) return;
     scrollBuilt = true;
@@ -601,6 +633,7 @@
     scrollObserver = new IntersectionObserver(entries => {
       for (const e of entries) {
         const im = e.target.querySelector("img"), n = +e.target.dataset.n;
+        if (e.isIntersecting) scrollNear.add(n); else scrollNear.delete(n);
         if (e.isIntersecting && !im.src) {
           im.src = pageUrl(n);
           im.onload = () => { aspects[n] = im.naturalWidth / im.naturalHeight; e.target.style.aspectRatio = String(aspects[n]); };
@@ -618,7 +651,7 @@
     const mid = stage.scrollTop + stage.clientHeight / 2;
     let best = 0;
     for (const d of scrollEl.children) { if (d.offsetTop <= mid) best = +d.dataset.n; else break; }
-    if (best !== current) { current = best; shown = [best]; updateCounter(); saveProgress(best); const u = new URL(location.href); u.searchParams.set("page", best); history.replaceState(null, "", u); }
+    if (best !== current) { current = best; shown = [best]; sweepScroll(); updateCounter(); saveProgress(best); const u = new URL(location.href); u.searchParams.set("page", best); history.replaceState(null, "", u); }
     if (stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2 && current === pages - 1) markEndReached();
   }
   function scrollToPage(n, save = true) {
@@ -647,16 +680,25 @@
   }
 
   // ---------------------------------------------------------------- progression
+  // case affichée (ordre de lecture) et nombre de cases : seulement en case par case, sur la page courante
+  function panelInfo(n) {
+    if (mode !== "panels" || n !== current || panelIdx < 0) return {};
+    const d = panelsCache.get(n);
+    const count = d && d.panels instanceof Array ? viewsOf(d, n).length : 0;
+    return count && panelIdx < count ? { panel: panelIdx, panel_count: count } : {};
+  }
   function saveProgress(n) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      lastSavedPage = n;
-      fetch(`/api/progress/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: n }), keepalive: true }).catch(() => {});
+      const body = Object.assign({ page: n }, panelInfo(n));
+      lastSavedPage = n; lastSavedPanel = body.panel == null ? -1 : body.panel;
+      fetch(`/api/progress/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true }).catch(() => {});
     }, 400);
   }
   window.addEventListener("pagehide", () => {
-    if (current >= 0 && current !== lastSavedPage && navigator.sendBeacon) {
-      navigator.sendBeacon(`/api/progress/${id}`, new Blob([JSON.stringify({ page: current })], { type: "application/json" }));
+    const pi = panelInfo(current);
+    if (current >= 0 && (current !== lastSavedPage || (pi.panel == null ? -1 : pi.panel) !== lastSavedPanel) && navigator.sendBeacon) {
+      navigator.sendBeacon(`/api/progress/${id}`, new Blob([JSON.stringify(Object.assign({ page: current }, pi))], { type: "application/json" }));
     }
   });
 
@@ -709,7 +751,7 @@
     modeBtn.textContent = MODE_LABEL[mode];
     single.hidden = mode !== "single" && mode !== "panels"; spread.hidden = mode !== "double"; scrollEl.hidden = mode !== "scroll";
     if (mode !== "panels") { img.style.transform = ""; panelIdx = -1; pendingStep = 0; dimEl.hidden = true; }
-    $("#pedit").hidden = mode !== "panels";
+    $("#pedit").hidden = mode !== "panels" || !isAdmin;
     if (mode === "scroll") buildScroll();
     applyFit();
   }
@@ -761,7 +803,7 @@
     if (mode === "panels") {
       // les cases gardées n'ont l'ordre manga que si on l'a demandé : on les redemande (le navigateur a déjà les
       // réponses sans cet ordre, le serveur ne calcule que l'ordre manquant)
-      panelsCache.clear();
+      panelsCache.clear(); panelsGen++;
       const n = current;
       getPanels(n).then(() => { if (current === n) { applyPanel(true); updateCounter(); } preloadAround(n); });
     }
@@ -1129,7 +1171,8 @@
       case "f": case "F": cycleFit(); break;
       case "d": case "D": cycleMode(); break;
       case "c": case "C": togglePanels(); break;
-      case "e": case "E": if (mode === "panels") openEditor(); else flash("Passez en case par case (C) pour corriger les cases"); break;
+      case "g": case "G": if (isAdmin && mode === "panels") openDiag(); break;
+      case "e": case "E": if (!isAdmin) break; if (mode === "panels") openEditor(); else flash("Passez en case par case (C) pour corriger les cases"); break;
       case "m": case "M": toggleManga(); break;
       case "r": case "R": toggleTrim(); break;
       case "p": case "P": toggleFullscreen(); break;
@@ -1152,8 +1195,9 @@
      les recalcule plus) ; « Rétablir l'automatique » efface la correction. */
   const PE_MIN = 0.02;   // côté minimal d'une case (fraction de la page), comme côté serveur
   let pe = null;         // éléments de l'éditeur, créés à la première ouverture
-  const peState = { rects: [], sel: -1, drag: null, page: -1, dirty: false, busy: false, draw: false };
-  const editorOpen = () => !!pe && !pe.root.hidden;
+  const peState = { rects: [], sel: -1, drag: null, page: -1, dirty: false, busy: false, draw: false, custom: false };
+  let pd = null;         // écran de diagnostic (administrateur), créé à la première ouverture
+  const editorOpen = () => (!!pe && !pe.root.hidden) || (!!pd && !pd.root.hidden);
 
   function peBuild() {
     const root = document.createElement("div");
@@ -1161,17 +1205,24 @@
     root.innerHTML = `<div class="pe-bar"><div class="pe-title">Corriger les cases <span class="pe-count"></span></div>
       <div class="pe-actions"><button type="button" data-a="draw">+ Nouvelle case</button>
       <button type="button" data-a="del" disabled>Supprimer la case</button>
+      <button type="button" data-a="earlier" disabled title="Lire cette case plus tôt ([)">◀ Plus tôt</button>
+      <button type="button" data-a="later" disabled title="Lire cette case plus tard (])">Plus tard ▶</button>
+      <button type="button" data-a="order" title="Ordre de lecture : automatique, ou fixé par vos soins">Ordre : auto</button>
+      <button type="button" data-a="full" title="Aucune case : la planche est lue entière">Page entière</button>
       <button type="button" data-a="auto">Rétablir l'automatique</button>
       <button type="button" data-a="cancel">Annuler</button>
       <button type="button" data-a="save" class="primary">Enregistrer</button></div></div>
+      <div class="pe-warn" hidden>⚠ Le fichier de cet album a changé depuis cette correction : vérifiez-la, puis « Enregistrer » pour la garder (ou « Rétablir l'automatique »).</div>
       <div class="pe-stage"><div class="pe-page"><img alt="" draggable="false"><div class="pe-layer"></div></div></div>
-      <div class="pe-help">« + Nouvelle case » (ou Maj + glisser) puis tracez un rectangle, même sur une grande case (encart) · touchez une case pour la choisir, déplacez-la ou tirez ses poignées · Suppr pour l'enlever · Entrée pour enregistrer · Échap pour annuler</div>`;
+      <div class="pe-help">« + Nouvelle case » (ou Maj + glisser) puis tracez un rectangle, même sur une grande case (encart) · touchez une case pour la choisir, déplacez-la ou tirez ses poignées · Suppr pour l'enlever · Entrée pour enregistrer · Échap pour annuler · « Ordre » : [ et ] déplacent la case choisie dans l'ordre de lecture · <a href="/api/panels/export" download>Exporter les corrections</a> (pour le banc d'essai)</div>`;
     document.body.appendChild(root);
     pe = { root, img: root.querySelector("img"), layer: root.querySelector(".pe-layer"), count: root.querySelector(".pe-count"),
-           del: root.querySelector('[data-a="del"]'), save: root.querySelector('[data-a="save"]'), auto: root.querySelector('[data-a="auto"]') };
+           del: root.querySelector('[data-a="del"]'), save: root.querySelector('[data-a="save"]'), auto: root.querySelector('[data-a="auto"]'),
+           earlier: root.querySelector('[data-a="earlier"]'), later: root.querySelector('[data-a="later"]'), order: root.querySelector('[data-a="order"]'),
+           warn: root.querySelector(".pe-warn") };
     root.addEventListener("click", e => {
       const a = e.target.closest("[data-a]"); if (!a || peState.busy) return;
-      ({ draw: peToggleDraw, del: peDelete, cancel: peClose, save: peSave, auto: peAuto })[a.dataset.a]();
+      ({ draw: peToggleDraw, del: peDelete, cancel: peClose, save: peSave, auto: peAuto, earlier: () => peMove(-1), later: () => peMove(1), order: peToggleOrder, full: peFull })[a.dataset.a]();
     });
     pe.layer.addEventListener("pointerdown", pePointerDown);
     pe.layer.addEventListener("pointermove", pePointerMove);
@@ -1183,13 +1234,15 @@
       if (e.key === "Escape") { if (peState.draw) peToggleDraw(); else peClose(); }
       else if (e.key === "Delete" || e.key === "Backspace") peDelete();
       else if (e.key === "Enter") peSave();
+      else if (e.key === "[") peMove(-1);
+      else if (e.key === "]") peMove(1);
       else if (e.key === "Tab" && peState.rects.length) { peState.sel = (peState.sel + (e.shiftKey ? -1 : 1) + peState.rects.length) % peState.rects.length; peDraw(); }
       else return;
       e.preventDefault();
     });
   }
   async function openEditor() {
-    if (mode !== "panels" || current < 0 || peState.busy) return;
+    if (!isAdmin || mode !== "panels" || current < 0 || peState.busy) return;
     if (!pe) peBuild();
     const n = current;
     const d = await getPanels(n);
@@ -1200,11 +1253,12 @@
       const { panels, order } = readingPanels(d);
       for (const i of order) if (panels[i] && panels[i].length === 4) rects.push(panels[i].map(v => Math.max(0, Math.min(1, +v))));
     }
-    Object.assign(peState, { rects, sel: -1, drag: null, page: n, dirty: false, draw: false });
+    Object.assign(peState, { rects, sel: -1, drag: null, page: n, dirty: false, draw: false, custom: !!d.custom_order });
     pe.root.classList.remove("drawing"); pe.root.querySelector('[data-a="draw"]').classList.remove("on");
     pe.img.onload = peDraw;
     pe.img.src = img.currentSrc || img.src || `/api/page/${id}/${n}?w=1600&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
     pe.auto.hidden = !d.manual;
+    pe.warn.hidden = !(d.manual && d.stale);
     pe.root.hidden = false;
     body.classList.add("pe-open");
     peDraw();
@@ -1234,12 +1288,28 @@
     });
     pe.count.textContent = peState.rects.length ? `· ${peState.rects.length} case${peState.rects.length > 1 ? "s" : ""}` : "· aucune (la planche reste entière)";
     pe.del.disabled = peState.sel < 0;
+    pe.earlier.disabled = peState.sel < 1;
+    pe.later.disabled = peState.sel < 0 || peState.sel >= peState.rects.length - 1;
+    pe.order.textContent = peState.custom ? "Ordre : fixé" : "Ordre : auto";
+    pe.order.classList.toggle("on", peState.custom);
   }
   function peDelete() {
     if (peState.sel < 0) return;
     peState.rects.splice(peState.sel, 1);
     peState.sel = -1; peState.dirty = true; peDraw();
   }
+  // ordre de lecture voulu : déplacer la case choisie fixe l'ordre (les numéros affichés sont alors l'ordre de lecture)
+  function peMove(dir) {
+    const i = peState.sel, j = i + dir;
+    if (i < 0 || j < 0 || j >= peState.rects.length) return;
+    [peState.rects[i], peState.rects[j]] = [peState.rects[j], peState.rects[i]];
+    peState.sel = j; peState.custom = true; peState.dirty = true; peDraw();
+  }
+  function peToggleOrder() {
+    peState.custom = !peState.custom; peState.dirty = true; peDraw();
+    flash(peState.custom ? "Ordre fixé : celui des numéros" : "Ordre automatique : recalculé à l'enregistrement");
+  }
+  function peFull() { peState.rects = []; peState.sel = -1; peState.custom = false; peState.dirty = true; peDraw(); peSave(); }
   function pePoint(e) {
     const b = pe.layer.getBoundingClientRect();
     return { x: Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)), y: Math.max(0, Math.min(1, (e.clientY - b.top) / b.height)), w: b.width, h: b.height };
@@ -1299,9 +1369,9 @@
     if (peState.busy) return;
     peState.busy = true; pe.save.disabled = true;
     try {
-      const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ panels: peOrdered() }) });
+      const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ panels: peOrdered(), custom_order: peState.custom }) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { flash(d.error || "Enregistrement impossible"); return; }
+      if (!r.ok) { flash(r.status === 403 ? "Réservé à l'administrateur" : d.error || "Enregistrement impossible"); return; }
       item.panels_m = d.stamp || item.panels_m;
       panelsCache.set(peState.page, d);
       peClose();
@@ -1316,7 +1386,7 @@
     try {
       const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "DELETE" });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { flash(d.error || "Rétablissement impossible"); return; }
+      if (!r.ok) { flash(r.status === 403 ? "Réservé à l'administrateur" : d.error || "Rétablissement impossible"); return; }
       item.panels_m = d.stamp || item.panels_m;
       panelsCache.delete(peState.page);
       peClose();
@@ -1324,6 +1394,81 @@
       if (peState.page === current) go(current, { save: false });
     } catch (e) { flash("Rétablissement impossible"); }
     finally { peState.busy = false; }
+  }
+
+
+  // ---------------------------------------------------------------- diagnostic des cases (administrateur)
+  /* Touche G, en case par case : la planche entière avec les cases telles que le serveur les a gardées (bleu : numéro
+     dans l'ordre occidental et rang en manga), les cadrages « grow » (orange pointillé) et les regroupements « join »
+     (violet pointillé), et les informations de la détection. « Mesurer » lance une détection fraîche côté serveur
+     (taille analysée, temps par étape, budget des cadres) sans rien changer en base : coûteux, jamais lancé tout seul. */
+  function pdBuild() {
+    const root = document.createElement("div");
+    root.className = "pe pd"; root.hidden = true;
+    root.innerHTML = `<div class="pe-bar"><div class="pe-title">Diagnostic des cases <span class="pe-count"></span></div>
+      <div class="pe-actions"><button type="button" data-a="measure">Mesurer (détection fraîche)</button>
+      <button type="button" data-a="close" class="primary">Fermer</button></div></div>
+      <div class="pe-stage"><div class="pe-page"><img alt="" draggable="false"><div class="pe-layer pd-layer"></div></div><div class="pd-info"></div></div>`;
+    document.body.appendChild(root);
+    pd = { root, img: root.querySelector("img"), layer: root.querySelector(".pd-layer"), info: root.querySelector(".pd-info"), count: root.querySelector(".pe-count"), d: null, fresh: null, n: -1 };
+    root.addEventListener("click", e => {
+      const a = e.target.closest("[data-a]"); if (!a) return;
+      if (a.dataset.a === "close") pdClose(); else if (a.dataset.a === "measure") pdMeasure();
+    });
+    for (const t of ["contextmenu", "wheel"]) root.addEventListener(t, e => { if (t === "contextmenu") e.preventDefault(); e.stopPropagation(); }, { passive: t !== "contextmenu" });
+    document.addEventListener("keydown", e => {
+      if (!pd || pd.root.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "Escape" || e.key === "g" || e.key === "G") { pdClose(); e.preventDefault(); }
+    });
+  }
+  async function openDiag() {
+    if (!isAdmin || mode !== "panels" || current < 0) return;
+    if (!pd) pdBuild();
+    const n = current, d = await getPanels(n);
+    if (!d || d.error) { flash("Cases indisponibles pour le moment"); return; }
+    Object.assign(pd, { d, fresh: null, n });
+    pd.img.onload = pdDraw;
+    pd.img.src = img.currentSrc || img.src || `/api/page/${id}/${n}?w=1600&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
+    pd.root.hidden = false; body.classList.add("pe-open");
+    pdDraw();
+  }
+  function pdClose() { if (pd) { pd.root.hidden = true; body.classList.remove("pe-open"); } }
+  async function pdMeasure() {
+    pd.info.dataset.busy = "1"; pdDraw();
+    try {
+      const r = await fetch(`/api/panels/${id}/${pd.n}/diag`, { cache: "no-store" });
+      pd.fresh = r.ok ? await r.json() : { error: r.status === 403 ? "Réservé à l'administrateur" : `Erreur ${r.status}` };
+    } catch { pd.fresh = { error: "Mesure impossible" }; }
+    delete pd.info.dataset.busy; pdDraw();
+  }
+  const pdPct = r => `left:${r[0] * 100}%;top:${r[1] * 100}%;width:${(r[2] - r[0]) * 100}%;height:${(r[3] - r[1]) * 100}%`;
+  function pdDraw() {
+    if (!pd || !pd.d) return;
+    const d = pd.d, f = pd.fresh && !pd.fresh.error ? pd.fresh : null;
+    const panels = d.panels instanceof Array ? d.panels : [], rtl = d.rtl instanceof Array ? d.rtl : [];
+    const L = pd.layer; L.textContent = "";
+    const add = (cls, r, html) => { const el = document.createElement("div"); el.className = "pe-r pd-r " + cls; el.style.cssText = pdPct(r); el.innerHTML = html || ""; L.appendChild(el); };
+    for (const [a, b] of (d.join instanceof Array ? d.join : [])) if (panels[a] && panels[b]) add("pd-join", [Math.min(panels[a][0], panels[b][0]), Math.min(panels[a][1], panels[b][1]), Math.max(panels[a][2], panels[b][2]), Math.max(panels[a][3], panels[b][3])], `<em>join ${a + 1}+${b + 1}</em>`);
+    if (d.grow) for (const [k, r] of Object.entries(d.grow)) if (r && r.length === 4) add("pd-grow", r, `<em>grow ${+k + 1}</em>`);
+    panels.forEach((r, i) => { const m = rtl.length === panels.length ? rtl.indexOf(i) + 1 : 0; add("pd-panel", r, `<b>${i + 1}</b>${m ? `<small>manga ${m}</small>` : ""}`); });
+    pd.count.textContent = `· page ${pd.n + 1} · ${panels.length} case${panels.length > 1 ? "s" : ""}`;
+    const row = (k, v, bad) => `<tr><th>${esc(k)}</th><td${bad ? ' class="bad"' : ""}>${esc(String(v))}</td></tr>`;
+    let h = `<table>` + row("Version du détecteur (serveur)", item.panels_v ?? "?") + row("Version du résultat", d.v ?? "?", d.v !== undefined && item.panels_v && d.v !== item.panels_v)
+      + row("Origine", d.manual ? "corrigé à la main" : "base de données (détection gardée)") + row("Cases", panels.length)
+      + row("Ordre manga calculé", d.rtl_full === false ? "non (occidental seulement)" : "oui") + row("Cadrages grow", d.grow ? Object.keys(d.grow).length : 0)
+      + row("Regroupements join", d.join ? d.join.length : 0);
+    if (f) {
+      const g = f.diag || {}, st = f.stored;
+      h += row("— Détection fraîche —", "") + row("Image source", g.source_size ? g.source_size.join(" × ") : "?") + row("Dimensions analysées", g.work_size ? g.work_size.join(" × ") : "?")
+        + row("Fond de référence", g.bg ?? "?") + row("Second essai (fond plus sombre)", g.retry ? "oui" : "non")
+        + row("Temps total", `${g.ms_total ?? "?"} ms`) + row("… découpage", `${g.ms_split ?? "?"} ms`) + row("… ordre manga", `${g.ms_manga ?? "?"} ms`) + row("… textes (bulles)", `${g.ms_text ?? "?"} ms`)
+        + row("Tests de couverture des cadres", `${(g.frame_calls || 0).toLocaleString("fr-FR")} (budget ${(g.frame_budget || 0).toLocaleString("fr-FR")})`, g.budget_exhausted)
+        + row("Budget des cadres épuisé", g.budget_exhausted ? "oui" : "non", g.budget_exhausted)
+        + row("Cases fraîches", f.panels.length) + row("Identique à la base", f.same_as_stored === null ? "— (corrigé à la main)" : f.same_as_stored ? "oui" : "NON", f.same_as_stored === false)
+        + (st ? row("En base", `v${st.v}${st.manual ? " · manuel" : ""}${st.current_version ? "" : " · ancienne version"}`, !st.current_version && !st.manual) : row("En base", "rien"));
+    } else if (pd.fresh && pd.fresh.error) h += row("Mesure", pd.fresh.error, true);
+    else h += row("Mesure détaillée", pd.info.dataset.busy ? "en cours…" : "bouton « Mesurer »");
+    pd.info.innerHTML = h + "</table>" + `<p class="pd-legend"><i class="k1"></i> case (n° occidental, rang manga) <i class="k2"></i> grow <i class="k3"></i> join</p>`;
   }
 
   // ---------------------------------------------------------------- boutons

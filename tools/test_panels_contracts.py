@@ -133,15 +133,76 @@ class Contracts(unittest.TestCase):
         self.assertEqual(len(P._edge_ratios(mask, (0, 0, 0, 50), 0, 0, 10, blockers=True)), 4)
         self.assertEqual(len(P._edge_ratios(mask, (0, 0, 50, 50), 1, 5, 15, blockers=True)), 4)
 
+    def test_diag_does_not_change_result(self):
+        """Le rapport de mesures (diagnostic de l'administrateur) ne change ni les cases ni leur ordre."""
+        im, boxes = grid_page()
+        plain = P.detect_panels(im)
+        diag: dict = {}
+        measured = P.detect_panels(im, diag=diag)
+        self.assertEqual(plain, measured)
+        for k in ("source_size", "work_size", "bg", "frame_budget", "ms_total", "ms_split", "frame_calls", "budget_exhausted"):
+            self.assertIn(k, diag, k)
+        self.assertEqual(diag["source_size"], list(im.size))
+        self.assertIs(diag["budget_exhausted"], False)
+        self.assertGreater(diag["ms_total"], 0)
+        # page sans cases : le rapport est tout de même complet
+        d2: dict = {}
+        P.detect_panels(Image.new("RGB", (400, 600), (255, 255, 255)), diag=d2)
+        self.assertIn("ms_total", d2)
+
     def test_version_is_int(self):
         self.assertIsInstance(P.PANELS_VERSION, int)
         self.assertGreaterEqual(P.PANELS_VERSION, 18)
+
+
+class EngineInterface(unittest.TestCase):
+    """Interface stable des détecteurs : un moteur défaillant ne casse jamais le lecteur."""
+
+    def setUp(self):
+        self.im = Image.new("RGB", (600, 900), "white")
+        d = ImageDraw.Draw(self.im)
+        for b in ([20, 20, 290, 430], [310, 20, 580, 430], [20, 450, 580, 880]):
+            d.rectangle(b, outline="black", width=5)
+
+    def tearDown(self):
+        P.ENGINES.pop("t_bad", None)
+        P.ENGINES.pop("t_boom", None)
+
+    def test_classic_goes_through_interface(self):
+        d = P.run_detector(self.im)
+        self.assertEqual(d["panels"], P.detect_panels(self.im)["panels"])
+        self.assertTrue(P.valid_result(d))
+
+    def test_unknown_engine_falls_back_to_classic(self):
+        self.assertEqual(P.run_detector(self.im, "n_existe_pas")["panels"], P.detect_panels(self.im)["panels"])
+
+    def test_bad_result_or_crash_falls_back(self):
+        P.register_engine("t_bad", lambda img, **k: {"panels": [[0.5, 0.5, 0.2, 0.9]], "rtl": [0], "v": 1})
+        P.register_engine("t_boom", lambda img, **k: 1 / 0)
+        want = P.detect_panels(self.im)["panels"]
+        self.assertEqual(P.run_detector(self.im, "t_bad")["panels"], want)
+        self.assertEqual(P.run_detector(self.im, "t_boom")["panels"], want)
+
+    def test_valid_result_rules(self):
+        ok = {"panels": [[0, 0, 0.5, 1]], "rtl": [0], "v": 3}
+        self.assertTrue(P.valid_result(ok))
+        for bad in (None, [], {"panels": [[0, 0, 1.2, 1]], "rtl": [0], "v": 1}, {"panels": [[0, 0, 1, 1]], "rtl": [1], "v": 1},
+                    {"panels": [[0, 0, 1, 1]], "rtl": [0]}, {"panels": [[0, 0, 1]], "rtl": [0], "v": 1},
+                    {"panels": [[0, 0, float("nan"), 1]], "rtl": [0], "v": 1}):
+            self.assertFalse(P.valid_result(bad), bad)
 
 
 class ManualPanels(unittest.TestCase):
     """Cases tracées à la main (éditeur du lecteur) : validation, ordre de lecture, ordre manga."""
 
     GRID = [[0.5, 0.0, 1.0, 0.5], [0.0, 0.5, 1.0, 1.0], [0.0, 0.0, 0.5, 0.5]]   # volontairement dans le désordre
+
+    def test_custom_order_kept(self):
+        d = P.manual_panels(self.GRID, custom_order=True)
+        self.assertTrue(d["custom_order"])
+        self.assertEqual(d["panels"], self.GRID)                 # l'ordre voulu est gardé tel quel
+        self.assertEqual(d["rtl"], [0, 1, 2])                     # et vaut aussi en sens manga
+        self.assertNotIn("custom_order", P.manual_panels(self.GRID))
 
     def test_order_and_shape(self):
         d = P.manual_panels(self.GRID)
