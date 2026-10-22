@@ -38,7 +38,7 @@ from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe
 from .panels import PANELS_VERSION, detect_panels, manual_panels
 from . import lots as lots_mod
 
-VERSION = "0.41.1"
+VERSION = "0.42.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -1189,6 +1189,41 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             with panels_running_lock:
                 panels_running.pop(key, None)
             mine.set()
+
+    @app.route("/api/panels/<int:node_id>/<int:index>/diag")
+    def api_panels_diag(node_id: int, index: int):
+        """Diagnostic d'une planche (administrateur, à la demande) : l'état gardé en base, et une détection fraîche mesurée
+        (taille analysée, temps par étape, tests de couverture, budget des cadres épuisé ou non). Ne change rien en base :
+        les cases gardées restent celles de la lecture normale. Coûteux (une détection complète) : jamais appelé tout seul."""
+        require_admin()
+        node = get_node(node_id, "album")
+        cached = lib.panels_get(node_id, index)
+        stored = None
+        if cached is not None:
+            stored = {"v": cached.get("v"), "manual": bool(cached.get("manual")), "rtl_full": cached.get("rtl_full", True),
+                      "count": len(cached.get("panels") or []), "current_version": cached.get("v") == PANELS_VERSION}
+        try:
+            path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
+            with Image.open(path or io.BytesIO(data)) as im:
+                im.load()
+                if not panels_sem.acquire(timeout=panels_wait):
+                    return panels_busy()
+                diag: dict = {}
+                try:
+                    last = (node.get("page_count") or 0) - 1
+                    fresh = detect_panels(im, retry=index >= 3 and (last < 0 or index < last), manga=True, diag=diag)
+                finally:
+                    panels_sem.release()
+        except AlbumError as e:
+            abort(415, description=str(e))
+        same = None
+        if cached is not None and not cached.get("manual"):
+            same = cached.get("panels") == fresh["panels"] and cached.get("v") == PANELS_VERSION
+        resp = jsonify({"detector_version": PANELS_VERSION, "stored": stored, "same_as_stored": same,
+                        "panels": fresh["panels"], "rtl": fresh["rtl"], "grow": fresh.get("grow") or {},
+                        "join": fresh.get("join") or [], "diag": diag})
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.route("/api/panels/<int:node_id>/<int:index>/manual", methods=["PUT", "POST"])
     def api_panels_manual_set(node_id: int, index: int):

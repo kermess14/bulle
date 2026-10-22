@@ -133,6 +133,23 @@ class Contracts(unittest.TestCase):
         self.assertEqual(len(P._edge_ratios(mask, (0, 0, 0, 50), 0, 0, 10, blockers=True)), 4)
         self.assertEqual(len(P._edge_ratios(mask, (0, 0, 50, 50), 1, 5, 15, blockers=True)), 4)
 
+    def test_diag_does_not_change_result(self):
+        """Le rapport de mesures (diagnostic de l'administrateur) ne change ni les cases ni leur ordre."""
+        im, boxes = grid_page()
+        plain = P.detect_panels(im)
+        diag: dict = {}
+        measured = P.detect_panels(im, diag=diag)
+        self.assertEqual(plain, measured)
+        for k in ("source_size", "work_size", "bg", "frame_budget", "ms_total", "ms_split", "frame_calls", "budget_exhausted"):
+            self.assertIn(k, diag, k)
+        self.assertEqual(diag["source_size"], list(im.size))
+        self.assertIs(diag["budget_exhausted"], False)
+        self.assertGreater(diag["ms_total"], 0)
+        # page sans cases : le rapport est tout de même complet
+        d2: dict = {}
+        P.detect_panels(Image.new("RGB", (400, 600), (255, 255, 255)), diag=d2)
+        self.assertIn("ms_total", d2)
+
     def test_version_is_int(self):
         self.assertIsInstance(P.PANELS_VERSION, int)
         self.assertGreaterEqual(P.PANELS_VERSION, 18)

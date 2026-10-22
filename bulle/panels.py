@@ -37,6 +37,7 @@ strict à 10 px ; le test accepte maintenant ce dépassement (cas b-18821_11 : u
 from __future__ import annotations
 
 import re
+import time
 from bisect import bisect_left, bisect_right
 from typing import Optional
 
@@ -591,10 +592,12 @@ def _join_segments(items: list[tuple[int, int, int]], gap: int) -> list[tuple[in
 
 
 def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: int, h: int, cov: float = 0.85,
-                      join: int = 0) -> list[tuple]:
+                      join: int = 0, stats: Optional[dict] = None) -> list[tuple]:
     """Rectangles fermés : bord haut, bord bas, bord gauche, bord droit, chacun couvrant ≥ 85 % de son côté (à FRAME_TOL près).
     On part des paires de bords verticaux (gauche/droite), puis des paires horizontaux (haut/bas) : une bulle qui coupe un trait
-    ne l'empêche pas d'être reconnu, ses morceaux s'additionnent."""
+    ne l'empêche pas d'être reconnu, ses morceaux s'additionnent. `stats` (diagnostic, facultatif) : dictionnaire où l'on
+    cumule « frame_calls » (tests de couverture faits), « frame_searches » et « budget_exhausted » (le budget a arrêté
+    une boucle externe ; une boucle externe commencée va toujours jusqu'au bout, le dépassement est donc possible)."""
     min_w, min_h = FRAME_MIN_W * w, FRAME_MIN_H * h
     COV = cov
     found: list[tuple] = []
@@ -609,6 +612,8 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
 
     def spent() -> bool:
         used = tops.calls + bottoms.calls + lefts.calls + rights.calls
+        if used > budget[0] and stats is not None:
+            stats["budget_exhausted"] = True
         return used > budget[0]
 
     # la même couverture (même bord, même position, même étendue) est demandée des milliers de fois par les boucles
@@ -700,6 +705,9 @@ def _rects_from_edges(tops: list, bottoms: list, lefts: list, rights: list, w: i
             continue
         if not divided(r):
             kept.append(r)
+    if stats is not None:
+        stats["frame_calls"] = stats.get("frame_calls", 0) + tops.calls + bottoms.calls + lefts.calls + rights.calls
+        stats["frame_searches"] = stats.get("frame_searches", 0) + 1
     return kept
 
 
@@ -753,7 +761,7 @@ def _lines_of(mask_img: Image.Image) -> tuple[list, list]:
     return hl, vl
 
 
-def detect_frames(gray: Image.Image, bg_mask: Optional[Image.Image] = None) -> list[tuple]:
+def detect_frames(gray: Image.Image, bg_mask: Optional[Image.Image] = None, stats: Optional[dict] = None) -> list[tuple]:
     """Rectangles dessinés par des traits : d'encre (cadres noirs), ou de fond clair (liserés et gouttières blancs
     autour de cases posées sur une grande image). Les deux familles de traits se combinent : un rectangle peut avoir
     un cadre noir sur trois côtés et une gouttière blanche sur le quatrième. En pixels de l'image donnée."""
@@ -763,10 +771,10 @@ def detect_frames(gray: Image.Image, bg_mask: Optional[Image.Image] = None) -> l
     if bg_mask is not None:
         hb, vb = _lines_of(bg_mask)
         hl, vl = hl + hb, vl + vb
-    return _rects_from_edges(hl, hl, vl, vl, w, h)
+    return _rects_from_edges(hl, hl, vl, vl, w, h, stats=stats)
 
 
-def detect_boxes(mask: Image.Image) -> list[tuple]:
+def detect_boxes(mask: Image.Image, stats: Optional[dict] = None) -> list[tuple]:
     """Cases « posées » sur le fond : rectangles de dessin dont les quatre côtés sont des bords nets avec le fond (blanc ou
     noir). Contrairement aux gouttières, ça ne demande pas que la séparation traverse toute la planche : une case bien
     entourée de blanc est trouvée même si sa voisine déborde jusqu'au bord de la page ou chevauche une autre case."""
@@ -777,7 +785,7 @@ def detect_boxes(mask: Image.Image) -> list[tuple]:
     min_h, min_v = max(8, int(FRAME_MIN_LEN * w)), max(8, int(FRAME_MIN_LEN * h * 0.7))
     rects = _rects_from_edges(_edge_segments(top, w, h, min_h), _edge_segments(bottom, w, h, min_h),
                               _edge_segments(left, h, w, min_v), _edge_segments(right, h, w, min_v), w, h,
-                              join=max(20, w // 20))
+                              join=max(20, w // 20), stats=stats)
     # une case est surtout du dessin ; un cartouche ou une bulle (intérieur clair, couleur du fond) n'en est pas une
     from PIL import ImageStat
     return [r for r in rects if ImageStat.Stat(mask.crop(r)).mean[0] <= 0.45 * 255]
@@ -1809,18 +1817,31 @@ def overflow_grow(mask: Image.Image, boxes: list[tuple], grown: dict) -> dict:
     return out
 
 
-def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = None, manga: bool = True) -> dict:
+def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = None, manga: bool = True,
+                  diag: Optional[dict] = None) -> dict:
     """Cases d'une planche : {"panels": [[x0, y0, x1, y1], …] (fractions, ordre occidental), "rtl": [indices, ordre manga]}.
     `retry` : si rien n'est trouvé sur une page claire, second essai avec une tolérance élargie autour du fond (voir
     plus bas) ; à désactiver pour les couvertures, pages de garde et dernière page, où il invente des cases (titre,
     illustration et texte séparés par du vide). `_bg` : couleur de fond imposée (usage interne, ce second essai).
     `manga` : calculer l'ordre de lecture manga (une seconde passe de découpage, de droite à gauche) ; sinon « rtl »
-    est l'ordre occidental et le résultat porte "rtl_full": false. Les cases elles-mêmes n'en dépendent pas."""
+    est l'ordre occidental et le résultat porte "rtl_full": false. Les cases elles-mêmes n'en dépendent pas.
+    `diag` (facultatif, pour l'écran de diagnostic de l'administrateur) : dictionnaire rempli de mesures (taille analysée,
+    fond, second essai, temps par étape, tests de couverture et budget des cadres) ; il ne change rien au résultat."""
+    t_start = time.perf_counter()
+
+    def _fin(res: dict) -> dict:
+        if diag is not None:
+            diag.setdefault("frame_calls", 0)
+            diag.setdefault("budget_exhausted", False)
+            diag["ms_total"] = round(1000 * (time.perf_counter() - t_start), 1)
+        return res
     gray = ImageOps.grayscale(img)
     if gray.width > WORK_WIDTH:
         gray = gray.resize((WORK_WIDTH, max(1, round(gray.height * WORK_WIDTH / gray.width))), Image.Resampling.BOX)
     w, h = gray.size
     bg = _background_value(gray) if _bg is None else _bg
+    if diag is not None:
+        diag.update({"source_size": list(img.size), "work_size": [w, h], "bg": bg, "frame_budget": FRAME_BUDGET})
     mask = _mask(gray, bg)
     min_gutter = max(2, int(max(w, h) * MIN_GUTTER))
     min_side = max(6, round(min(w, h) * MIN_PANEL))
@@ -1834,12 +1855,12 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         if not frames_cache:
             found: list[tuple] = []
             try:
-                found = detect_frames(gray, mask if (bg >= 200 or bg <= 55) else None)
+                found = detect_frames(gray, mask if (bg >= 200 or bg <= 55) else None, stats=diag)
             except Exception:  # noqa: BLE001
                 pass
             if bg >= 200 or bg <= 55:
                 try:
-                    found = found + [b for b in detect_boxes(mask) if not any(_inter(b, f) >= 0.8 * max(_area(b), _area(f)) for f in found)]
+                    found = found + [b for b in detect_boxes(mask, stats=diag) if not any(_inter(b, f) >= 0.8 * max(_area(b), _area(f)) for f in found)]
                 except Exception:  # noqa: BLE001
                     pass
             frames_cache.append(found)
@@ -1936,7 +1957,10 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         # d'une seule teinte, ou surtout du fond (marge de la page prise avec un bout de décor)
         return narrow and (ImageStat.Stat(gray.crop(b)).stddev[0] < 14 or ImageStat.Stat(mask.crop(b)).mean[0] >= 0.7 * 255)
 
+    t_step = time.perf_counter()
     ltr = merge_text_leaves(gray, mask, [b for b in leaves(False) if not flat_sliver(b)])
+    if diag is not None:
+        diag["ms_split"] = round(1000 * (time.perf_counter() - t_step), 1)
     empty = {"panels": [], "rtl": [], "v": PANELS_VERSION}
     if (len(ltr) < 2 or max(_area(b) for b in ltr) > 0.85 * page_area or sum(_area(b) for b in ltr) < 0.35 * page_area) \
             and retry and _bg is None and bg > 55 and bg != RETRY_BG:
@@ -1946,21 +1970,23 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         # donne de vraies cases (bordées de dessin des deux côtés, au moins deux, qui couvrent la planche). Sur le banc
         # d'essai : 2 planches sur 223 y gagnent leurs cases, aucune autre ne change ; sur les pages intérieures de la
         # bibliothèque, 1 sur 120 ; mais 1 couverture ou page de garde sur 20 y gagne de fausses cases, d'où `retry`.
-        return detect_panels(img, retry, RETRY_BG, manga)
+        if diag is not None:
+            diag["retry"] = True
+        return _fin(detect_panels(img, retry, RETRY_BG, manga, diag))
     if len(ltr) < 2:
-        return empty
+        return _fin(empty)
     if max(_area(b) for b in ltr) > 0.85 * page_area:
-        return empty
+        return _fin(empty)
     if max(_area(b) for b in ltr) > 0.4 * page_area and retry and _bg is None and bg > 55 and bg != RETRY_BG:
         # des cases trouvées, mais l'une d'elles couvre encore 40 % de la planche ou plus : le second essai (fond
         # de référence plus sombre, voir plus haut) est gardé s'il la découpe en plus de cases sans rien perdre ailleurs
-        second = detect_panels(img, False, RETRY_BG, manga)
+        second = detect_panels(img, False, RETRY_BG, manga, dict(diag) if diag is not None else None)
         if len(second["panels"]) > len(ltr) and second["panels"] \
                 and max((r[2] - r[0]) * (r[3] - r[1]) for r in second["panels"]) < 0.45 \
                 and sum((r[2] - r[0]) * (r[3] - r[1]) for r in second["panels"]) >= 0.6:
-            return second
+            return _fin(second)
     if sum(_area(b) for b in ltr) < 0.35 * page_area:
-        return empty   # couverture, page de titre, crédits : quelques blocs isolés sur du vide, pas des cases
+        return _fin(empty)   # couverture, page de titre, crédits : quelques blocs isolés sur du vide, pas des cases
     pad_x, pad_y = PAD * w, PAD * h
 
     def rel(b: tuple) -> list[float]:
@@ -1970,6 +1996,7 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
     panels = [rel(b) for b in ltr]
     order = list(range(len(panels)))
     if manga:
+        t_step = time.perf_counter()
         # ordre manga : le même découpage refait de droite à gauche (les cadres, déjà calculés, sont partagés), puis
         # apparié aux cases ci-dessus ; en cas de désaccord, l'ordre occidental
         rtl = merge_text_leaves(gray, mask, [b for b in leaves(True) if not flat_sliver(b)])
@@ -1977,9 +2004,12 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
         order = [index.get(tuple(rel(b)), i) for i, b in enumerate(rtl)]
         if sorted(order) != list(range(len(panels))):
             order = list(range(len(panels)))
+        if diag is not None:
+            diag["ms_manga"] = round(1000 * (time.perf_counter() - t_step), 1)
     out = {"panels": panels, "rtl": order, "v": PANELS_VERSION}
     if not manga:
         out["rtl_full"] = False   # (le serveur recalcule avec la passe manga si un lecteur en sens manga le demande)
+    t_step = time.perf_counter()
     if bg >= 200 or bg <= 55:
         try:
             join, grown = text_bridges(img, gray, mask, ltr)
@@ -1997,7 +2027,9 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
             out["join"] = join
         if grown:   # cases élargies pour ne pas couper une bulle qui déborde (même ordre, mêmes indices)
             out["grow"] = {str(k): rel(v) for k, v in grown.items()}
-    return out
+    if diag is not None:
+        diag["ms_text"] = round(1000 * (time.perf_counter() - t_step), 1)
+    return _fin(out)
 
 
 # ----------------------------------------------------------------------------

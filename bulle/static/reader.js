@@ -1154,6 +1154,7 @@
       case "f": case "F": cycleFit(); break;
       case "d": case "D": cycleMode(); break;
       case "c": case "C": togglePanels(); break;
+      case "g": case "G": if (isAdmin && mode === "panels") openDiag(); break;
       case "e": case "E": if (!isAdmin) break; if (mode === "panels") openEditor(); else flash("Passez en case par case (C) pour corriger les cases"); break;
       case "m": case "M": toggleManga(); break;
       case "r": case "R": toggleTrim(); break;
@@ -1178,7 +1179,8 @@
   const PE_MIN = 0.02;   // côté minimal d'une case (fraction de la page), comme côté serveur
   let pe = null;         // éléments de l'éditeur, créés à la première ouverture
   const peState = { rects: [], sel: -1, drag: null, page: -1, dirty: false, busy: false, draw: false };
-  const editorOpen = () => !!pe && !pe.root.hidden;
+  let pd = null;         // écran de diagnostic (administrateur), créé à la première ouverture
+  const editorOpen = () => (!!pe && !pe.root.hidden) || (!!pd && !pd.root.hidden);
 
   function peBuild() {
     const root = document.createElement("div");
@@ -1349,6 +1351,81 @@
       if (peState.page === current) go(current, { save: false });
     } catch (e) { flash("Rétablissement impossible"); }
     finally { peState.busy = false; }
+  }
+
+
+  // ---------------------------------------------------------------- diagnostic des cases (administrateur)
+  /* Touche G, en case par case : la planche entière avec les cases telles que le serveur les a gardées (bleu : numéro
+     dans l'ordre occidental et rang en manga), les cadrages « grow » (orange pointillé) et les regroupements « join »
+     (violet pointillé), et les informations de la détection. « Mesurer » lance une détection fraîche côté serveur
+     (taille analysée, temps par étape, budget des cadres) sans rien changer en base : coûteux, jamais lancé tout seul. */
+  function pdBuild() {
+    const root = document.createElement("div");
+    root.className = "pe pd"; root.hidden = true;
+    root.innerHTML = `<div class="pe-bar"><div class="pe-title">Diagnostic des cases <span class="pe-count"></span></div>
+      <div class="pe-actions"><button type="button" data-a="measure">Mesurer (détection fraîche)</button>
+      <button type="button" data-a="close" class="primary">Fermer</button></div></div>
+      <div class="pe-stage"><div class="pe-page"><img alt="" draggable="false"><div class="pe-layer pd-layer"></div></div><div class="pd-info"></div></div>`;
+    document.body.appendChild(root);
+    pd = { root, img: root.querySelector("img"), layer: root.querySelector(".pd-layer"), info: root.querySelector(".pd-info"), count: root.querySelector(".pe-count"), d: null, fresh: null, n: -1 };
+    root.addEventListener("click", e => {
+      const a = e.target.closest("[data-a]"); if (!a) return;
+      if (a.dataset.a === "close") pdClose(); else if (a.dataset.a === "measure") pdMeasure();
+    });
+    for (const t of ["contextmenu", "wheel"]) root.addEventListener(t, e => { if (t === "contextmenu") e.preventDefault(); e.stopPropagation(); }, { passive: t !== "contextmenu" });
+    document.addEventListener("keydown", e => {
+      if (!pd || pd.root.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "Escape" || e.key === "g" || e.key === "G") { pdClose(); e.preventDefault(); }
+    });
+  }
+  async function openDiag() {
+    if (!isAdmin || mode !== "panels" || current < 0) return;
+    if (!pd) pdBuild();
+    const n = current, d = await getPanels(n);
+    if (!d || d.error) { flash("Cases indisponibles pour le moment"); return; }
+    Object.assign(pd, { d, fresh: null, n });
+    pd.img.onload = pdDraw;
+    pd.img.src = img.currentSrc || img.src || `/api/page/${id}/${n}?w=1600&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
+    pd.root.hidden = false; body.classList.add("pe-open");
+    pdDraw();
+  }
+  function pdClose() { if (pd) { pd.root.hidden = true; body.classList.remove("pe-open"); } }
+  async function pdMeasure() {
+    pd.info.dataset.busy = "1"; pdDraw();
+    try {
+      const r = await fetch(`/api/panels/${id}/${pd.n}/diag`, { cache: "no-store" });
+      pd.fresh = r.ok ? await r.json() : { error: r.status === 403 ? "Réservé à l'administrateur" : `Erreur ${r.status}` };
+    } catch { pd.fresh = { error: "Mesure impossible" }; }
+    delete pd.info.dataset.busy; pdDraw();
+  }
+  const pdPct = r => `left:${r[0] * 100}%;top:${r[1] * 100}%;width:${(r[2] - r[0]) * 100}%;height:${(r[3] - r[1]) * 100}%`;
+  function pdDraw() {
+    if (!pd || !pd.d) return;
+    const d = pd.d, f = pd.fresh && !pd.fresh.error ? pd.fresh : null;
+    const panels = d.panels instanceof Array ? d.panels : [], rtl = d.rtl instanceof Array ? d.rtl : [];
+    const L = pd.layer; L.textContent = "";
+    const add = (cls, r, html) => { const el = document.createElement("div"); el.className = "pe-r pd-r " + cls; el.style.cssText = pdPct(r); el.innerHTML = html || ""; L.appendChild(el); };
+    for (const [a, b] of (d.join instanceof Array ? d.join : [])) if (panels[a] && panels[b]) add("pd-join", [Math.min(panels[a][0], panels[b][0]), Math.min(panels[a][1], panels[b][1]), Math.max(panels[a][2], panels[b][2]), Math.max(panels[a][3], panels[b][3])], `<em>join ${a + 1}+${b + 1}</em>`);
+    if (d.grow) for (const [k, r] of Object.entries(d.grow)) if (r && r.length === 4) add("pd-grow", r, `<em>grow ${+k + 1}</em>`);
+    panels.forEach((r, i) => { const m = rtl.length === panels.length ? rtl.indexOf(i) + 1 : 0; add("pd-panel", r, `<b>${i + 1}</b>${m ? `<small>manga ${m}</small>` : ""}`); });
+    pd.count.textContent = `· page ${pd.n + 1} · ${panels.length} case${panels.length > 1 ? "s" : ""}`;
+    const row = (k, v, bad) => `<tr><th>${esc(k)}</th><td${bad ? ' class="bad"' : ""}>${esc(String(v))}</td></tr>`;
+    let h = `<table>` + row("Version du détecteur (serveur)", item.panels_v ?? "?") + row("Version du résultat", d.v ?? "?", d.v !== undefined && item.panels_v && d.v !== item.panels_v)
+      + row("Origine", d.manual ? "corrigé à la main" : "base de données (détection gardée)") + row("Cases", panels.length)
+      + row("Ordre manga calculé", d.rtl_full === false ? "non (occidental seulement)" : "oui") + row("Cadrages grow", d.grow ? Object.keys(d.grow).length : 0)
+      + row("Regroupements join", d.join ? d.join.length : 0);
+    if (f) {
+      const g = f.diag || {}, st = f.stored;
+      h += row("— Détection fraîche —", "") + row("Image source", g.source_size ? g.source_size.join(" × ") : "?") + row("Dimensions analysées", g.work_size ? g.work_size.join(" × ") : "?")
+        + row("Fond de référence", g.bg ?? "?") + row("Second essai (fond plus sombre)", g.retry ? "oui" : "non")
+        + row("Temps total", `${g.ms_total ?? "?"} ms`) + row("… découpage", `${g.ms_split ?? "?"} ms`) + row("… ordre manga", `${g.ms_manga ?? "?"} ms`) + row("… textes (bulles)", `${g.ms_text ?? "?"} ms`)
+        + row("Tests de couverture des cadres", `${(g.frame_calls || 0).toLocaleString("fr-FR")} (budget ${(g.frame_budget || 0).toLocaleString("fr-FR")})`, g.budget_exhausted)
+        + row("Budget des cadres épuisé", g.budget_exhausted ? "oui" : "non", g.budget_exhausted)
+        + row("Cases fraîches", f.panels.length) + row("Identique à la base", f.same_as_stored === null ? "— (corrigé à la main)" : f.same_as_stored ? "oui" : "NON", f.same_as_stored === false)
+        + (st ? row("En base", `v${st.v}${st.manual ? " · manuel" : ""}${st.current_version ? "" : " · ancienne version"}`, !st.current_version && !st.manual) : row("En base", "rien"));
+    } else if (pd.fresh && pd.fresh.error) h += row("Mesure", pd.fresh.error, true);
+    else h += row("Mesure détaillée", pd.info.dataset.busy ? "en cours…" : "bouton « Mesurer »");
+    pd.info.innerHTML = h + "</table>" + `<p class="pd-legend"><i class="k1"></i> case (n° occidental, rang manga) <i class="k2"></i> grow <i class="k3"></i> join</p>`;
   }
 
   // ---------------------------------------------------------------- boutons

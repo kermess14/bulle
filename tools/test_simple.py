@@ -25,6 +25,7 @@ os.environ.setdefault("PRELOAD_COVERS", "0")
 from PIL import Image, ImageDraw  # noqa: E402
 
 from bulle.library import DEFAULT_PROFILE  # noqa: E402
+from bulle.panels import PANELS_VERSION  # noqa: E402
 from bulle.server import create_app, hash_pin  # noqa: E402
 
 IPAD1_UA = ("Mozilla/5.0 (iPad; U; CPU OS 5_1 like Mac OS X; fr-fr) AppleWebKit/534.46 (KHTML, like Gecko) "
@@ -636,6 +637,30 @@ class SimpleTests(unittest.TestCase):
                 self.lib.conn.execute("UPDATE profiles SET role='admin' WHERE id=?", (DEFAULT_PROFILE,))
                 self.lib.conn.commit()
             self.lib.panels_clear([nid])
+
+    def test_panels_diag_admin_only(self):
+        nid = self.t02["id"]
+        j = self.c.get(f"/api/panels/{nid}/0/diag")
+        self.assertEqual(j.status_code, 200, j.get_data(as_text=True))
+        j = j.get_json()
+        self.assertEqual(j["detector_version"], PANELS_VERSION)
+        for k in ("panels", "rtl", "grow", "join", "diag", "stored", "same_as_stored"):
+            self.assertIn(k, j)
+        self.assertIn("ms_total", j["diag"])
+        self.assertLessEqual(j["diag"]["work_size"][0], 800)   # (jamais agrandie : la page de test fait 400 px de large)
+        self.assertEqual(j["diag"]["work_size"], j["diag"]["source_size"])
+        before = self.lib.panels_get(nid, 0)
+        self.c.get(f"/api/panels/{nid}/0/diag")
+        self.assertEqual(self.lib.panels_get(nid, 0), before)   # ne change rien en base
+        with self.lib._write_lock:
+            self.lib.conn.execute("UPDATE profiles SET role='reader' WHERE id=?", (DEFAULT_PROFILE,))
+            self.lib.conn.commit()
+        try:
+            self.assertEqual(self.c.get(f"/api/panels/{nid}/0/diag").status_code, 403)
+        finally:
+            with self.lib._write_lock:
+                self.lib.conn.execute("UPDATE profiles SET role='admin' WHERE id=?", (DEFAULT_PROFILE,))
+                self.lib.conn.commit()
 
     def test_manual_validation(self):
         nid = self.t02["id"]

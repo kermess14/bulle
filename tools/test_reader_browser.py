@@ -165,6 +165,28 @@ class ReaderBrowser(unittest.TestCase):
         self.assertAlmostEqual(raced, clean, delta=3)
         self.assertEqual(self.errors, [])
 
+    def test_diag_screen(self):
+        pg = self.page()
+        pg.goto(f"{self.base}/read/{self.short}?page=0")
+        pg.wait_for_timeout(800)
+        if not pg.is_visible("#pedit"):
+            pg.keyboard.press("c")
+        pg.wait_for_timeout(2000)
+        pg.keyboard.press("g")
+        pg.wait_for_timeout(600)
+        self.assertTrue(pg.is_visible(".pd"))
+        self.assertGreaterEqual(pg.locator(".pd-panel").count(), 4)
+        self.assertIn("Version du détecteur", pg.inner_text(".pd-info"))
+        pg.click("[data-a=measure]")
+        pg.wait_for_timeout(2500)
+        txt = pg.inner_text(".pd-info")
+        self.assertIn("Dimensions analysées", txt)
+        self.assertIn("Budget des cadres épuisé", txt)
+        pg.keyboard.press("Escape")
+        pg.wait_for_timeout(300)
+        self.assertFalse(pg.is_visible(".pd"))
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
