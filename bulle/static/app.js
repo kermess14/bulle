@@ -1139,7 +1139,8 @@
       if (!sub) line2 = esc(item.name);
     }
     const tip = item.meta && item.meta.summary ? ` title="${esc(item.meta.summary.length > 320 ? item.meta.summary.slice(0, 320) + "…" : item.meta.summary)}"` : "";
-    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
+    const linked = item.meta && item.meta.oneshot ? " os-linked" : "";   // one shot trouvé sur Bédéthèque : trait bleu sous la couverture
+    return `<a class="card album${linked}" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
       ${coverHtml(item, badge + qualityBadge(item) + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>${item.meta ? `<button class="info sum" type="button" data-sum="${item.id}" title="Résumé" aria-label="Résumé">…</button>` : ""}`)}
       <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;
