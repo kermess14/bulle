@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import collections
 import hashlib
 import hmac
 import io
@@ -36,7 +37,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.38.0"
+VERSION = "0.38.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -2476,9 +2477,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         folder = get_node(album["parent_id"], "folder")
         body = request.get_json(force=True, silent=True) or {}
         try:
-            return jsonify(analyze_oneshot(folder, album, url=(body.get("url") or "").strip() or None,
-                                           query=(body.get("query") or "").strip() or None))
+            res = analyze_oneshot(folder, album, url=(body.get("url") or "").strip() or None,
+                                  query=(body.get("query") or "").strip() or None)
+            log_task("bdt", f"One shot « {album['name']} » : {res.get('status') if isinstance(res, dict) else 'ok'}")
+            return jsonify(res)
         except BdtError as e:
+            log_task("bdt", f"One shot « {album['name']} » : {e}", ok=False)
             abort(502, description=str(e))
 
     @app.route("/api/bdt/oneshot/<int:node_id>/search")
@@ -2647,9 +2651,12 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             start_batch([folder_id], force=bool(body.get("force")))
             return jsonify({"status": "oneshots_started"})
         try:
-            return jsonify(analyze_folder(folder, url=(body.get("url") or "").strip() or None,
-                                          details=bool(body.get("details")), force=bool(body.get("force"))))
+            res = analyze_folder(folder, url=(body.get("url") or "").strip() or None,
+                                 details=bool(body.get("details")), force=bool(body.get("force")))
+            log_task("bdt", f"Série « {folder['name']} » : {res.get('status') if isinstance(res, dict) else 'ok'}")
+            return jsonify(res)
         except BdtError as e:
+            log_task("bdt", f"Série « {folder['name']} » : {e}", ok=False)
             abort(502, description=str(e))
 
     @app.route("/api/bdt/series/<int:folder_id>", methods=["GET"])
@@ -2697,7 +2704,9 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         try:
             m = fetch_summary(node_id, force=bool(body.get("force")))
         except BdtError as e:
+            log_task("summaries", f"Résumé d'un album : {e}", ok=False)
             abort(502, description=str(e))
+        log_task("summaries", "Résumé d'un album lu")
         if not m:
             abort(409, description="Cet album n'est pas encore lié à Bédéthèque : analysez d'abord sa série.")
         return jsonify({"linked": True, "summary": m["data"].get("summary"), "summary_at": m["data"].get("summary_at")})
@@ -2736,6 +2745,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     summary_job["done"] += 1
             finally:
                 summary_job["running"] = False
+                log_task("summaries", f"Résumés de « {summary_job.get('folder')} » : {summary_job['done']} / {summary_job['total']}"
+                         + (" (arrêtés)" if summary_job.get("stop") else ""), ok=not summary_job["errors"])
 
         threading.Thread(target=job, name="bulle-summaries", daemon=True).start()
         time.sleep(0.2)
@@ -2843,12 +2854,19 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     bdt_job["done"] += 1
             finally:
                 bdt_job["running"] = False
+                log_task("bdt", f"Lot Bédéthèque : {bdt_job['done']} / {bdt_job['total']} dossiers"
+                         + (" (arrêté)" if bdt_job.get("stop") else ""), ok=not bdt_job["errors"])
                 bdt_job["current"] = None
                 bdt_job["folder_id"] = None
 
         threading.Thread(target=job, name="bulle-bdt", daemon=True).start()
 
     # ------------------------------------------------------------------ API : liste des tâches de fond
+    task_log: collections.deque = collections.deque(maxlen=40)   # dernières actions faites en arrière-plan ou à la main (perdu au redémarrage)
+
+    def log_task(kind: str, label: str, ok: bool = True) -> None:
+        task_log.appendleft({"kind": kind, "label": label, "ok": ok, "at": time.time()})
+
     def task_list() -> list[dict]:
         """Toutes les tâches de fond de Bulle au même format (scan, couvertures, mesure HD/SD, résumés, Bédéthèque) :
         id, libellé, état, avancement et si on peut les arrêter. Les tâches finies gardent leur dernière exécution."""
@@ -2883,6 +2901,11 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     "state": ("stopping" if bj.get("stop") else "running") if bj["running"] else "idle",
                     "done": bj.get("done") if bj["running"] else None, "total": bj.get("total") if bj["running"] else None,
                     "started_at": None, "finished_at": None, "detail": bj.get("current") if bj["running"] else None})
+        for t in out:   # tâche au repos : sa dernière exécution (y compris une recherche faite à la main) vient du journal
+            if t["state"] == "idle" and t["id"] in ("bdt", "summaries"):
+                last = next((e for e in task_log if e["kind"] == t["id"]), None)
+                if last:
+                    t["finished_at"], t["detail"] = last["at"], last["label"]
         return out
 
     def task_stop(tid: str) -> bool:
@@ -2909,20 +2932,20 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/tasks")
     def api_tasks():
         require_admin()
-        return jsonify({"tasks": task_list(), "now": time.time()})
+        return jsonify({"tasks": task_list(), "recent": list(task_log)[:15], "now": time.time()})
 
     @app.route("/api/tasks/<tid>/stop", methods=["POST"])
     def api_task_stop(tid: str):
         """Arrête une tâche de fond : elle finit l'élément en cours puis s'interrompt, rien n'est laissé à moitié écrit."""
         require_admin()
         stopped = task_stop(tid)
-        return jsonify({"stopped": stopped, "tasks": task_list()})
+        return jsonify({"stopped": stopped, "tasks": task_list(), "recent": list(task_log)[:15]})
 
     @app.route("/api/tasks/stop", methods=["POST"])
     def api_tasks_stop_all():
         require_admin()
         n = sum(1 for t in task_list() if t["state"] == "running" and task_stop(t["id"]))
-        return jsonify({"stopped": n, "tasks": task_list()})
+        return jsonify({"stopped": n, "tasks": task_list(), "recent": list(task_log)[:15]})
 
     # ------------------------------------------------------------------ tâches de fond
     def preload_albums(todo: list[dict], label: str, force: bool = False) -> None:
