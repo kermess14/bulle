@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.38.5)
+# Bulle — lecteur de BD maison (v0.39.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -142,6 +142,7 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Lots de planches à corriger (v0.39.0)**. Réglages → Tâches → « Préparer les deux lots » : deux lots de 50 planches tirées au hasard dans toute la bibliothèque (tous les styles, 10 de « Watchmen » par lot si l'album est présent, jamais deux fois la même page, rubrique Adulte exclue). Chaque planche : un PNG avec les cases détectées et numérotées, et le JPG de la page seule. Le ZIP contient un dossier par lot (à donner tel quel) et `index.json` (numéro → album, à garder). C'est la matière du lot de validation du banc d'essai. Tâche de fond visible, arrêtable, en lecture seule.
 - **Trait bleu : sur le fichier ET sur le dossier (v0.38.5)**. Le trait bleu est revenu sous les one shots rangés dans un dossier « One shots » (fichiers trouvés sur Bédéthèque), en plus de celui des dossiers de v0.38.3 et v0.38.4.
 - **Trait bleu : dossiers d'un seul album sans numéro de tome (v0.38.4)**. Un dossier qui contient un seul album dont le nom n'a pas de numéro de tome (« Ailefroide Altitude 3954 ») est reconnu comme un one shot même sans fiche Bédéthèque et reçoit le trait bleu. Un dossier lié à une série de plusieurs tomes (« Aimé Lacapelle 1/4 ») n'en a jamais.
 - **Trait bleu des one shots sur le répertoire (v0.38.3)**. Le trait bleu n'est plus posé sur la carte du fichier (album) mais seulement sous la couverture du **dossier** d'un one shot (fiche Bédéthèque d'un tome unique).

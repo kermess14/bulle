@@ -36,8 +36,9 @@ from . import bdfugue
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
+from . import lots as lots_mod
 
-VERSION = "0.38.5"
+VERSION = "0.39.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -2870,6 +2871,76 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         threading.Thread(target=job, name="bulle-bdt", daemon=True).start()
 
     # ------------------------------------------------------------------ API : liste des tâches de fond
+    # ------------------------------------------------------------------ lots de planches à corriger (banc d'essai)
+    lots_job = {"running": False, "done": 0, "total": 0, "stop": False, "error": None, "started_at": None, "finished_at": None}
+    lots_file = os.path.join(data_dir, "lots", "lots-bulle.zip")
+
+    def lots_state() -> dict:
+        ok = os.path.exists(lots_file)
+        return {"ready": ok, "size": os.path.getsize(lots_file) if ok else 0, "at": os.path.getmtime(lots_file) if ok else None}
+
+    @app.route("/api/lots", methods=["GET"])
+    def api_lots():
+        require_admin()
+        return jsonify({**lots_state(), "job": lots_job})
+
+    @app.route("/api/lots", methods=["POST"])
+    def api_lots_start():
+        """Prépare deux lots de 50 planches à corriger à la main (voir bulle/lots.py), en tâche de fond ; le ZIP se télécharge
+        ensuite avec /api/lots/download. Lecture seule : les albums ne sont jamais modifiés ; la rubrique Adulte est exclue."""
+        require_admin()
+        if lots_job["running"]:
+            return jsonify({"job": lots_job}), 409
+        body = request.get_json(force=True, silent=True) or {}
+        try:
+            seed = int(body.get("seed") or 22)
+        except (TypeError, ValueError):
+            seed = 22
+        cands = [{"id": n["id"], "path": n["path"], "pages": n["page_count"]}
+                 for n in lib.albums_without("error IS NULL AND page_count >= 12") if not is_adult_path(n["path"])]
+        if len(cands) < 10:
+            abort(409, description="Pas assez d'albums connus dans la bibliothèque (lancez un scan)")
+        lots = lots_mod.pick(cands, seed)
+        lots_job.update(running=True, done=0, total=sum(len(x) for x in lots), stop=False, error=None,
+                        started_at=time.time(), finished_at=None)
+
+        def render(album: dict, page: int) -> bytes:
+            node = lib.node(album["id"])
+            path, data, _ = comics.page(node, lib.abs_path(node["path"]), page, PANELS_WIDTH)
+            if path:
+                with open(path, "rb") as f:
+                    return f.read()
+            return data
+
+        def detect(im: Image.Image, album: dict, page: int) -> dict:
+            with panels_sem:
+                return detect_panels(im, retry=page >= 3 and page < album["pages"] - 1, manga=False)
+
+        def job() -> None:
+            try:
+                n = lots_mod.build(lots, render, detect, lots_file, progress=lambda d, t: lots_job.update(done=d),
+                                   should_stop=lambda: lots_job["stop"])
+                log_task("lots", f"Lots de planches prêts : {n} planches")
+            except lots_mod.Stopped:
+                log_task("lots", "Lots de planches : arrêtés à la demande")
+            except Exception as e:  # noqa: BLE001
+                log.exception("Lots de planches")
+                lots_job["error"] = str(e)
+                log_task("lots", f"Lots de planches : {e}", ok=False)
+            finally:
+                lots_job.update(running=False, stop=False, finished_at=time.time())
+
+        threading.Thread(target=job, name="bulle-lots", daemon=True).start()
+        time.sleep(0.2)
+        return jsonify({"job": lots_job}), 202
+
+    @app.route("/api/lots/download")
+    def api_lots_download():
+        require_admin()
+        if not os.path.exists(lots_file):
+            abort(404, description="Pas encore de lots : lancez la préparation (Réglages → Tâches)")
+        return send_file(lots_file, mimetype="application/zip", as_attachment=True, download_name="lots-bulle.zip")
+
     task_log: collections.deque = collections.deque(maxlen=40)   # dernières actions faites en arrière-plan ou à la main (perdu au redémarrage)
 
     def log_task(kind: str, label: str, ok: bool = True) -> None:
@@ -2909,6 +2980,13 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     "state": ("stopping" if bj.get("stop") else "running") if bj["running"] else "idle",
                     "done": bj.get("done") if bj["running"] else None, "total": bj.get("total") if bj["running"] else None,
                     "started_at": None, "finished_at": None, "detail": bj.get("current") if bj["running"] else None})
+        out.append({"id": "lots", "label": "Lots de planches à corriger",
+                    "state": ("stopping" if lots_job.get("stop") else "running") if lots_job["running"] else "idle",
+                    "done": lots_job["done"] if lots_job["running"] else None,
+                    "total": lots_job["total"] if lots_job["running"] else None,
+                    "started_at": lots_job.get("started_at") if lots_job["running"] else None,
+                    "finished_at": None if lots_job["running"] else lots_job.get("finished_at"),
+                    "detail": lots_job.get("error") if not lots_job["running"] else None})
         for t in out:   # tâche au repos : sa dernière exécution (y compris une recherche faite à la main) vient du journal
             if t["state"] == "idle" and t["id"] in ("bdt", "summaries"):
                 last = next((e for e in task_log if e["kind"] == t["id"]), None)
@@ -2933,6 +3011,10 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if not bdt_job["running"]:
                 return False
             bdt_job["stop"] = True
+        elif tid == "lots":
+            if not lots_job["running"]:
+                return False
+            lots_job["stop"] = True
         else:
             abort(404, description="Tâche inconnue")
         return True
@@ -2940,7 +3022,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     @app.route("/api/tasks")
     def api_tasks():
         require_admin()
-        return jsonify({"tasks": task_list(), "recent": list(task_log)[:15], "now": time.time()})
+        return jsonify({"tasks": task_list(), "recent": list(task_log)[:15], "lots": lots_state(), "now": time.time()})
 
     @app.route("/api/tasks/<tid>/stop", methods=["POST"])
     def api_task_stop(tid: str):
