@@ -587,6 +587,45 @@ class SimpleTests(unittest.TestCase):
                     self.fail(f"HTML invalide ({where}) : {e}")
             print(f"  html5lib strict : {len(pages)} pages sans erreur")
 
+    # ---- éditeur de cases du lecteur : PUT / DELETE /api/panels/<album>/<page>/manual ----------
+    def test_manual_roundtrip(self):
+        nid = self.t02["id"]
+        self.lib.panels_clear([nid])
+        url = f"/api/panels/{nid}/0/manual"
+        body = {"panels": [[0.5, 0.0, 1.0, 0.5], [0.0, 0.0, 0.5, 0.5], [0.0, 0.5, 1.0, 1.0]]}
+        r = self.c.put(url, json=body)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        j = r.get_json()
+        self.assertTrue(j["manual"])
+        self.assertEqual(j["panels"][0], [0.0, 0.0, 0.5, 0.5])   # rangées dans l'ordre de lecture
+        self.assertEqual(j["rtl"], [1, 0, 2])
+        self.assertNotEqual(j["stamp"], "0-0")
+        item = self.c.get(f"/api/item/{nid}").get_json()
+        self.assertEqual(item["panels_m"], j["stamp"])
+        # la lecture des cases rend la correction, même si la version de la détection change entre-temps
+        g = self.c.get(f"/api/panels/{nid}/0?rtl=1").get_json()
+        self.assertTrue(g["manual"])
+        self.assertEqual(len(g["panels"]), 3)
+        raw = self.lib.panels_get(nid, 0)
+        raw["v"] = 1
+        self.lib.panels_set(nid, 0, raw)
+        self.assertTrue(self.c.get(f"/api/panels/{nid}/0").get_json()["manual"])
+        # une autre planche n'est pas touchée
+        self.assertIsNone(self.lib.panels_get(nid, 1))
+        # rétablir l'automatique : la correction disparaît, l'empreinte change
+        d = self.c.delete(url)
+        self.assertEqual(d.status_code, 200)
+        self.assertNotEqual(d.get_json()["stamp"], j["stamp"])
+        self.assertIsNone(self.lib.panels_get(nid, 0))
+
+    def test_manual_validation(self):
+        nid = self.t02["id"]
+        url = f"/api/panels/{nid}/0/manual"
+        for bad in ({}, {"panels": "x"}, {"panels": [[0, 0, 0.01, 0.5]]}, {"panels": [[0, 0, 1]]}):
+            self.assertEqual(self.c.put(url, json=bad).status_code, 400, bad)
+        self.assertEqual(self.c.put(f"/api/panels/{nid}/99/manual", json={"panels": []}).status_code, 400)
+        self.assertEqual(self.c.put("/api/panels/999999/0/manual", json={"panels": []}).status_code, 404)
+
 
 if __name__ == "__main__":
     args = sys.argv[1:]

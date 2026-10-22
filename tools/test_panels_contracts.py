@@ -138,6 +138,43 @@ class Contracts(unittest.TestCase):
         self.assertGreaterEqual(P.PANELS_VERSION, 18)
 
 
+class ManualPanels(unittest.TestCase):
+    """Cases tracées à la main (éditeur du lecteur) : validation, ordre de lecture, ordre manga."""
+
+    GRID = [[0.5, 0.0, 1.0, 0.5], [0.0, 0.5, 1.0, 1.0], [0.0, 0.0, 0.5, 0.5]]   # volontairement dans le désordre
+
+    def test_order_and_shape(self):
+        d = P.manual_panels(self.GRID)
+        self.assertTrue(d["manual"])
+        self.assertEqual(d["v"], P.PANELS_VERSION)
+        self.assertEqual(d["panels"], [[0.0, 0.0, 0.5, 0.5], [0.5, 0.0, 1.0, 0.5], [0.0, 0.5, 1.0, 1.0]])
+        self.assertEqual(d["rtl"], [1, 0, 2])      # manga : la droite avant la gauche, puis la bande du bas
+        self.assertEqual(sorted(d["rtl"]), [0, 1, 2])
+
+    def test_empty_is_allowed(self):
+        d = P.manual_panels([])
+        self.assertEqual((d["panels"], d["rtl"]), ([], []))
+
+    def test_clamp_and_swap(self):
+        d = P.manual_panels([[1.2, 0.9, -0.1, 0.1]])
+        self.assertEqual(d["panels"], [[0.0, 0.1, 1.0, 0.9]])
+
+    def test_inset_over_big_panel(self):
+        d = P.manual_panels([[0.0, 0.0, 1.0, 0.6], [0.6, 0.4, 0.95, 0.58], [0.0, 0.6, 1.0, 1.0]])
+        self.assertEqual(len(d["panels"]), 3)
+        self.assertEqual(sorted(d["rtl"]), [0, 1, 2])
+
+    def test_identical_rects_keep_a_valid_permutation(self):
+        d = P.manual_panels([[0.0, 0.0, 0.5, 0.5], [0.0, 0.0, 0.5, 0.5], [0.5, 0.5, 1.0, 1.0]])
+        self.assertEqual(sorted(d["rtl"]), [0, 1, 2])
+
+    def test_rejects_bad_input(self):
+        for bad in (None, "x", 3, [[0, 0, 0.01, 0.5]], [[0, 0, 0.5]], [[0, 0, "a", 1]], [[0, 0, float("nan"), 1]],
+                    [[0, 0, 0.5, 0.5]] * (P.MANUAL_MAX + 1)):
+            with self.assertRaises(ValueError):
+                P.manual_panels(bad)
+
+
 def _iou(a, b):
     ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
