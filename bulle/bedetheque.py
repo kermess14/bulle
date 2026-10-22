@@ -309,13 +309,21 @@ class BedethequeClient:
         q = query.strip()
         if len(q) < 2:
             return {"series": [], "albums": []}
-        url = f"{BASE}/search/tout?RechWhere=1&RechTexte={urllib.parse.quote(q)}"
-        html = self.fetch(url, ttl=SEARCH_TTL)
-        return {"series": parse_search(html, q), "albums": parse_search_albums(html, q, year)}
+        enc = urllib.parse.quote(q)
+        # Comme le champ en haut à droite du site : « dans la bedetheque » (RechWhere=7), puis « dans tout le site » (1).
+        # Le site renvoie parfois une page vide par erreur (et elle resterait 7 jours en cache) : sans résultat,
+        # on redemande une fois la page sans cache avant de passer à la suivante.
+        for where in (7, 1):
+            url = f"{BASE}/search/tout?RechTexte={enc}&RechWhere={where}"
+            for force in (False, True):
+                html = self.fetch(url, ttl=SEARCH_TTL, force=force)
+                res = {"series": parse_search(html, q), "albums": parse_search_albums(html, q, year)}
+                if res["series"] or res["albums"]:
+                    return res
+        return {"series": [], "albums": []}
 
     def search_site(self, query: str) -> list[dict]:
-        """Les séries trouvées par la recherche du site. (L'ancienne recherche « dans la Bedetheque », RechWhere=7,
-        ne renvoie plus rien : on passe par la recherche de tout le site.)"""
+        """Les séries trouvées par la recherche du site (celle du haut de page : dans la bedetheque, puis tout le site)."""
         return self.search_full(query)["series"]
 
     def index_letter(self, letter: str, force: bool = False) -> list[dict]:
