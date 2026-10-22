@@ -30,7 +30,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 17       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 18       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 RETRY_BG = 225            # second essai, page claire sans cases trouvées : fond de référence plus sombre (voir detect_panels)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
@@ -973,28 +973,60 @@ def _uncovered_bands(mask: Image.Image, leaf: tuple, parts: list[tuple], min_sid
     return out
 
 
-def _no_margin(parts: list[tuple], axis: int, size: tuple) -> list[tuple]:
-    """Une bande mince laissée au bord de la page par une coupe (la marge, le décor qui déborde) : rendue à la case
-    voisine, ce n'est pas une case. `axis` : 1 si les morceaux sont côte à côte, 0 s'ils sont empilés."""
+MARGIN_FRACTION = 0.9     # marge de la page : colonnes (ou lignes) au bord de la page qui sont du fond à 90 % au moins
+
+
+def _trim_margins(mask: Image.Image, box: tuple) -> tuple:
+    """Enlève la marge de la page des côtés d'une zone qui touchent le bord de la page : des colonnes (ou lignes) presque
+    entièrement fond (blanc, ou noir pur sur une page blanche), que _trim n'enlève pas quand un bout de la case voisine
+    (qui déborde jusqu'au bord) y traîne."""
+    W, H = mask.size
+    x0, y0, x1, y1 = box
+    if x0 <= 3:
+        cols = _profile(mask, box, 1)
+        while x0 < x1 - 1 and cols[x0 - box[0]] >= MARGIN_FRACTION:
+            x0 += 1
+    if x1 >= W - 3:
+        cols = _profile(mask, box, 1)
+        while x1 > x0 + 1 and cols[x1 - 1 - box[0]] >= MARGIN_FRACTION:
+            x1 -= 1
+    if y0 <= 3:
+        rows = _profile(mask, (x0, y0, x1, y1), 0)
+        while y0 < y1 - 1 and rows[y0 - box[1]] >= MARGIN_FRACTION:
+            y0 += 1
+    if y1 >= H - 3:
+        rows = _profile(mask, (x0, box[1], x1, y1), 0)
+        while y1 > y0 + 1 and rows[y1 - 1 - box[1]] >= MARGIN_FRACTION:
+            y1 -= 1
+    return (x0, y0, x1, y1)
+
+
+def _no_margin(parts: list[tuple], axis: int, mask: Image.Image) -> list[tuple]:
+    """Une bande mince laissée au bord de la page par une coupe : ce n'est pas une case. Si c'est la marge (surtout du
+    fond), elle est écartée ; sinon (le décor qui déborde, un fond de couleur), elle est rendue à la case voisine.
+    `axis` : 1 si les morceaux sont côte à côte, 0 s'ils sont empilés."""
     if len(parts) < 2:
         return parts
-    W, H = size
+    W, H = mask.size
     thin = 0.08 * (W if axis == 1 else H)
 
     def union(a: tuple, b: tuple) -> tuple:
         return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
+    def margin(b: tuple) -> bool:
+        return ImageStat.Stat(mask.crop(b)).mean[0] >= 0.7 * 255
+
     first = parts[0]
     if (axis == 1 and first[0] <= 3 and first[2] - first[0] < thin) or (axis == 0 and first[1] <= 3 and first[3] - first[1] < thin):
-        parts = [union(first, parts[1])] + parts[2:]
+        parts = parts[1:] if margin(first) else [union(first, parts[1])] + parts[2:]
     last = parts[-1]
     if len(parts) >= 2 and ((axis == 1 and last[2] >= W - 3 and last[2] - last[0] < thin)
                             or (axis == 0 and last[3] >= H - 3 and last[3] - last[1] < thin)):
-        parts = parts[:-2] + [union(parts[-2], last)]
+        parts = parts[:-1] if margin(last) else parts[:-2] + [union(parts[-2], last)]
     return parts
 
 
-def split_lines(gray: Image.Image, box: tuple, min_side: int, rtl: bool, depth: int = 0) -> list[tuple]:
+def split_lines(gray: Image.Image, mask: Image.Image, box: tuple, min_side: int, rtl: bool, depth: int = 0) -> list[tuple]:
     """Découpage récursif d'un morceau déjà isolé par les gouttières, le long des seuls traits minces qui le traversent
     d'un bord à l'autre (cases collées, séparées par le trait de leur cadre) ; pas par des paires de bords, qu'un
     carrelage, un store ou un escalier dessinés dans la case fourniraient à foison."""
@@ -1006,13 +1038,13 @@ def split_lines(gray: Image.Image, box: tuple, min_side: int, rtl: bool, depth: 
         # cases dont l'une déborde sur l'autre ; dans un morceau quelconque, seul un trait de bord à bord compte
         strip = (bw >= 2.5 * bh) if axis == 1 else (bh >= 2.5 * bw)
         parts = _line_cuts(gray, box, axis, min_side, thin_cover=0.75 if strip else 0.92, pairs=False)
-        parts = _no_margin(parts, axis, gray.size)
+        parts = _no_margin(parts, axis, mask)
         if len(parts) >= 2:
             if axis == 1 and rtl:
                 parts = parts[::-1]
             out = []
             for p in parts:
-                out.extend(split_lines(gray, p, min_side, rtl, depth + 1))
+                out.extend(split_lines(gray, mask, p, min_side, rtl, depth + 1))
             return out
     return [box]
 
@@ -1710,12 +1742,22 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
 
     dark = ImageChops.lighter(mask, gray.point([255 if i <= 24 else 0 for i in range(256)], "L")) if bg >= 200 else mask
 
+    def resplit(parts: list[tuple], leaf: tuple, rtl: bool) -> list[tuple]:
+        """Les cases venues des cadres (pas des gouttières) peuvent encore en cacher deux : un cadre englobe parfois
+        deux cases empilées séparées par une gouttière franche. On repasse chacune par le découpage par gouttières."""
+        if not (bg >= 200 or bg <= 55) or parts == [leaf]:
+            return parts
+        out_: list[tuple] = []
+        for p_ in parts:
+            out_.extend(_split(mask, p_, 0, 3, min_gutter, min_side, rtl) or [p_])
+        return out_
+
     def leaves(rtl: bool) -> list[tuple]:
         # fond ni blanc ni noir (dessin jusqu'aux bords) : les gouttières n'ont pas de sens, seuls les cadres comptent
         res = (_split(mask, full, 0, 0, min_gutter, min_side, rtl) if (bg >= 200 or bg <= 55) else [full]) or [full]
         out: list[tuple] = []
         for leaf in res:
-            parts = _refine_leaf(leaf, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None, min_gutter, min_side, gray)
+            parts = resplit(_refine_leaf(leaf, frames, w, h, rtl, mask if (bg >= 200 or bg <= 55) else None, min_gutter, min_side, gray), leaf, rtl)
             if parts == [leaf] and (bg >= 200 or bg <= 55) and _area(leaf) >= 0.3 * page_area:
                 # grande zone indécoupable : peut-être des cases aux bords tracés à main levée, séparées par le fond
                 blobs = detect_blobs(mask, leaf)
@@ -1743,7 +1785,7 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
                                 prev = joined.pop()
                                 piece = (min(prev[0], piece[0]), min(prev[1], piece[1]), max(prev[2], piece[2]), max(prev[3], piece[3]))
                             joined.append(piece)
-                        sub = _no_margin(joined, 1, gray.size)
+                        sub = _no_margin(joined, 1, mask)
                         if rtl:
                             sub = sub[::-1]
                         pieces = []
@@ -1753,7 +1795,7 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
                             if got == [r] and _area(r) >= 0.08 * page_area:
                                 # un morceau encore entier : des cases collées, séparées par le seul trait de leur cadre
                                 # (voir _line_cuts) ; on les sépare le long de ces traits, dans les deux sens
-                                got = split_lines(gray, r, min_side, rtl)
+                                got = split_lines(gray, mask, r, min_side, rtl)
                             pieces.extend(got)
                         # une rangée que ce redécoupage laisse entière alors que le découpage d'avant y trouvait déjà
                         # plusieurs cases (toutes dans la rangée) : on garde celles-là, elles étaient bonnes
@@ -1776,6 +1818,10 @@ def detect_panels(img: Image.Image, retry: bool = True, _bg: Optional[int] = Non
                     again.append(p_)
                 parts = again
             out.extend(_uncovered_bands(mask, leaf, parts, min_side))
+        if bg >= 200 or bg <= 55:
+            # (sur une page blanche, une bande de noir pur au bord d'une case est le fond noir de la planche, pas la case)
+            edge = ImageChops.lighter(mask, gray.point([255 if i <= 40 else 0 for i in range(256)], "L")) if bg >= 200 else mask
+            out = [_trim_margins(edge, b) for b in out]
         return [b for b in out if _area(b) >= MIN_AREA * page_area and (b[2] - b[0]) >= MIN_PANEL * w and (b[3] - b[1]) >= MIN_PANEL * h]
 
     def flat_sliver(b: tuple) -> bool:
