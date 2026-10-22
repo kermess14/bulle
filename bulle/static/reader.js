@@ -58,8 +58,9 @@
   let item = null, pages = 0, current = -1, shown = [], folderHref = "/";
   const aspects = {};            // n -> largeur/hauteur de la page (connue après chargement)
   const images = new Map();      // n -> Image (préchargées / chargées)
-  let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1, navBusy = false, navSince = 0;
+  let loadToken = 0, hideTimer = null, saveTimer = null, lastSavedPage = -1, lastSavedPanel = -1, navBusy = false, navSince = 0;
   const busy = () => navBusy && Date.now() - navSince < 4000;   // garde-fou : jamais bloqué plus de 4 s
+  let resume = null;            // reprise à la case près {page, panel, count}, utilisée une seule fois à l'ouverture
   let panelIdx = -1;             // case par case : -1 = page entière, sinon index dans l'ordre de lecture
   const panelsCache = new Map(); // n -> {panels, rtl}
   let panelsGen = 0;             // change à chaque bascule du sens de lecture : une réponse demandée avant n'est plus bonne
@@ -102,13 +103,19 @@
     slider.max = pages;
     let start = 0;
     if (params.has("page")) start = +params.get("page") || 0;
-    else if (item.progress && !item.progress.completed) start = item.progress.page || 0;
+    else if (item.progress && !item.progress.completed) {
+      start = item.progress.page || 0;
+      // reprise à la case près : seulement si le nombre de cases est le même qu'à l'enregistrement (sinon début de page)
+      if (item.progress.panel != null && item.progress.panel_count) resume = { page: start, panel: item.progress.panel, count: item.progress.panel_count };
+    }
     applyFit(); applyMode(); applyManga(false);
     // iPad / iPhone : le plein écran de Safari ajoute une croix de fermeture impossible à masquer ; la vraie solution
     // est d'installer Bulle sur l'écran d'accueil (manifeste), donc pas de bouton plein écran sur iOS
     const isIOS = /iP(ad|hone|od)/.test(navigator.platform) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
     if (!document.fullscreenEnabled || isIOS) fsBtn.hidden = true;
-    go(Math.min(Math.max(0, start), pages - 1), { save: false });
+    const st0 = Math.min(Math.max(0, start), pages - 1);
+    go(st0, { save: false, resume: resume && resume.page === st0 ? resume : null });
+    resume = null;
     scheduleHide();
   }
 
@@ -195,7 +202,7 @@
     if (mode !== "double") return [n];
     return computeSpreads().find(sp => sp.includes(n)) || [n];
   }
-  async function go(n, { save = true, panel = "first" } = {}) {
+  async function go(n, { save = true, panel = "first", resume: rs = null } = {}) {
     if (n < 0) { pendingStep = 0; flash("Début de l'album"); return; }
     if (n >= pages) { pendingStep = 0; showEnd(); return; }
     hideEnd();
@@ -250,6 +257,7 @@
       fitImages();
       stage.scrollTop = 0; stage.scrollLeft = 0;
       const count = data ? viewsOf(data, n).length : 0;
+      if (rs && count === rs.count && rs.panel < count) panelIdx = rs.panel; else
       panelIdx = panel === "keep" ? Math.min(panelIdx, count - 1) : panel === "last" ? count - 1 : (prefs.reader_panels_full_first || !count ? -1 : 0);
       applyPanel(false);
       if (!data) panelsP.then(d => {        // cases arrivées après coup : on glisse sur la bonne case
@@ -546,11 +554,11 @@
     if (d && typeof d.then === "function") { queueStep(dir); return; }   // cases pas encore connues : pas gardé
     const count = d && d.panels instanceof Array ? viewsOf(d).length : 0;
     if (dir > 0) {
-      if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); drainStep(); return; }
+      if (count && panelIdx < count - 1) { panelIdx += 1; applyPanel(true); updateCounter(); saveProgress(current); drainStep(); return; }
       go(current + 1);
     } else {
       // en arrière : case précédente ; la page entière n'est une étape que si l'option « page entière d'abord » est active
-      if (panelIdx > 0 || (panelIdx === 0 && prefs.reader_panels_full_first)) { panelIdx -= 1; applyPanel(true); updateCounter(); drainStep(); return; }
+      if (panelIdx > 0 || (panelIdx === 0 && prefs.reader_panels_full_first)) { panelIdx -= 1; applyPanel(true); updateCounter(); saveProgress(current); drainStep(); return; }
       if (current <= 0) { pendingStep = 0; flash("Début de l'album"); return; }
       go(current - 1, { panel: "last" });
     }
@@ -672,16 +680,25 @@
   }
 
   // ---------------------------------------------------------------- progression
+  // case affichée (ordre de lecture) et nombre de cases : seulement en case par case, sur la page courante
+  function panelInfo(n) {
+    if (mode !== "panels" || n !== current || panelIdx < 0) return {};
+    const d = panelsCache.get(n);
+    const count = d && d.panels instanceof Array ? viewsOf(d, n).length : 0;
+    return count && panelIdx < count ? { panel: panelIdx, panel_count: count } : {};
+  }
   function saveProgress(n) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      lastSavedPage = n;
-      fetch(`/api/progress/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: n }), keepalive: true }).catch(() => {});
+      const body = Object.assign({ page: n }, panelInfo(n));
+      lastSavedPage = n; lastSavedPanel = body.panel == null ? -1 : body.panel;
+      fetch(`/api/progress/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true }).catch(() => {});
     }, 400);
   }
   window.addEventListener("pagehide", () => {
-    if (current >= 0 && current !== lastSavedPage && navigator.sendBeacon) {
-      navigator.sendBeacon(`/api/progress/${id}`, new Blob([JSON.stringify({ page: current })], { type: "application/json" }));
+    const pi = panelInfo(current);
+    if (current >= 0 && (current !== lastSavedPage || (pi.panel == null ? -1 : pi.panel) !== lastSavedPanel) && navigator.sendBeacon) {
+      navigator.sendBeacon(`/api/progress/${id}`, new Blob([JSON.stringify(Object.assign({ page: current }, pi))], { type: "application/json" }));
     }
   });
 
@@ -1178,7 +1195,7 @@
      les recalcule plus) ; « Rétablir l'automatique » efface la correction. */
   const PE_MIN = 0.02;   // côté minimal d'une case (fraction de la page), comme côté serveur
   let pe = null;         // éléments de l'éditeur, créés à la première ouverture
-  const peState = { rects: [], sel: -1, drag: null, page: -1, dirty: false, busy: false, draw: false };
+  const peState = { rects: [], sel: -1, drag: null, page: -1, dirty: false, busy: false, draw: false, custom: false };
   let pd = null;         // écran de diagnostic (administrateur), créé à la première ouverture
   const editorOpen = () => (!!pe && !pe.root.hidden) || (!!pd && !pd.root.hidden);
 
@@ -1188,17 +1205,24 @@
     root.innerHTML = `<div class="pe-bar"><div class="pe-title">Corriger les cases <span class="pe-count"></span></div>
       <div class="pe-actions"><button type="button" data-a="draw">+ Nouvelle case</button>
       <button type="button" data-a="del" disabled>Supprimer la case</button>
+      <button type="button" data-a="earlier" disabled title="Lire cette case plus tôt ([)">◀ Plus tôt</button>
+      <button type="button" data-a="later" disabled title="Lire cette case plus tard (])">Plus tard ▶</button>
+      <button type="button" data-a="order" title="Ordre de lecture : automatique, ou fixé par vos soins">Ordre : auto</button>
+      <button type="button" data-a="full" title="Aucune case : la planche est lue entière">Page entière</button>
       <button type="button" data-a="auto">Rétablir l'automatique</button>
       <button type="button" data-a="cancel">Annuler</button>
       <button type="button" data-a="save" class="primary">Enregistrer</button></div></div>
+      <div class="pe-warn" hidden>⚠ Le fichier de cet album a changé depuis cette correction : vérifiez-la, puis « Enregistrer » pour la garder (ou « Rétablir l'automatique »).</div>
       <div class="pe-stage"><div class="pe-page"><img alt="" draggable="false"><div class="pe-layer"></div></div></div>
-      <div class="pe-help">« + Nouvelle case » (ou Maj + glisser) puis tracez un rectangle, même sur une grande case (encart) · touchez une case pour la choisir, déplacez-la ou tirez ses poignées · Suppr pour l'enlever · Entrée pour enregistrer · Échap pour annuler</div>`;
+      <div class="pe-help">« + Nouvelle case » (ou Maj + glisser) puis tracez un rectangle, même sur une grande case (encart) · touchez une case pour la choisir, déplacez-la ou tirez ses poignées · Suppr pour l'enlever · Entrée pour enregistrer · Échap pour annuler · « Ordre » : [ et ] déplacent la case choisie dans l'ordre de lecture · <a href="/api/panels/export" download>Exporter les corrections</a> (pour le banc d'essai)</div>`;
     document.body.appendChild(root);
     pe = { root, img: root.querySelector("img"), layer: root.querySelector(".pe-layer"), count: root.querySelector(".pe-count"),
-           del: root.querySelector('[data-a="del"]'), save: root.querySelector('[data-a="save"]'), auto: root.querySelector('[data-a="auto"]') };
+           del: root.querySelector('[data-a="del"]'), save: root.querySelector('[data-a="save"]'), auto: root.querySelector('[data-a="auto"]'),
+           earlier: root.querySelector('[data-a="earlier"]'), later: root.querySelector('[data-a="later"]'), order: root.querySelector('[data-a="order"]'),
+           warn: root.querySelector(".pe-warn") };
     root.addEventListener("click", e => {
       const a = e.target.closest("[data-a]"); if (!a || peState.busy) return;
-      ({ draw: peToggleDraw, del: peDelete, cancel: peClose, save: peSave, auto: peAuto })[a.dataset.a]();
+      ({ draw: peToggleDraw, del: peDelete, cancel: peClose, save: peSave, auto: peAuto, earlier: () => peMove(-1), later: () => peMove(1), order: peToggleOrder, full: peFull })[a.dataset.a]();
     });
     pe.layer.addEventListener("pointerdown", pePointerDown);
     pe.layer.addEventListener("pointermove", pePointerMove);
@@ -1210,6 +1234,8 @@
       if (e.key === "Escape") { if (peState.draw) peToggleDraw(); else peClose(); }
       else if (e.key === "Delete" || e.key === "Backspace") peDelete();
       else if (e.key === "Enter") peSave();
+      else if (e.key === "[") peMove(-1);
+      else if (e.key === "]") peMove(1);
       else if (e.key === "Tab" && peState.rects.length) { peState.sel = (peState.sel + (e.shiftKey ? -1 : 1) + peState.rects.length) % peState.rects.length; peDraw(); }
       else return;
       e.preventDefault();
@@ -1227,11 +1253,12 @@
       const { panels, order } = readingPanels(d);
       for (const i of order) if (panels[i] && panels[i].length === 4) rects.push(panels[i].map(v => Math.max(0, Math.min(1, +v))));
     }
-    Object.assign(peState, { rects, sel: -1, drag: null, page: n, dirty: false, draw: false });
+    Object.assign(peState, { rects, sel: -1, drag: null, page: n, dirty: false, draw: false, custom: !!d.custom_order });
     pe.root.classList.remove("drawing"); pe.root.querySelector('[data-a="draw"]').classList.remove("on");
     pe.img.onload = peDraw;
     pe.img.src = img.currentSrc || img.src || `/api/page/${id}/${n}?w=1600&v=${item.mtime}&t=${encodeURIComponent(imgTag)}`;
     pe.auto.hidden = !d.manual;
+    pe.warn.hidden = !(d.manual && d.stale);
     pe.root.hidden = false;
     body.classList.add("pe-open");
     peDraw();
@@ -1261,12 +1288,28 @@
     });
     pe.count.textContent = peState.rects.length ? `· ${peState.rects.length} case${peState.rects.length > 1 ? "s" : ""}` : "· aucune (la planche reste entière)";
     pe.del.disabled = peState.sel < 0;
+    pe.earlier.disabled = peState.sel < 1;
+    pe.later.disabled = peState.sel < 0 || peState.sel >= peState.rects.length - 1;
+    pe.order.textContent = peState.custom ? "Ordre : fixé" : "Ordre : auto";
+    pe.order.classList.toggle("on", peState.custom);
   }
   function peDelete() {
     if (peState.sel < 0) return;
     peState.rects.splice(peState.sel, 1);
     peState.sel = -1; peState.dirty = true; peDraw();
   }
+  // ordre de lecture voulu : déplacer la case choisie fixe l'ordre (les numéros affichés sont alors l'ordre de lecture)
+  function peMove(dir) {
+    const i = peState.sel, j = i + dir;
+    if (i < 0 || j < 0 || j >= peState.rects.length) return;
+    [peState.rects[i], peState.rects[j]] = [peState.rects[j], peState.rects[i]];
+    peState.sel = j; peState.custom = true; peState.dirty = true; peDraw();
+  }
+  function peToggleOrder() {
+    peState.custom = !peState.custom; peState.dirty = true; peDraw();
+    flash(peState.custom ? "Ordre fixé : celui des numéros" : "Ordre automatique : recalculé à l'enregistrement");
+  }
+  function peFull() { peState.rects = []; peState.sel = -1; peState.custom = false; peState.dirty = true; peDraw(); peSave(); }
   function pePoint(e) {
     const b = pe.layer.getBoundingClientRect();
     return { x: Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)), y: Math.max(0, Math.min(1, (e.clientY - b.top) / b.height)), w: b.width, h: b.height };
@@ -1326,7 +1369,7 @@
     if (peState.busy) return;
     peState.busy = true; pe.save.disabled = true;
     try {
-      const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ panels: peOrdered() }) });
+      const r = await fetch(`/api/panels/${id}/${peState.page}/manual`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ panels: peOrdered(), custom_order: peState.custom }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { flash(r.status === 403 ? "Réservé à l'administrateur" : d.error || "Enregistrement impossible"); return; }
       item.panels_m = d.stamp || item.panels_m;

@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS progress(
   page_count INTEGER,
   completed  INTEGER NOT NULL DEFAULT 0,
   updated_at REAL NOT NULL,
+  panel      INTEGER,
+  panel_count INTEGER,
   PRIMARY KEY(profile_id, node_id)
 );
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -316,6 +318,12 @@ class Library:
             # comptes : le premier profil devient administrateur, les autres lecteurs
             conn.execute("ALTER TABLE profiles ADD COLUMN role TEXT NOT NULL DEFAULT 'reader'")
             conn.execute("UPDATE profiles SET role='admin' WHERE id=?", (DEFAULT_PROFILE,))
+            conn.commit()
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(progress)")]
+        if cols and "profile_id" in cols and "panel" not in cols:
+            # reprise à la case près : numéro de la case (ordre de lecture) et nombre de cases au moment de l'enregistrement
+            conn.execute("ALTER TABLE progress ADD COLUMN panel INTEGER")
+            conn.execute("ALTER TABLE progress ADD COLUMN panel_count INTEGER")
             conn.commit()
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(progress)")]
         if cols and "profile_id" not in cols:
@@ -719,7 +727,7 @@ class Library:
                 raise
         if invalidate:
             try:
-                self.panels_clear(invalidate)
+                self.panels_invalidate(invalidate)
                 self.on_invalidate(invalidate)
             except Exception:  # noqa: BLE001
                 log.exception("Invalidation du cache")
@@ -748,7 +756,7 @@ class Library:
             self.conn.execute("UPDATE nodes SET format=?, size=?, mtime=?, page_count=NULL, error=NULL, res_w=NULL, res_h=NULL WHERE id=?",
                               (fmt, st.st_size, st.st_mtime, node_id))
             self.conn.commit()
-        self.panels_clear([node_id])
+        self.panels_invalidate([node_id])
         return self.node(node_id)
 
     def node(self, node_id: int) -> Optional[dict]:
@@ -813,7 +821,12 @@ class Library:
 
     def set_progress(self, node_id: int, page: int, page_count: Optional[int],
                      completed: Optional[bool] = None, profile_id: int = DEFAULT_PROFILE,
-                     threshold: float = 1.0) -> dict:
+                     threshold: float = 1.0, panel: Optional[int] = None,
+                     panel_count: Optional[int] = None) -> dict:
+        if panel is not None and panel_count is not None and 0 <= panel < panel_count <= 1000:
+            panel, panel_count = int(panel), int(panel_count)
+        else:
+            panel = panel_count = None      # sans case connue : reprise au début de la page
         if page_count is None:
             page_count = (self.node(node_id) or {}).get("page_count")
         page = max(0, int(page))
@@ -825,10 +838,11 @@ class Library:
         now = time.time()
         with self._write_lock:
             self.conn.execute(
-                "INSERT INTO progress(profile_id, node_id, page, page_count, completed, updated_at) "
-                "VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id, node_id) DO UPDATE SET page=excluded.page, "
-                "page_count=excluded.page_count, completed=excluded.completed, updated_at=excluded.updated_at",
-                (profile_id, node_id, page, page_count, 1 if completed else 0, now))
+                "INSERT INTO progress(profile_id, node_id, page, page_count, completed, updated_at, panel, panel_count) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(profile_id, node_id) DO UPDATE SET page=excluded.page, "
+                "page_count=excluded.page_count, completed=excluded.completed, updated_at=excluded.updated_at, "
+                "panel=excluded.panel, panel_count=excluded.panel_count",
+                (profile_id, node_id, page, page_count, 1 if completed else 0, now, panel, panel_count))
             self._log_reading(profile_id, node_id, before, page, completed, now)
             self.conn.commit()
         return self.progress(node_id, profile_id)
@@ -1277,11 +1291,40 @@ class Library:
         """Empreinte des cases corrigées à la main d'un album : change à chaque correction ou rétablissement ; le lecteur
         la met dans l'adresse des cases (le navigateur garde les réponses pour toujours)."""
         try:
-            r = self.conn.execute("SELECT COUNT(*), COALESCE(SUM(json_extract(data, '$.t')), 0) FROM panels "
+            r = self.conn.execute("SELECT COUNT(*), COALESCE(SUM(json_extract(data, '$.t')), 0), "
+                                  "COALESCE(SUM(json_extract(data, '$.stale') = 1), 0) FROM panels "
                                   "WHERE node_id=? AND json_extract(data, '$.manual') = 1", (node_id,)).fetchone()
-            return f"{r[0]}-{int(r[1])}"
+            return f"{r[0]}-{int(r[1])}" + (f"s{int(r[2])}" if r[2] else "")
         except Exception:  # noqa: BLE001  (SQLite sans JSON1 : pas d'empreinte, le lecteur redemande à chaque séance)
             return "0"
+
+    def panels_invalidate(self, node_ids) -> None:
+        """Le fichier d'un album a changé : les cases détectées sont effacées (recalculées à la demande) ; les cases
+        corrigées à la main sont gardées mais marquées « stale » (peut-être périmées), pour que l'administrateur les
+        revoie plutôt que de les perdre."""
+        ids = list(node_ids)
+        if not ids:
+            return
+        with self._write_lock:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                try:
+                    self.conn.execute(f"DELETE FROM panels WHERE node_id IN ({marks}) AND COALESCE(json_extract(data, '$.manual'), 0) != 1", chunk)
+                    self.conn.execute(f"UPDATE panels SET data=json_set(data, '$.stale', 1) WHERE node_id IN ({marks})", chunk)
+                except sqlite3.OperationalError:   # SQLite sans JSON1 : on efface tout, comme avant
+                    self.conn.execute(f"DELETE FROM panels WHERE node_id IN ({marks})", chunk)
+            self.conn.commit()
+
+    def panels_manual_list(self, limit: int = 200) -> list:
+        """Les planches corrigées à la main (toutes bibliothèques confondues), pour l'export vers le banc d'essai."""
+        try:
+            rows = self.conn.execute(
+                "SELECT p.node_id, p.page, p.data, n.name FROM panels p JOIN nodes n ON n.id = p.node_id "
+                "WHERE json_extract(p.data, '$.manual') = 1 ORDER BY n.path, p.page LIMIT ?", (limit,)).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [dict(node_id=r["node_id"], page=r["page"], name=r["name"], data=json.loads(r["data"])) for r in rows]
 
     def panels_clear(self, node_ids) -> None:
         ids = list(node_ids)

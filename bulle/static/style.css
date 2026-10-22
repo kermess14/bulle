@@ -1616,6 +1616,9 @@ h3.byauthor small { font-weight: 400; margin-left: 6px; }
 .pe-h.pe-nw { left: 0; top: 0; cursor: nwse-resize; } .pe-h.pe-n { left: 50%; top: 0; cursor: ns-resize; } .pe-h.pe-ne { left: 100%; top: 0; cursor: nesw-resize; }
 .pe-h.pe-e { left: 100%; top: 50%; cursor: ew-resize; } .pe-h.pe-se { left: 100%; top: 100%; cursor: nwse-resize; } .pe-h.pe-s { left: 50%; top: 100%; cursor: ns-resize; }
 .pe-h.pe-sw { left: 0; top: 100%; cursor: nesw-resize; } .pe-h.pe-w { left: 0; top: 50%; cursor: ew-resize; }
+.pe-warn { flex: none; padding: 6px 14px; font-size: 12.5px; background: #5a4300; color: #ffe9a8; text-align: center; }
+.pe-actions button.on { background: var(--accent, #3b82f6); color: #fff; }
+.pe-help a { color: inherit; text-decoration: underline; }
 .pe-help { flex: none; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); font-size: 12.5px; color: var(--muted); text-align: center; line-height: 1.35; }
 @media (pointer: coarse) { .pe-h { width: 26px; height: 26px; margin: -13px 0 0 -13px; } }
 .pe-actions button.on { background: #4da3ff; color: #fff; border-color: transparent; }

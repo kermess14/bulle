@@ -2039,10 +2039,12 @@ MANUAL_MAX = 60           # nombre maximal de cases tracées sur une planche
 MANUAL_MIN = 0.02         # côté minimal d'une case tracée (fraction de la page)
 
 
-def manual_panels(rects) -> dict:
+def manual_panels(rects, custom_order: bool = False) -> dict:
     """Cases tracées à la main : liste de [x0, y0, x1, y1] en fractions de la page. Vérifie, borne et arrondit chaque
     rectangle, les range dans l'ordre de lecture (occidental) et calcule l'ordre manga. Résultat de la même forme que
-    `detect_panels`, plus "manual": True ; lève ValueError si la liste est inadmissible."""
+    `detect_panels`, plus "manual": True ; lève ValueError si la liste est inadmissible.
+    custom_order=True : l'ordre donné est l'ordre de lecture voulu (dans les deux sens de lecture) ; il est gardé tel
+    quel, avec "custom_order": True."""
     if not isinstance(rects, (list, tuple)) or len(rects) > MANUAL_MAX:
         raise ValueError("liste de cases inadmissible")
     clean: list[tuple] = []
@@ -2060,6 +2062,9 @@ def manual_panels(rects) -> dict:
         if x1 - x0 < MANUAL_MIN or y1 - y0 < MANUAL_MIN:
             raise ValueError("une case est trop petite")
         clean.append((round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4)))
+    if custom_order:
+        return {"panels": [list(r) for r in clean], "rtl": list(range(len(clean))), "v": PANELS_VERSION,
+                "manual": True, "custom_order": True}
     scale = 10000
     big = [tuple(round(v * scale) for v in r) for r in clean]
     west = _reading_order(big, False)
@@ -2077,3 +2082,77 @@ def manual_panels(rects) -> dict:
         order = list(range(len(panels)))
     return {"panels": panels, "rtl": order, "v": PANELS_VERSION, "manual": True}
 
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 6. Interface stable des détecteurs
+# ----------------------------------------------------------------------------------------------------------------------
+# Tout ce qui calcule des cases (aujourd'hui `detect_panels`, « classic ») passe par `run_detector` : le serveur n'appelle
+# jamais un détecteur directement. Un autre moteur se branche avec `register_engine(nom, fonction)` sans toucher au
+# serveur ni au lecteur ; il doit seulement :
+#   - avoir la signature `fonction(img, retry=True, manga=True, diag=None) -> dict` ;
+#   - rendre le contrat de `detect_panels` : {"panels": [[x0, y0, x1, y1], …] fractions de la page, ordre occidental,
+#     "rtl": permutation (ordre manga), "v": entier, et facultativement "rtl_full", "join", "grow"} ;
+#   - ne rien écrire hors de son résultat (pas de fichier, pas de réseau sans accord explicite).
+# `run_detector` vérifie le résultat (`valid_result`) ; un moteur qui plante ou qui rend n'importe quoi est remplacé par
+# le détecteur classique, et à défaut par « pas de case » (page entière) : le lecteur n'est jamais cassé par un moteur.
+# Un moteur dont les résultats diffèrent de ceux du classique doit avoir son propre jeu de versions (sinon les cases
+# gardées en base seraient mélangées) et n'être activé qu'après mesure sur des planches annotées qu'il n'a jamais vues
+# (tools/banc_cases.py score). Aucun autre moteur n'est livré.
+import logging as _logging
+
+_plog = _logging.getLogger("bulle.panels")
+ENGINES: dict = {}
+DEFAULT_ENGINE = "classic"
+
+
+def register_engine(name: str, fn) -> None:
+    ENGINES[str(name)] = fn
+
+
+def valid_result(res, tol: float = 1e-6) -> bool:
+    """Le résultat respecte-t-il le contrat (formes, bornes, « rtl » = permutation) ?"""
+    try:
+        if not isinstance(res, dict):
+            return False
+        panels, rtl = res.get("panels"), res.get("rtl")
+        if not isinstance(panels, list) or not isinstance(rtl, list) or len(panels) > 200:
+            return False
+        for p in panels:
+            if not isinstance(p, (list, tuple)) or len(p) != 4:
+                return False
+            x0, y0, x1, y1 = (float(v) for v in p)
+            if not (-tol <= x0 < x1 <= 1 + tol and -tol <= y0 < y1 <= 1 + tol):
+                return False
+        if sorted(rtl) != list(range(len(panels))):
+            return False
+        return isinstance(res.get("v"), int)
+    except (TypeError, ValueError):
+        return False
+
+
+def run_detector(img: Image.Image, engine: Optional[str] = None, **opts) -> dict:
+    """Détecte les cases avec le moteur demandé (par défaut « classic »), en vérifiant son résultat."""
+    name = engine or DEFAULT_ENGINE
+    fn = ENGINES.get(name)
+    if fn is None:
+        _plog.warning("Moteur de cases inconnu : %s (détecteur classique utilisé)", name)
+        name, fn = DEFAULT_ENGINE, ENGINES[DEFAULT_ENGINE]
+    try:
+        res = fn(img, **opts)
+        if valid_result(res):
+            return res
+        _plog.warning("Le moteur de cases %s a rendu un résultat hors contrat", name)
+    except Exception:  # noqa: BLE001
+        _plog.exception("Le moteur de cases %s a échoué", name)
+    if name != DEFAULT_ENGINE:
+        try:
+            res = ENGINES[DEFAULT_ENGINE](img, **opts)
+            if valid_result(res):
+                return res
+        except Exception:  # noqa: BLE001
+            _plog.exception("Le détecteur classique a échoué")
+    return {"panels": [], "rtl": [], "v": PANELS_VERSION}
+
+
+register_engine(DEFAULT_ENGINE, detect_panels)

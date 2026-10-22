@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import io
 import ipaddress
+import json
 import logging
 import glob
 import os
@@ -35,11 +36,12 @@ from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, comp
 from . import bdfugue
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
-from .panels import PANELS_VERSION, detect_panels, manual_panels
+from .panels import PANELS_VERSION, manual_panels, run_detector
 from . import lots as lots_mod
 
-VERSION = "0.42.0"
+VERSION = "0.43.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
+PANELS_ENGINE = os.environ.get("PANELS_ENGINE", "classic")   # moteur de cases (seul « classic » est livré ; voir panels.run_detector)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
 log = logging.getLogger("bulle")
@@ -533,7 +535,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if not p:
             return None
         return {"page": p["page"], "pages": p.get("page_count"), "completed": bool(p.get("completed")),
-                "updated_at": p.get("updated_at")}
+                "updated_at": p.get("updated_at"), "panel": p.get("panel"), "panel_count": p.get("panel_count")}
 
     def album_json(n: dict, with_progress: bool = True) -> dict:
         d = {
@@ -1173,7 +1175,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 try:
                     # couverture, pages de garde et dernière page : pas de second essai (il y invente des cases)
                     last = (node.get("page_count") or 0) - 1
-                    result = detect_panels(im, retry=index >= 3 and (last < 0 or index < last), manga=want_rtl)
+                    result = run_detector(im, PANELS_ENGINE, retry=index >= 3 and (last < 0 or index < last), manga=want_rtl)
                 finally:
                     panels_sem.release()
             lib.panels_set(node_id, index, result)
@@ -1201,7 +1203,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         stored = None
         if cached is not None:
             stored = {"v": cached.get("v"), "manual": bool(cached.get("manual")), "rtl_full": cached.get("rtl_full", True),
-                      "count": len(cached.get("panels") or []), "current_version": cached.get("v") == PANELS_VERSION}
+                      "count": len(cached.get("panels") or []), "current_version": cached.get("v") == PANELS_VERSION,
+                      "stale": bool(cached.get("stale")), "custom_order": bool(cached.get("custom_order"))}
         try:
             path, data, _ = comics.page(node, lib.abs_path(node["path"]), index, PANELS_WIDTH)
             with Image.open(path or io.BytesIO(data)) as im:
@@ -1211,7 +1214,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 diag: dict = {}
                 try:
                     last = (node.get("page_count") or 0) - 1
-                    fresh = detect_panels(im, retry=index >= 3 and (last < 0 or index < last), manga=True, diag=diag)
+                    fresh = run_detector(im, PANELS_ENGINE, retry=index >= 3 and (last < 0 or index < last), manga=True, diag=diag)
                 finally:
                     panels_sem.release()
         except AlbumError as e:
@@ -1225,6 +1228,54 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    EXPORT_MAX = 200   # planches par export
+
+    @app.route("/api/panels/export")
+    def api_panels_export():
+        """Export des corrections manuelles pour le banc d'essai (administrateur) : un zip avec les planches (largeur
+        d'analyse), gt.json (cases corrigées en pixels, dans l'ordre de lecture : le format de `tools/banc_cases.py
+        score`), auto.json (ce que la détection trouve aujourd'hui, en fractions) et corrections.json (détails).
+        Rien n'est envoyé nulle part : c'est un fichier que l'administrateur télécharge et garde chez lui."""
+        require_admin()
+        rows = lib.panels_manual_list(EXPORT_MAX)
+        buf = io.BytesIO()
+        gt, auto, details = {}, {}, {}
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+            for r in rows:
+                node = lib.node(r["node_id"])
+                if not node:
+                    continue
+                key = f"a{r['node_id']}_p{r['page'] + 1:03d}"
+                try:
+                    path, data, _ = comics.page(node, lib.abs_path(node["path"]), r["page"], PANELS_WIDTH)
+                    with Image.open(path or io.BytesIO(data)) as im:
+                        im.load()
+                        w, h = im.size
+                        jpg = io.BytesIO()
+                        im.convert("RGB").save(jpg, "JPEG", quality=92)
+                        z.writestr(f"pages/{key}.jpg", jpg.getvalue())
+                        found = None
+                        if panels_sem.acquire(timeout=panels_wait):
+                            try:
+                                found = run_detector(im, PANELS_ENGINE, retry=False, manga=False)["panels"]
+                            finally:
+                                panels_sem.release()
+                except Exception:  # noqa: BLE001  (page illisible : on passe à la suivante)
+                    continue
+                d = r["data"]
+                gt[key] = {"boxes": [[round(p[0] * w), round(p[1] * h), round(p[2] * w), round(p[3] * h)] for p in d.get("panels", [])],
+                           "manga": False, "album": node["name"], "set": "export"}
+                auto[key] = found
+                details[key] = {"album": node["name"], "page": r["page"], "size": [w, h], "manual": d.get("panels", []),
+                                "custom_order": bool(d.get("custom_order")), "stale": bool(d.get("stale")),
+                                "detector": PANELS_VERSION}
+            for name, obj in (("gt.json", gt), ("auto.json", auto), ("corrections.json", details)):
+                z.writestr(name, json.dumps(obj, ensure_ascii=False, indent=1))
+        buf.seek(0)
+        resp = send_file(buf, mimetype="application/zip", as_attachment=True, download_name="bulle-corrections.zip")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
     @app.route("/api/panels/<int:node_id>/<int:index>/manual", methods=["PUT", "POST"])
     def api_panels_manual_set(node_id: int, index: int):
         """Cases d'une planche corrigées à la main (éditeur du lecteur) : gardées en base à la place de la détection.
@@ -1235,7 +1286,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if index < 0 or (node.get("page_count") and index >= node["page_count"]):
             abort(400, description="Page inconnue")
         try:
-            result = manual_panels(body.get("panels"))
+            result = manual_panels(body.get("panels"), custom_order=bool(body.get("custom_order")))
         except ValueError as e:
             abort(400, description=str(e))
         result["t"] = int(time.time() * 1000)
@@ -1301,8 +1352,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             page = int(page)
         except (TypeError, ValueError):
             abort(400, description="« page » doit être un nombre")
+        def _int(k):
+            try:
+                return int(body[k]) if body.get(k) is not None else None
+            except (TypeError, ValueError):
+                return None
         p = lib.set_progress(node_id, page, node.get("page_count"), completed, profile_id=current_profile(),
-                             threshold=float(settings()["read_threshold"]))
+                             threshold=float(settings()["read_threshold"]),
+                             panel=_int("panel"), panel_count=_int("panel_count"))
         return jsonify(progress_json(p))
 
     @app.route("/api/progress/<int:node_id>", methods=["DELETE"])
@@ -2987,7 +3044,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
 
         def detect(im: Image.Image, album: dict, page: int) -> dict:
             with panels_sem:
-                return detect_panels(im, retry=page >= 3 and page < album["pages"] - 1, manga=False)
+                return run_detector(im, PANELS_ENGINE, retry=page >= 3 and page < album["pages"] - 1, manga=False)
 
         def job() -> None:
             try:

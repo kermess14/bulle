@@ -421,6 +421,24 @@ class SimpleTests(unittest.TestCase):
         print("  images :", ", ".join(f"{s[0][0]}x{s[0][1]} {s[1] // 1024} Ko" for s in seen))
 
     # ---- progression ----------------------------------------------------------------------
+    def test_reprise_a_la_case(self):
+        nid = self.t02["id"]
+        url = f"/api/progress/{nid}"
+        j = self.c.put(url, json={"page": 1, "panel": 2, "panel_count": 4}).get_json()
+        self.assertEqual((j["page"], j["panel"], j["panel_count"]), (1, 2, 4))
+        item = self.c.get(f"/api/item/{nid}").get_json()
+        self.assertEqual(item["progress"]["panel"], 2)
+        # case hors limites ou mal formée : ignorée, reprise au début de la page
+        for bad in ({"panel": 4, "panel_count": 4}, {"panel": -1, "panel_count": 3}, {"panel": "x", "panel_count": 3},
+                    {"panel": 1}, {"panel": 1, "panel_count": 5000}):
+            j = self.c.put(url, json=dict(page=1, **bad)).get_json()
+            self.assertIsNone(j["panel"], bad)
+            self.assertIsNone(j["panel_count"], bad)
+        # une page enregistrée sans case (autre mode) efface la case précédente
+        self.c.put(url, json={"page": 1, "panel": 1, "panel_count": 3})
+        j = self.c.put(url, json={"page": 1}).get_json()
+        self.assertIsNone(j["panel"])
+
     def test_progression_et_reprise(self):
         a = self.t01["id"]
         self.get(f"/simple/lire/{a}?p=2")
@@ -618,6 +636,57 @@ class SimpleTests(unittest.TestCase):
         self.assertEqual(d.status_code, 200)
         self.assertNotEqual(d.get_json()["stamp"], j["stamp"])
         self.assertIsNone(self.lib.panels_get(nid, 0))
+
+    def test_manual_order_full_page_stale_export(self):
+        nid = self.t02["id"]
+        self.lib.panels_clear([nid])
+        url = f"/api/panels/{nid}/0/manual"
+        grid = [[0.5, 0.0, 1.0, 0.5], [0.0, 0.5, 1.0, 1.0], [0.0, 0.0, 0.5, 0.5]]
+        j = self.c.put(url, json={"panels": grid, "custom_order": True}).get_json()
+        self.assertEqual(j["panels"], grid)
+        self.assertEqual(j["rtl"], [0, 1, 2])
+        self.assertTrue(self.c.get(f"/api/panels/{nid}/0").get_json()["custom_order"])
+        # page entière forcée : correction sans case, gardée comme telle
+        j = self.c.put(url, json={"panels": []}).get_json()
+        self.assertEqual((j["panels"], j["manual"]), ([], True))
+        g = self.c.get(f"/api/panels/{nid}/0").get_json()
+        self.assertEqual((g["panels"], g["manual"]), ([], True))
+        # le fichier change : la correction est gardée, marquée périmée, l'empreinte change ; la détection est effacée
+        self.c.put(url, json={"panels": grid})
+        self.lib.panels_set(nid, 1, {"panels": [[0, 0, 1, 1]], "rtl": [0], "v": PANELS_VERSION})
+        before = self.lib.panels_manual_stamp(nid)
+        self.lib.panels_invalidate([nid])
+        self.assertIsNone(self.lib.panels_get(nid, 1))
+        g = self.c.get(f"/api/panels/{nid}/0").get_json()
+        self.assertTrue(g["manual"] and g["stale"])
+        self.assertNotEqual(self.lib.panels_manual_stamp(nid), before)
+        j = self.c.put(url, json={"panels": grid}).get_json()      # revalidée en l'enregistrant
+        self.assertNotIn("stale", self.c.get(f"/api/panels/{nid}/0").get_json())
+        # export pour le banc : zip lisible par tools/banc_cases.py score
+        r = self.c.get("/api/panels/export")
+        self.assertEqual(r.status_code, 200)
+        import io as _io
+        import json as _json
+        import zipfile as _zf
+        with _zf.ZipFile(_io.BytesIO(r.get_data())) as z:
+            names = z.namelist()
+            gt = _json.loads(z.read("gt.json"))
+            self.assertTrue(any(n.startswith("pages/") and n.endswith(".jpg") for n in names))
+            self.assertIn("auto.json", names)
+            self.assertIn("corrections.json", names)
+        key = f"a{nid}_p001"
+        self.assertEqual(len(gt[key]["boxes"]), 3)
+        self.assertTrue(all(len(b) == 4 and b[2] > b[0] for b in gt[key]["boxes"]))
+        with self.lib._write_lock:
+            self.lib.conn.execute("UPDATE profiles SET role='reader' WHERE id=?", (DEFAULT_PROFILE,))
+            self.lib.conn.commit()
+        try:
+            self.assertEqual(self.c.get("/api/panels/export").status_code, 403)
+        finally:
+            with self.lib._write_lock:
+                self.lib.conn.execute("UPDATE profiles SET role='admin' WHERE id=?", (DEFAULT_PROFILE,))
+                self.lib.conn.commit()
+            self.lib.panels_clear([nid])
 
     def test_manual_admin_only(self):
         """Un lecteur ne corrige pas les cases (la correction vaut pour tous) mais les lit."""

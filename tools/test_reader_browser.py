@@ -165,6 +165,61 @@ class ReaderBrowser(unittest.TestCase):
         self.assertAlmostEqual(raced, clean, delta=3)
         self.assertEqual(self.errors, [])
 
+    def test_resume_at_panel(self):
+        pg = self.page()
+        pg.goto(f"{self.base}/read/{self.short}?page=1")
+        pg.wait_for_timeout(800)
+        if not pg.is_visible("#pedit"):
+            pg.keyboard.press("c")
+        pg.wait_for_timeout(2000)
+        for _ in range(3):
+            pg.keyboard.press("ArrowRight")
+            pg.wait_for_timeout(500)
+        before = pg.inner_text("#rcount")
+        pg.wait_for_timeout(900)
+        with sqlite3.connect(os.path.join(self.tmp, "data", "bulle.sqlite")) as c:
+            row = c.execute("SELECT page, panel, panel_count FROM progress WHERE node_id=?", (self.short,)).fetchone()
+        self.assertEqual(row[0], 1)
+        self.assertIsNotNone(row[1])
+        pg.goto(f"{self.base}/read/{self.short}")
+        pg.wait_for_timeout(2500)
+        after = pg.inner_text("#rcount")
+        self.assertEqual(before, after)
+        self.assertIn("case", after)
+        self.assertEqual(self.errors, [])
+
+    def test_editor_order_and_full_page(self):
+        pg = self.page()
+        pg.goto(f"{self.base}/read/{self.short}?page=2")
+        pg.wait_for_timeout(800)
+        if not pg.is_visible("#pedit"):
+            pg.keyboard.press("c")
+        pg.wait_for_timeout(2000)
+        pg.keyboard.press("e")
+        pg.wait_for_timeout(800)
+        self.assertTrue(pg.is_visible(".pe"))
+        n = pg.locator(".pe-r").count()
+        self.assertGreaterEqual(n, 4)
+        pg.locator(".pe-r").first.click()
+        pg.keyboard.press("]")
+        pg.wait_for_timeout(200)
+        self.assertIn("fixé", pg.inner_text('[data-a="order"]'))
+        pg.keyboard.press("Enter")
+        pg.wait_for_timeout(1200)
+        with sqlite3.connect(os.path.join(self.tmp, "data", "bulle.sqlite")) as c:
+            import json as _j
+            d = _j.loads(c.execute("SELECT data FROM panels WHERE node_id=? AND page=2", (self.short,)).fetchone()[0])
+        self.assertTrue(d["manual"] and d["custom_order"])
+        self.assertEqual(len(d["panels"]), n)
+        pg.keyboard.press("e")
+        pg.wait_for_timeout(800)
+        pg.click('[data-a="full"]')
+        pg.wait_for_timeout(1200)
+        with sqlite3.connect(os.path.join(self.tmp, "data", "bulle.sqlite")) as c:
+            d = _j.loads(c.execute("SELECT data FROM panels WHERE node_id=? AND page=2", (self.short,)).fetchone()[0])
+        self.assertEqual((d["manual"], d["panels"]), (True, []))
+        self.assertEqual(self.errors, [])
+
     def test_diag_screen(self):
         pg = self.page()
         pg.goto(f"{self.base}/read/{self.short}?page=0")
