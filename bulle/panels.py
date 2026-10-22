@@ -21,6 +21,15 @@ comics, noir et blanc, aquarelle) :
   déborde jusqu'au bord de la page ; elles sont alors effacées et le reste est redécoupé, ce qui fait apparaître la
   grande image de fond (avec cases incrustées) comme une case à part entière ;
 - une légende sous une case ou une ligne de crédits (bande mince et surtout claire) n'est pas une case.
+
+Version 19 (lot 2 de l'audit, mesurée sur le banc d'essai : 100 planches de validation corrigées à la main + 40 planches
+de réglage) :
+- gouttière légèrement de travers (planche numérisée un peu penchée) : aucune ligne n'est entièrement fond, mais chaque
+  colonne a sa suite verticale de fond, bordée de dessin de part et d'autre (`_tilted_gutter`) ;
+- gouttière noyée dans une bande plus large de lignes à moitié claires (ciel, intérieur de case pâle) : la suite de
+  lignes nettement plus claires que le reste est examinée comme une bande à part ;
+- une gouttière barrée dont seuls les bords sont mordus par l'anticrénelage est jugée sur son cœur (part de fond et
+  bords compris), pas sur la bande entière.
 """
 from __future__ import annotations
 
@@ -30,7 +39,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
-PANELS_VERSION = 18       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
+PANELS_VERSION = 19       # à augmenter quand la détection change (les cases gardées en base sont alors recalculées)
 FRAME_BUDGET = 150_000    # nombre maximal de tests de couverture pour chercher les cadres (borne le temps sur une page chargée)
 RETRY_BG = 225            # second essai, page claire sans cases trouvées : fond de référence plus sombre (voir detect_panels)
 WORK_WIDTH = 800          # largeur de travail (px) : assez fine pour les traits de cadre et les gouttières minces.
@@ -164,12 +173,16 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
     ratios = (n / w, up, down)
     if not blockers:
         return ratios
-    # ce qui barre la gouttière doit être une bulle ou un cartouche : au milieu, et court. Un obstacle qui touche un bout
-    # de la bande est une case qui la traverse (grande case sur deux rangées) : alors ce n'est pas une gouttière.
+    return ratios + (_obstacles_ok(band, region.crop((0, a, w, b))),)
+
+
+def _obstacles_ok(band: bytes, strip: Image.Image) -> bool:
+    """Ce qui barre une gouttière (colonnes de `band` qui ne sont pas 255) doit être une bulle ou un cartouche : au milieu,
+    et court. Un obstacle qui touche un bout de la bande est une case qui la traverse (grande case sur deux rangées) :
+    alors ce n'est pas une gouttière. `strip` : la bande elle-même dans le masque, pour mesurer la part de fond dans
+    chaque obstacle (un cartouche, des lettres sur du blanc, en garde beaucoup ; une case dessinée presque pas)."""
+    w, thick = strip.size
     end = max(2, round(0.03 * w))
-    # part de fond dans l'obstacle : un cartouche (lettres sur du blanc) en garde beaucoup, une case dessinée qui
-    # traverse presque pas (nombre de pixels fond dans le rectangle de l'obstacle, compté par Pillow)
-    strip = region.crop((0, a, w, b))
     ok, i = True, 0
     big = 0
     while i < w:
@@ -178,7 +191,7 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
             while j < w and band[j] != 255:
                 j += 1
             at_end = i < end or j > w - end
-            caption = not at_end and strip.crop((i, 0, j, b - a)).histogram()[255] >= 0.5 * (j - i) * (b - a)
+            caption = not at_end and strip.crop((i, 0, j, thick)).histogram()[255] >= 0.5 * (j - i) * thick
             big += (j - i) > 0.1 * w and not caption
             if j - i > (0.12 if at_end else 0.4 if caption else 0.25) * w or big > 1:   # deux gros obstacles : des cases qui traversent
                 ok = False
@@ -186,7 +199,63 @@ def _edge_ratios(mask: Image.Image, box: tuple, axis: int, a: int, b: int, block
             i = j
         else:
             i += 1
-    return ratios + (ok,)
+    return ok
+
+
+def _tilted_gutter(mask: Image.Image, box: tuple, axis: int, a: int, b: int, min_gutter: int, slack: int = 2):
+    """Comme `_edge_ratios(…, blockers=True)`, mais pour une gouttière légèrement de travers (planche numérisée un peu
+    penchée) : aucune ligne n'est alors entièrement fond, mais chaque colonne contient, dans la bande [a - slack,
+    b + slack), une suite verticale de pixels fond d'au moins `min_gutter`. Une colonne compte comme « fond » si elle en a
+    une ; « bordée au-dessus » (resp. au-dessous) si du dessin touche une telle suite juste au-dessus (resp. au-dessous),
+    à 4 px près. Tout est calculé par Pillow, ligne par ligne : minimum sur des fenêtres de lignes (une suite de fond
+    commence ici), puis maximum sur les positions possibles (la colonne en a une quelque part). Renvoie
+    (part des colonnes fond, part bordée au-dessus, part bordée au-dessous, obstacles acceptables)."""
+    region = mask.crop(box)
+    if axis == 1:
+        region = region.transpose(Image.Transpose.TRANSPOSE)
+    w, h = region.size
+    lo, hi = max(0, a - slack), min(h, b + slack)
+    g, probe = max(2, min_gutter), 4
+    if w == 0 or hi - lo < g:
+        return 0.0, 0.0, 0.0, False
+    strip = region.crop((0, lo, w, hi))
+    off = max(0, lo - probe)
+    rows = [region.crop((0, y, w, y + 1)) for y in range(off, min(h, hi + probe))]   # rows[i] : ligne off + i
+
+    def fold(items, op):
+        out = items[0]
+        for it in items[1:]:
+            out = op(out, it)
+        return out
+
+    def win_min(y0, y1):   # minimum des lignes [y0, y1) de la zone (None si rien n'est dans la zone)
+        sel = [rows[y - off] for y in range(max(off, y0), min(off + len(rows), y1))]
+        return fold(sel, ImageChops.darker) if sel else None
+
+    starts, ups, downs = [], [], []
+    for y in range(lo, hi - g + 1):
+        s_ = win_min(y, y + g)                     # 255 : une suite de g lignes fond commence en y
+        starts.append(s_)
+        over, under = win_min(y - probe, y), win_min(y + g, y + g + probe)
+        if over is not None:                       # du dessin juste au-dessus de cette suite : son minimum vaut 0
+            ups.append(ImageChops.darker(s_, ImageChops.invert(over)))
+        if under is not None:
+            downs.append(ImageChops.darker(s_, ImageChops.invert(under)))
+    band = fold(starts, ImageChops.lighter).tobytes()          # 255 : la colonne a sa suite de fond
+    n = band.count(255)
+    if n == 0:
+        return 0.0, 0.0, 0.0, False
+    up = fold(ups, ImageChops.lighter).tobytes().count(255) if ups else 0
+    down = fold(downs, ImageChops.lighter).tobytes().count(255) if downs else 0
+    # une gouttière est ouverte à ses deux bouts (elle rejoint la marge ou une autre gouttière) ; une bande claire fermée
+    # par un trait aux deux bouts est l'intérieur d'une case (un objet pâle, un ciel), sauf au bord même de la page
+    lo_edge, hi_edge = (box[0], box[2]) if axis == 0 else (box[1], box[3])
+    size = mask.width if axis == 0 else mask.height
+    end = 4
+    if (lo_edge > 1 and any(band[x] != 255 for x in range(min(end, w)))) or \
+            (hi_edge < size - 1 and any(band[x] != 255 for x in range(max(0, w - end), w))):
+        return n / w, up / n, down / n, False
+    return n / w, up / n, down / n, _obstacles_ok(band, strip)
 
 
 def _text_strip(mask: Image.Image, box: tuple, axis: int, a: int, b: int, length: int) -> bool:
@@ -225,6 +294,36 @@ def _walled(mask: Image.Image, box: tuple, axis: int, a: int, b: int) -> bool:
     return min(up, down) < 0.5
 
 
+
+def _partial_ok(mask: Image.Image, box: tuple, axis: int, prof: list, a: int, b: int, length: int, min_gutter: int) -> bool:
+    """La bande [a, b), pas entièrement fond, est-elle une gouttière barrée par une bulle ou un cartouche (ou de
+    travers) ? Voir `_cut`."""
+    frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, a, b, blockers=True)
+    if not blocked_ok:
+        # les bords de la bande sont parfois mordus par le trait de cadre (anticrénelage) : on regarde son cœur
+        core = [i for i in range(a, b) if prof[i] >= 0.9]
+        if len(core) >= PARTIAL_MIN_PX - 1 and core[-1] - core[0] + 1 == len(core):
+            frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
+        elif len(core) == 2 and core[1] == core[0] + 1:
+            # gouttière de deux pixels entre deux cadres très rapprochés : acceptée seulement si elle est nette
+            # (presque entièrement blanche) et bordée de dessin sur presque toute sa longueur
+            f2, u2, d2, ok2 = _edge_ratios(mask, box, axis, core[0], core[1] + 1, blockers=True)
+            if ok2 and f2 >= 0.95 and min(u2, d2) >= 0.85:
+                frac, up, down, blocked_ok = f2, u2, d2, True
+    elif frac < PARTIAL_MIN:
+        # une colonne d'anticrénelage au bord de la bande (moins claire que la gouttière) : la bande sans elle
+        top = max(prof[a:b])
+        core = [i for i in range(a, b) if prof[i] >= top - 0.08]
+        if len(core) >= PARTIAL_MIN_PX and core[-1] - core[0] + 1 == len(core) and len(core) < b - a:
+            frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
+    if not (frac >= PARTIAL_MIN and up >= EDGE_ALIGN and down >= EDGE_ALIGN and blocked_ok) and b - a >= 2 and max(prof[a:b]) >= 0.75:
+        # planche un peu de travers : la gouttière existe dans chaque colonne, mais pas sur une même ligne
+        frac, up, down, blocked_ok = _tilted_gutter(mask, box, axis, a, b, min_gutter)
+        frac = frac if frac >= 0.9 else 0.0   # (presque toutes les colonnes doivent avoir leur suite de fond)
+    if frac >= PARTIAL_MIN and up >= EDGE_ALIGN and down >= EDGE_ALIGN and blocked_ok:
+        return not _text_strip(mask, box, axis, a, b, length)
+    return False
+
 def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: int) -> list[tuple]:
     """Découpe la zone selon les gouttières traversantes (axis=0 : coupes horizontales). Une gouttière peut être
     « barrée » par une bulle ou un cartouche à cheval sur deux cases, si ses bords sont ceux de cases (rectilignes) ;
@@ -260,29 +359,32 @@ def _cut(mask: Image.Image, box: tuple, axis: int, min_gutter: int, min_side: in
             if not _walled(mask, box, axis, sa, sb):
                 cuts.append((sa, sb))
             continue
-        if b - a > max(min_gutter, PARTIAL_MAX * length) or b - a < PARTIAL_MIN_PX:
-            continue   # (trop mince : un trait clair du décor, une ligne de plafond, pas une gouttière)
-        frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, a, b, blockers=True)
-        if not blocked_ok:
-            # les bords de la bande sont parfois mordus par le trait de cadre (anticrénelage) : on regarde son cœur
-            core = [i for i in range(a, b) if prof[i] >= 0.9]
-            if len(core) >= PARTIAL_MIN_PX - 1 and core[-1] - core[0] + 1 == len(core):
-                f2, u2, d2, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
-            elif len(core) == 2 and core[1] == core[0] + 1:
-                # gouttière de deux pixels entre deux cadres très rapprochés : acceptée seulement si elle est nette
-                # (presque entièrement blanche) et bordée de dessin sur presque toute sa longueur
-                f2, u2, d2, ok2 = _edge_ratios(mask, box, axis, core[0], core[1] + 1, blockers=True)
-                if ok2 and f2 >= 0.95 and min(u2, d2) >= 0.85:
-                    frac, up, down, blocked_ok = f2, u2, d2, True
-        elif frac < PARTIAL_MIN:
-            # une colonne d'anticrénelage au bord de la bande (moins claire que la gouttière) : la bande sans elle
+        max_thick = max(min_gutter, PARTIAL_MAX * length)
+        if b - a > max_thick:
+            # bande trop épaisse pour une gouttière barrée (un ciel, un intérieur de case clair)… qui peut pourtant en
+            # contenir une : la gouttière entre deux cases, salie par l'anticrénelage ou de travers, est noyée dans
+            # une bande plus large de lignes à moitié claires. On regarde chaque suite de lignes nettement plus claires
+            # que le reste de la bande (à 15 % du maximum), mince, comme une bande à part.
             top = max(prof[a:b])
-            core = [i for i in range(a, b) if prof[i] >= top - 0.08]
-            if len(core) >= PARTIAL_MIN_PX and core[-1] - core[0] + 1 == len(core) and len(core) < b - a:
-                frac, up, down, blocked_ok = _edge_ratios(mask, box, axis, core[0], core[-1] + 1, blockers=True)
-        if frac >= PARTIAL_MIN and up >= EDGE_ALIGN and down >= EDGE_ALIGN and blocked_ok:
-            if _text_strip(mask, box, axis, a, b, length):
-                continue
+            subs, start_ = [], None
+            for i in range(a, b + 1):
+                if i < b and prof[i] >= top - 0.15:
+                    start_ = i if start_ is None else start_
+                elif start_ is not None:
+                    subs.append((start_, i)); start_ = None
+            for sa_, sb_ in subs:
+                if not (PARTIAL_MIN_PX - 1 <= sb_ - sa_ <= max_thick and sa_ > 0 and sb_ < length):
+                    continue
+                if min(prof[sa_:sb_]) >= GUTTER_FRACTION:
+                    # une gouttière franche, noyée dans une bande plus large : même règle que plus haut
+                    if not _walled(mask, box, axis, sa_, sb_):
+                        cuts.append((sa_, sb_))
+                elif _partial_ok(mask, box, axis, prof, sa_, sb_, length, min_gutter):
+                    cuts.append((sa_, sb_))
+            continue
+        if b - a < PARTIAL_MIN_PX:
+            continue   # (trop mince : un trait clair du décor, une ligne de plafond, pas une gouttière)
+        if _partial_ok(mask, box, axis, prof, a, b, length, min_gutter):
             cuts.append((a, b))
     if not cuts:
         return [box]
