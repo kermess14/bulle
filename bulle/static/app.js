@@ -1776,7 +1776,10 @@
         ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}
         ${field("Recherche BDGest en secours", chk("g", "bdt_bdgest", g.bdt_bdgest), "Quand l'index de Bédéthèque ne trouve rien de sûr (nom approchant, homonymes), Bulle cherche aussi « dans tout le site » BDGest : c'est la même base, mais cette recherche trouve aussi les albums par leur titre, et l'année du fichier départage les homonymes (« Là-bas (2003) »). Une requête de plus, au rythme prudent, pour chaque album ou série concerné. La recherche à la main (« Chercher… ») l'utilise toujours.")}
         ${field("Recherche BDfugue en secours", chk("g", "bdt_bdfugue", g.bdt_bdfugue), "Quand un album ou une série n'est pas sur Bédéthèque (rien trouvé, ou rien de sûr), Bulle cherche aussi sur BDfugue, la librairie en ligne : titre, auteurs, éditeur, date, résumé et couverture. Un album au titre identique est lié tout seul ; sinon il s'ajoute aux propositions. Une requête de plus par album ou série concerné, au même rythme prudent. On peut aussi coller l'adresse d'une fiche BDfugue dans « Chercher… ».")}`,
-      tasks: () => `<p class="muted">Tout ce que Bulle fait en arrière-plan : scan, couvertures, mesure HD/SD, résumés et fiches Bédéthèque. « Arrêter » laisse la tâche finir l'élément en cours, puis elle s'interrompt : rien n'est laissé à moitié écrit.</p><div id="tasks-box"><div class="spinner"></div></div>`,
+      tasks: () => `<p class="muted">Tout ce que Bulle fait en arrière-plan : scan, couvertures, mesure HD/SD, résumés et fiches Bédéthèque. « Arrêter » laisse la tâche finir l'élément en cours, puis elle s'interrompt : rien n'est laissé à moitié écrit.</p><div id="tasks-box"><div class="spinner"></div></div>
+        <h3 class="setsub">Lots de planches à corriger</h3>
+        <p class="muted">Prépare deux lots de 50 planches tirées dans toute la bibliothèque (tous les styles, dont 10 de « Watchmen » par lot si l'album est là), sans doublon d'un lot à l'autre. Pour chaque planche : un JPG avec les cases détectées et numérotées, et la page seule. Le ZIP contient un dossier par lot, à donner tel quel à un ami, et un fichier index.json à garder pour soi. La rubrique Adulte est exclue, aucun album n'est modifié.</p>
+        <p><button class="btn" type="button" data-lots="start">Préparer les deux lots</button> <a class="btn" id="lots-dl" href="/api/lots/download" hidden>Télécharger le ZIP</a> <small class="muted" id="lots-info"></small></p>`,
       about: () => `
         <p class="muted">Bulle ${esc(settings.meta.version || "")} · ${plural(stats.albums || 0, "album", "albums")} dans ${plural(stats.folders || 0, "dossier", "dossiers")} (${fmtSize(stats.size || 0)}) · dernier scan : ${fmtDate(stats.last_scan)}<br>
         Dossier des BD : <code>${esc(settings.meta.library_root || "")}</code> · <a href="https://github.com/kermess14/bulle" target="_blank" rel="noopener">github.com/kermess14/bulle</a></p>
@@ -1823,6 +1826,12 @@
       : t.state === "stopping" ? `<button class="btn danger" type="button" data-task-kill title="La tâche ne s'arrête pas ? Redémarre Bulle pour la couper net">Forcer l'arrêt…</button>` : "";
     return `<tr class="${running ? "run" : ""}"><td><b>${esc(t.label)}</b>${t.detail ? `<br><small class="muted">${esc(t.detail)}</small>` : ""}</td><td>${state}</td><td class="num">${prog}</td><td>${esc(when)}</td><td class="act">${btn}</td></tr>`;
   }
+  function renderLots(l) {
+    const a = document.getElementById("lots-dl"), i = document.getElementById("lots-info");
+    if (!a || !l) return;
+    a.hidden = !l.ready;
+    if (i) i.textContent = l.ready ? `Dernier ZIP : ${fmtSize(l.size)}, préparé ${fmtDate(l.at)}` : "";
+  }
   function renderTasks(box, list, recent = []) {
     const running = list.filter(t => t.state === "running").length;
     box.innerHTML = `<table class="coltable tasks"><thead><tr><th>Tâche</th><th>État</th><th>Avancement</th><th>Dernière exécution</th><th></th></tr></thead><tbody>${list.map(taskRow).join("")}</tbody></table>
@@ -1838,10 +1847,17 @@
       const again = document.getElementById("tasks-box");
       if (!again) return;
       renderTasks(again, j.tasks, j.recent);
+      renderLots(j.lots);
     } catch (e) { box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
     tasksTimer = setTimeout(pollTasks, 2000);
   }
   main.addEventListener("click", async e => {
+    const lots = e.target.closest("[data-lots]");
+    if (lots) {
+      try { await api("/api/lots", { method: "POST", body: JSON.stringify({}), headers: { "Content-Type": "application/json" } }); toast("Préparation des lots lancée : suivez-la dans le tableau ci-dessus."); pollTasks(); }
+      catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
+      return;
+    }
     const one = e.target.closest("[data-task-stop]"), all = e.target.closest("[data-tasks-stopall]"), kill = e.target.closest("[data-task-kill]");
     if (kill) {
       if (!confirm("Forcer l'arrêt redémarre Bulle.\n\nToutes les tâches en cours sont coupées net et le site est inaccessible quelques secondes. Un scan reprendra au démarrage. Vos fichiers BD ne sont jamais modifiés.\n\nÀ utiliser seulement si « Arrêter » n'aboutit pas. Redémarrer Bulle ?")) return;
