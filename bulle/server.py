@@ -38,7 +38,7 @@ from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe
 from .panels import PANELS_VERSION, detect_panels
 from . import lots as lots_mod
 
-VERSION = "0.39.0"
+VERSION = "0.39.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -2522,7 +2522,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         if settings().get("bdt_bdfugue"):   # laboratoire : les albums trouvés sur BDfugue, à la suite
             results += bdfugue.album_candidates(bdfugue_hits(q, year), 10)
         return jsonify({"results": results[:40], "site_error": site_error,
-                        "web": f"https://www.bedetheque.com/search/tout?RechTexte={urllib.parse.quote(q)}"})
+                        "web": f"https://www.bedetheque.com/search/tout?RechTexte={urllib.parse.quote(q)}&RechWhere=7"})
 
     cover_memo: dict[str, Optional[str]] = {}
 
