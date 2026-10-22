@@ -1120,7 +1120,7 @@
         : item.reading_count ? `<div class="sub">${plural(item.reading_count, "album en cours", "albums en cours")}</div>` : "";
       const done = item.album_count && item.read_count >= item.album_count ? `<span class="badge ok" title="Tout lu">${ICON.check}</span>` : "";
       let bdt = "";
-      const oneShot = !!(item.bdt && (item.bdt.total || 0) <= 1);   // fiche Bédéthèque d'un tome unique : un one shot dans son dossier
+      const oneShot = !!item.oneshot;   // décidé par le serveur : fiche Bédéthèque d'un tome unique, ou dossier d'un seul album sans numéro de tome
       if (item.bdt && item.bdt.total > 1) {
         const pct = Math.round((item.bdt.present / item.bdt.total) * 100);
         const full = item.bdt.present >= item.bdt.total;
