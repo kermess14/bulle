@@ -1120,12 +1120,13 @@
         : item.reading_count ? `<div class="sub">${plural(item.reading_count, "album en cours", "albums en cours")}</div>` : "";
       const done = item.album_count && item.read_count >= item.album_count ? `<span class="badge ok" title="Tout lu">${ICON.check}</span>` : "";
       let bdt = "";
-      if (item.bdt && item.bdt.total) {
+      const oneShot = !!(item.bdt && (item.bdt.total || 0) <= 1);   // fiche Bédéthèque d'un tome unique : un one shot dans son dossier
+      if (item.bdt && item.bdt.total > 1) {
         const pct = Math.round((item.bdt.present / item.bdt.total) * 100);
         const full = item.bdt.present >= item.bdt.total;
         bdt = `<div class="sub bdt ${full ? "full" : ""}" title="Bédéthèque : ${esc(item.bdt.title || "")}${item.bdt.status ? " · " + esc(item.bdt.status) : ""}">${full ? "Série complète" : `${item.bdt.present}/${item.bdt.total} tomes`}<i style="width:${pct}%"></i></div>`;
       }
-      return `<a class="card folder" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}" draggable="true"${colorStyle(item)}>
+      return `<a class="card folder${oneShot ? " os-linked" : ""}" href="#/f/${item.id}" data-letter="${letter}" data-id="${item.id}" draggable="true"${colorStyle(item)}>
         ${coverHtml(item, `<span class="badge count" title="${plural(item.album_count, "album", "albums")}">${ICON.folder}${item.album_count}</span>${done}${qualityBadge(item)}${item.adult ? `<span class="badge adult" title="Rubrique Adulte">18+</span>` : ""}${item.fav ? FAV : ""}`)}
         <div class="title">${esc(item.name)}</div>${read || (bdt ? "" : `<div class="sub">${plural(item.album_count, "album", "albums")}</div>`)}${bdt}
       </a>`;
@@ -1632,9 +1633,9 @@
 
   const ALL_SETTINGS_GROUPS = [
     ["look", "Affichage"], ["library", "Bibliothèque"], ["reader", "Lecteur"], ["account", "Mon compte"], ["images", "Images et cache"],
-    ["bdt", "Bédéthèque"], ["access", "Comptes et accès"], ["adult", "Adulte"], ["lab", "Laboratoire"], ["about", "À propos"],
+    ["bdt", "Bédéthèque"], ["access", "Comptes et accès"], ["adult", "Adulte"], ["lab", "Laboratoire"], ["tasks", "Tâches"], ["about", "À propos"],
   ];
-  const ADMIN_GROUPS = ["images", "bdt", "access", "adult", "lab"];
+  const ADMIN_GROUPS = ["images", "bdt", "access", "adult", "lab", "tasks"];
   let SETTINGS_GROUPS = ALL_SETTINGS_GROUPS;
   async function viewSettings(group) {
     const openedGroup = !!group;   // téléphone : « #/settings » = liste des rubriques, « #/settings/xxx » = la rubrique
@@ -1775,6 +1776,7 @@
         ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}
         ${field("Recherche BDGest en secours", chk("g", "bdt_bdgest", g.bdt_bdgest), "Quand l'index de Bédéthèque ne trouve rien de sûr (nom approchant, homonymes), Bulle cherche aussi « dans tout le site » BDGest : c'est la même base, mais cette recherche trouve aussi les albums par leur titre, et l'année du fichier départage les homonymes (« Là-bas (2003) »). Une requête de plus, au rythme prudent, pour chaque album ou série concerné. La recherche à la main (« Chercher… ») l'utilise toujours.")}
         ${field("Recherche BDfugue en secours", chk("g", "bdt_bdfugue", g.bdt_bdfugue), "Quand un album ou une série n'est pas sur Bédéthèque (rien trouvé, ou rien de sûr), Bulle cherche aussi sur BDfugue, la librairie en ligne : titre, auteurs, éditeur, date, résumé et couverture. Un album au titre identique est lié tout seul ; sinon il s'ajoute aux propositions. Une requête de plus par album ou série concerné, au même rythme prudent. On peut aussi coller l'adresse d'une fiche BDfugue dans « Chercher… ».")}`,
+      tasks: () => `<p class="muted">Tout ce que Bulle fait en arrière-plan : scan, couvertures, mesure HD/SD, résumés et fiches Bédéthèque. « Arrêter » laisse la tâche finir l'élément en cours, puis elle s'interrompt : rien n'est laissé à moitié écrit.</p><div id="tasks-box"><div class="spinner"></div></div>`,
       about: () => `
         <p class="muted">Bulle ${esc(settings.meta.version || "")} · ${plural(stats.albums || 0, "album", "albums")} dans ${plural(stats.folders || 0, "dossier", "dossiers")} (${fmtSize(stats.size || 0)}) · dernier scan : ${fmtDate(stats.last_scan)}<br>
         Dossier des BD : <code>${esc(settings.meta.library_root || "")}</code> · <a href="https://github.com/kermess14/bulle" target="_blank" rel="noopener">github.com/kermess14/bulle</a></p>
@@ -1784,8 +1786,8 @@
     const head = `<div class="listhead"><h1>Réglages</h1><button class="btn" type="button" data-action="back" title="Revenir à la page précédente (Échap)">✕ Fermer</button></div>`;
     if (isPhone()) {
       // téléphone : d'abord la liste des rubriques (comme les réglages d'Android), puis la rubrique seule
-      const ICONS = { look: "🎨", library: "📚", reader: "📖", account: "👤", images: "🖼️", bdt: "🏷️", access: "🔐", adult: "🔞", lab: "🍄", about: "ℹ️" };
-      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter, recherche BDGest et BDfugue", about: `Bulle ${esc(settings.meta.version || "")}` };
+      const ICONS = { look: "🎨", library: "📚", reader: "📖", account: "👤", images: "🖼️", bdt: "🏷️", access: "🔐", adult: "🔞", lab: "🍄", tasks: "⏱️", about: "ℹ️" };
+      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter, recherche BDGest et BDfugue", tasks: "Ce qui tourne en arrière-plan, et l'arrêter", about: `Bulle ${esc(settings.meta.version || "")}` };
       if (!openedGroup) {
         setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
         main.innerHTML = `<h1>Réglages</h1><nav class="smenu">${SETTINGS_GROUPS.map(([k, name]) => `<a href="#/settings/${k}"><span class="ico">${ICONS[k] || "•"}</span><span>${name}<small>${HELP[k] || ""}</small></span></a>`).join("")}</nav>`;
@@ -1795,6 +1797,7 @@
       setCrumbs([{ id: 0, name: "Accueil" }, { id: -1, name: "Réglages", href: "#/settings" }], cur[1]);
       main.innerHTML = `<div class="settings tabbed"><div class="spane">${section(cur)}</div></div>`;
       if (quality && quality.job && quality.job.running) pollQuality();
+      pollTasks();
       return;
     }
     if (tabs) {
@@ -1805,7 +1808,47 @@
       main.innerHTML = `${head}<div class="settings">${SETTINGS_GROUPS.map(section).join("")}</div>`;
     }
     if (quality && quality.job && quality.job.running) pollQuality();
+    pollTasks();
   }
+
+  /* Page « Tâches » : liste des tâches de fond, rafraîchie toutes les 2 s tant qu'elle est à l'écran. */
+  let tasksTimer = null;
+  function taskRow(t) {
+    const running = t.state === "running" || t.state === "stopping";
+    const pct = running && t.total ? Math.min(100, Math.round((t.done || 0) / t.total * 100)) : 0;
+    const prog = running ? (t.total ? `${t.done || 0} / ${t.total}<div class="pbar"><i style="width:${pct}%"></i></div>` : `<div class="pbar indet"><i></i></div>`) : "";
+    const when = running ? (t.started_at ? "depuis " + fmtDate(t.started_at) : "en cours") : t.finished_at ? "terminée " + fmtDate(t.finished_at) : "pas encore lancée";
+    const state = t.state === "stopping" ? "Arrêt en cours…" : running ? "En cours" : "Au repos";
+    const btn = t.state === "running" ? `<button class="btn" type="button" data-task-stop="${t.id}">Arrêter</button>` : "";
+    return `<tr class="${running ? "run" : ""}"><td><b>${esc(t.label)}</b>${t.detail ? `<br><small class="muted">${esc(t.detail)}</small>` : ""}</td><td>${state}</td><td class="num">${prog}</td><td>${esc(when)}</td><td class="act">${btn}</td></tr>`;
+  }
+  function renderTasks(box, list) {
+    const running = list.filter(t => t.state === "running").length;
+    box.innerHTML = `<table class="coltable tasks"><thead><tr><th>Tâche</th><th>État</th><th>Avancement</th><th>Dernière exécution</th><th></th></tr></thead><tbody>${list.map(taskRow).join("")}</tbody></table>
+      <p>${running > 1 ? `<button class="btn" type="button" data-tasks-stopall>Tout arrêter</button>` : ""}${running === 0 ? `<span class="muted">Rien ne tourne en ce moment.</span>` : ""}</p>`;
+  }
+  async function pollTasks() {
+    clearTimeout(tasksTimer);
+    const box = document.getElementById("tasks-box");
+    if (!box) return;
+    try {
+      const j = await api("/api/tasks");
+      const again = document.getElementById("tasks-box");
+      if (!again) return;
+      renderTasks(again, j.tasks);
+    } catch (e) { box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+    tasksTimer = setTimeout(pollTasks, 2000);
+  }
+  main.addEventListener("click", async e => {
+    const one = e.target.closest("[data-task-stop]"), all = e.target.closest("[data-tasks-stopall]");
+    if (!one && !all) return;
+    try {
+      const j = await api(one ? `/api/tasks/${one.dataset.taskStop}/stop` : "/api/tasks/stop", { method: "POST" });
+      const box = document.getElementById("tasks-box");
+      if (box) renderTasks(box, j.tasks);
+      toast("Arrêt demandé : la tâche termine l'élément en cours.");
+    } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
+  });
 
   /* Image de profil : réduite dans le navigateur (96 × 96, recadrée au centre) avant d'être envoyée, pour rester légère. */
   async function uploadAvatar(file, pid) {

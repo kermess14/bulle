@@ -36,7 +36,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.37.0"
+VERSION = "0.38.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -2847,6 +2847,82 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                 bdt_job["folder_id"] = None
 
         threading.Thread(target=job, name="bulle-bdt", daemon=True).start()
+
+    # ------------------------------------------------------------------ API : liste des tâches de fond
+    def task_list() -> list[dict]:
+        """Toutes les tâches de fond de Bulle au même format (scan, couvertures, mesure HD/SD, résumés, Bédéthèque) :
+        id, libellé, état, avancement et si on peut les arrêter. Les tâches finies gardent leur dernière exécution."""
+        out: list[dict] = []
+        st = lib.status
+        phase = st.get("phase")
+        scan_run = bool(st.get("running"))
+        stopping = lib.stop_requested.is_set()
+        if scan_run and phase == "covers":
+            label, done, total = "Couvertures et nombre de pages", st.get("covers_done") or 0, st.get("covers_total") or 0
+        elif scan_run:
+            label, done, total = "Scan de la bibliothèque", None, None
+        else:
+            label, done, total = "Scan et couvertures", None, None
+        out.append({"id": "scan", "label": label, "state": ("stopping" if stopping else "running") if scan_run else "idle",
+                    "done": done, "total": total, "started_at": st.get("started_at"),
+                    "finished_at": None if scan_run else st.get("finished_at"),
+                    "detail": st.get("error") or ("arrêté à la demande" if st.get("stopped") and not scan_run else None)})
+        q = quality_job
+        out.append({"id": "quality", "label": "Mesure HD / SD des albums",
+                    "state": ("stopping" if q.get("stop") else "running") if q["running"] else "idle",
+                    "done": q.get("done") if q["running"] else None, "total": q.get("total") if q["running"] else None,
+                    "started_at": q.get("started_at"), "finished_at": None if q["running"] else q.get("finished_at"),
+                    "detail": q.get("current") if q["running"] else None})
+        sj = summary_job
+        out.append({"id": "summaries", "label": "Résumés Bédéthèque" + (f" de « {sj.get('folder')} »" if sj["running"] and sj.get("folder") else ""),
+                    "state": ("stopping" if sj.get("stop") else "running") if sj["running"] else "idle",
+                    "done": sj.get("done") if sj["running"] else None, "total": sj.get("total") if sj["running"] else None,
+                    "started_at": None, "finished_at": None, "detail": None})
+        bj = bdt_job
+        out.append({"id": "bdt", "label": "Recherche des fiches Bédéthèque",
+                    "state": ("stopping" if bj.get("stop") else "running") if bj["running"] else "idle",
+                    "done": bj.get("done") if bj["running"] else None, "total": bj.get("total") if bj["running"] else None,
+                    "started_at": None, "finished_at": None, "detail": bj.get("current") if bj["running"] else None})
+        return out
+
+    def task_stop(tid: str) -> bool:
+        if tid == "scan":
+            if not lib.status.get("running"):
+                return False
+            lib.stop_requested.set()
+        elif tid == "quality":
+            if not quality_job["running"]:
+                return False
+            quality_job["stop"] = True
+        elif tid == "summaries":
+            if not summary_job["running"]:
+                return False
+            summary_job["stop"] = True
+        elif tid == "bdt":
+            if not bdt_job["running"]:
+                return False
+            bdt_job["stop"] = True
+        else:
+            abort(404, description="Tâche inconnue")
+        return True
+
+    @app.route("/api/tasks")
+    def api_tasks():
+        require_admin()
+        return jsonify({"tasks": task_list(), "now": time.time()})
+
+    @app.route("/api/tasks/<tid>/stop", methods=["POST"])
+    def api_task_stop(tid: str):
+        """Arrête une tâche de fond : elle finit l'élément en cours puis s'interrompt, rien n'est laissé à moitié écrit."""
+        require_admin()
+        stopped = task_stop(tid)
+        return jsonify({"stopped": stopped, "tasks": task_list()})
+
+    @app.route("/api/tasks/stop", methods=["POST"])
+    def api_tasks_stop_all():
+        require_admin()
+        n = sum(1 for t in task_list() if t["state"] == "running" and task_stop(t["id"]))
+        return jsonify({"stopped": n, "tasks": task_list()})
 
     # ------------------------------------------------------------------ tâches de fond
     def preload_albums(todo: list[dict], label: str, force: bool = False) -> None:
