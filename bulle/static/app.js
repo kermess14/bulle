@@ -1822,9 +1822,10 @@
     const btn = t.state === "running" ? `<button class="btn" type="button" data-task-stop="${t.id}">Arrêter</button>` : "";
     return `<tr class="${running ? "run" : ""}"><td><b>${esc(t.label)}</b>${t.detail ? `<br><small class="muted">${esc(t.detail)}</small>` : ""}</td><td>${state}</td><td class="num">${prog}</td><td>${esc(when)}</td><td class="act">${btn}</td></tr>`;
   }
-  function renderTasks(box, list) {
+  function renderTasks(box, list, recent = []) {
     const running = list.filter(t => t.state === "running").length;
     box.innerHTML = `<table class="coltable tasks"><thead><tr><th>Tâche</th><th>État</th><th>Avancement</th><th>Dernière exécution</th><th></th></tr></thead><tbody>${list.map(taskRow).join("")}</tbody></table>
+      ${recent.length ? `<h3 class="setsub">Activité récente</h3><ul class="alist">${recent.map(r => `<li><span>${r.ok ? "" : ICON.warn + " "}${esc(r.label)}</span><span class="muted">${fmtDate(r.at)}</span></li>`).join("")}</ul>` : ""}
       <p>${running > 1 ? `<button class="btn" type="button" data-tasks-stopall>Tout arrêter</button>` : ""}${running === 0 ? `<span class="muted">Rien ne tourne en ce moment.</span>` : ""}</p>`;
   }
   async function pollTasks() {
@@ -1835,7 +1836,7 @@
       const j = await api("/api/tasks");
       const again = document.getElementById("tasks-box");
       if (!again) return;
-      renderTasks(again, j.tasks);
+      renderTasks(again, j.tasks, j.recent);
     } catch (e) { box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
     tasksTimer = setTimeout(pollTasks, 2000);
   }
@@ -1845,7 +1846,7 @@
     try {
       const j = await api(one ? `/api/tasks/${one.dataset.taskStop}/stop` : "/api/tasks/stop", { method: "POST" });
       const box = document.getElementById("tasks-box");
-      if (box) renderTasks(box, j.tasks);
+      if (box) renderTasks(box, j.tasks, j.recent);
       toast("Arrêt demandé : la tâche termine l'élément en cours.");
     } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
   });
