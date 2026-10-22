@@ -1120,7 +1120,7 @@
         : item.reading_count ? `<div class="sub">${plural(item.reading_count, "album en cours", "albums en cours")}</div>` : "";
       const done = item.album_count && item.read_count >= item.album_count ? `<span class="badge ok" title="Tout lu">${ICON.check}</span>` : "";
       let bdt = "";
-      const oneShot = !!(item.bdt && (item.bdt.total || 0) <= 1);   // fiche Bédéthèque d'un tome unique : un one shot dans son dossier
+      const oneShot = !!item.oneshot;   // décidé par le serveur : fiche Bédéthèque d'un tome unique, ou dossier d'un seul album sans numéro de tome
       if (item.bdt && item.bdt.total > 1) {
         const pct = Math.round((item.bdt.present / item.bdt.total) * 100);
         const full = item.bdt.present >= item.bdt.total;
@@ -1139,7 +1139,8 @@
       if (!sub) line2 = esc(item.name);
     }
     const tip = item.meta && item.meta.summary ? ` title="${esc(item.meta.summary.length > 320 ? item.meta.summary.slice(0, 320) + "…" : item.meta.summary)}"` : "";
-    return `<a class="card album" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
+    const linked = item.meta && item.meta.oneshot ? " os-linked" : "";   // one shot trouvé sur Bédéthèque : trait bleu sous la couverture
+    return `<a class="card album${linked}" href="${href}" data-id="${item.id}" data-letter="${letter}" draggable="true"${colorStyle(item)}${tip}>
       ${coverHtml(item, badge + qualityBadge(item) + `<button class="info" type="button" data-info="${item.id}" title="Fiche de l'album" aria-label="Fiche de l'album">i</button>${item.meta ? `<button class="info sum" type="button" data-sum="${item.id}" title="Résumé" aria-label="Résumé">…</button>` : ""}`)}
       <div class="title">${esc(title)}</div>${line2 ? `<div class="sub">${line2}</div>` : ""}
     </a>`;

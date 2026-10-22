@@ -37,7 +37,7 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, detect_panels
 
-VERSION = "0.38.3"
+VERSION = "0.38.5"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
@@ -684,6 +684,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     lk = links[c["id"]]
                     j["bdt"] = {"title": lk["title"], "present": lk["present"], "total": lk["total"],
                                 "status": lk["status"]}
+                # one shot : fiche Bédéthèque d'un tome unique, ou dossier d'un seul album dont le nom n'a pas de numéro de tome
+                if c["id"] in links:
+                    if (links[c["id"]]["total"] or 0) <= 1:
+                        j["oneshot"] = True
+                elif j.get("album_count") == 1:
+                    kids = [k for k in lib.children(c["id"]) if k["kind"] == "album"]
+                    if len(kids) == 1 and parse_album_name(kids[0]["name"]).get("number") is None:
+                        j["oneshot"] = True
             out.append(j)
         payload = {"folder": album_json(folder, with_progress=False), "breadcrumb": lib.breadcrumb(folder),
                    "children": out}
