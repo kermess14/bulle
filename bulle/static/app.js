@@ -943,24 +943,99 @@
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden && mosaicEl) setupMosaic(); });
 
-  // ================================================================ le laboratoire (menu caché : BDConverter dans un panneau)
+  // ================================================================ le laboratoire (menu caché : BDConverter et les plugins dans un panneau)
   const lab = $("#lab"), labFrame = $("#lab-frame"), shroom = $("#shroom-btn");
+  let labPlugins = [], labCurrent = null;
   function toolsUrl() {
     const u = settings.global.tools_url;
     if (u === undefined || u === "auto") return `${location.protocol}//${location.hostname}:3111/`;
     return (u || "").trim();
   }
-  function updateShroom() { if (shroom) shroom.hidden = !toolsUrl(); }
-  function openLab() {
-    const url = toolsUrl(); if (!url) return;
-    if (labFrame.getAttribute("src") !== url) labFrame.src = url;
-    $("#lab-open").href = url;
+  /* Les outils du panneau : BDConverter (s'il a une adresse) puis les plugins installés (administrateur seulement). */
+  function labTools() {
+    const t = [];
+    const u = toolsUrl();
+    if (u) t.push({ key: "bdc", name: "BDConverter", url: u });
+    for (const p of labPlugins) t.push({ key: "p:" + p.id, name: p.name, url: p.url, plugin: p });
+    return t;
+  }
+  async function loadLabPlugins() {
+    if (!isAdmin() || !settings.meta.plugins) { labPlugins = []; return labPlugins; }
+    try { labPlugins = (await api("/api/plugins")).plugins || []; } catch (_) { labPlugins = []; }
+    return labPlugins;
+  }
+  function updateShroom() {
+    if (!shroom) return;
+    shroom.hidden = !labTools().length;
+    if (!lab.hidden) renderLabTabs();
+  }
+  function labMessage(html) {
+    labFrame.removeAttribute("src");
+    labFrame.srcdoc = `<!doctype html><meta charset="utf-8"><body style="margin:0;display:grid;place-items:center;height:100vh;font:16px system-ui,sans-serif;background:#14110e;color:#f4ead7;text-align:center;padding:2em;box-sizing:border-box"><div>${html}</div></body>`;
+  }
+  function renderLabTabs() {
+    const tools = labTools(), box = $("#lab-tabs");
+    box.innerHTML = tools.length > 1 ? tools.map(t => `<button type="button" class="btn mini ${t.key === labCurrent ? "on" : ""}" data-lab-tool="${esc(t.key)}">${esc(t.name)}${t.plugin && t.plugin.state === "running" ? ' <i class="dot" title="lancé"></i>' : ""}</button>`).join("") : "";
+    const cur = tools.find(t => t.key === labCurrent);
+    $("#lab-title").textContent = tools.length > 1 ? "Le laboratoire" : `Le laboratoire — ${cur ? cur.name : ""}`;
+    $("#lab-stop").hidden = !(cur && cur.plugin && cur.plugin.state === "running");
+  }
+  async function showLabTool(key) {
+    const tools = labTools();
+    const tool = tools.find(t => t.key === key) || tools[0];
+    if (!tool) return;
+    labCurrent = tool.key;
+    try { localStorage.setItem("bulle:lab", tool.key); } catch (_) { /* ignore */ }
+    $("#lab-open").href = tool.url;
+    renderLabTabs();
+    if (!tool.plugin) {
+      labFrame.removeAttribute("srcdoc");
+      if (labFrame.getAttribute("src") !== tool.url) labFrame.src = tool.url;
+      return;
+    }
+    if (tool.plugin.state !== "running") {
+      labMessage(`<p style="font-size:1.3em">Démarrage de ${esc(tool.name)}…</p><p style="opacity:.7">Il s'arrêtera tout seul après un moment sans activité.</p>`);
+      try {
+        const j = await api(`/api/plugins/${encodeURIComponent(tool.plugin.id)}/start`, { method: "POST" });
+        Object.assign(tool.plugin, j.plugin);
+        const i = labPlugins.findIndex(p => p.id === j.plugin.id);
+        if (i >= 0) labPlugins[i] = j.plugin;
+      } catch (e) {
+        labMessage(`<p style="font-size:1.3em">${esc(tool.name)} n'a pas démarré</p><p style="opacity:.8">${esc(e.message)}</p><p style="opacity:.6">Journal : Réglages › Laboratoire.</p>`);
+        return;
+      }
+      if (labCurrent !== tool.key) return;   // on a changé d'outil pendant le démarrage
+      renderLabTabs();
+    }
+    labFrame.removeAttribute("srcdoc");
+    labFrame.src = tool.url;
+  }
+  async function openLab(key) {
+    await loadLabPlugins();
+    updateShroom();
+    if (!labTools().length) return;
+    let last = null;
+    try { last = localStorage.getItem("bulle:lab"); } catch (_) { /* ignore */ }
     lab.hidden = false; document.body.classList.add("lab-open");
     pow("TADAM !", shroom.getBoundingClientRect().left + 20, 80);
+    showLabTool(key || labCurrent || last);
   }
-  function closeLab() { lab.hidden = true; document.body.classList.remove("lab-open"); }
+  function closeLab() {
+    lab.hidden = true; document.body.classList.remove("lab-open");
+    // un plugin caché ne doit pas rester « actif » (page qui interroge son serveur) : il pourra s'arrêter tout seul
+    if (labCurrent && labCurrent.startsWith("p:")) { labFrame.src = "about:blank"; labCurrent = null; }
+  }
   if (shroom) shroom.addEventListener("click", () => lab.hidden ? openLab() : closeLab());
   $("#lab-close").addEventListener("click", closeLab);
+  $("#lab-tabs").addEventListener("click", e => { const b = e.target.closest("[data-lab-tool]"); if (b) showLabTool(b.dataset.labTool); });
+  $("#lab-stop").addEventListener("click", async () => {
+    const tool = labTools().find(t => t.key === labCurrent);
+    if (!tool || !tool.plugin) return;
+    try { await api(`/api/plugins/${encodeURIComponent(tool.plugin.id)}/stop`, { method: "POST" }); } catch (e) { toast(`${ICON.warn} ${esc(e.message)}`); }
+    await loadLabPlugins();
+    labMessage(`<p style="font-size:1.3em">${esc(tool.name)} est arrêté.</p><p style="opacity:.7">Cliquez sur son onglet pour le relancer.</p>`);
+    renderLabTabs();
+  });
 
   // ================================================================ onomatopées (habillage BD)
   function pow(text, x, y) {
@@ -988,6 +1063,7 @@
       settings.profile = Object.assign({}, PROFILE_DEFAULTS, s.profile || {});
       try { localStorage.setItem("bulle:profile", JSON.stringify(settings.profile)); } catch (_) { /* ignore */ }
       applyAppearance(); updateShroom(); updateAdultTab();
+      if (isAdmin() && s.plugins) loadLabPlugins().then(updateShroom);
     } catch (_) { /* hors ligne : on garde la copie locale */ }
   }
   let saveTimer = null, pendingProfile = {}, pendingGlobal = {};
@@ -1774,6 +1850,11 @@
             ${adult.folders && !adult.folders.length ? `<span class="muted">Aucune pour l'instant : ouvrez une série et cliquez « 18+ ».</span>` : ""}</div></div>
         <p class="muted"><a href="#/adult">Ouvrir la rubrique Adulte</a> (aussi dans la colonne de gauche dès qu'une série y est).</p>`,
       lab: () => `
+        ${settings.meta.plugins ? `<h3 class="setsub">Plugins</h3>
+        <p class="muted">Un plugin est un petit programme empaqueté dans un fichier .zip (sa fiche : plugin.json). Bulle le lance à la demande, l'affiche dans le panneau du champignon et l'arrête tout seul après un moment sans activité. Il tourne dans le conteneur de Bulle et n'est accessible qu'à l'administrateur. N'installez que des plugins que vous connaissez : ils ont les mêmes droits que Bulle. Mode d'emploi : <a href="https://github.com/kermess14/bulle/blob/main/PLUGINS.md" target="_blank" rel="noopener">PLUGINS.md</a>.</p>
+        <div id="plugins-box"><div class="spinner"></div></div>
+        <p><label class="btn primary" title="Installe un nouveau plugin, ou met à jour celui qui a le même id">Installer un plugin (.zip)…<input type="file" id="plugin-file" accept=".zip,application/zip" hidden></label></p>
+        <h3 class="setsub">Outils et recherches</h3>` : ""}
         ${field("Adresse de BDConverter", txt("g", "tools_url", g.tools_url, "auto"), `Le petit champignon en haut à gauche ouvre BDConverter dans un panneau. « auto » = même machine que Bulle, port 3111 (${esc(location.protocol + "//" + location.hostname + ":3111/")}) ; vide = champignon masqué.`)}
         ${field("Recherche BDGest en secours", chk("g", "bdt_bdgest", g.bdt_bdgest), "Quand l'index de Bédéthèque ne trouve rien de sûr (nom approchant, homonymes), Bulle cherche aussi « dans tout le site » BDGest : c'est la même base, mais cette recherche trouve aussi les albums par leur titre, et l'année du fichier départage les homonymes (« Là-bas (2003) »). Une requête de plus, au rythme prudent, pour chaque album ou série concerné. La recherche à la main (« Chercher… ») l'utilise toujours.")}
         ${field("Recherche BDfugue en secours", chk("g", "bdt_bdfugue", g.bdt_bdfugue), "Quand un album ou une série n'est pas sur Bédéthèque (rien trouvé, ou rien de sûr), Bulle cherche aussi sur BDfugue, la librairie en ligne : titre, auteurs, éditeur, date, résumé et couverture. Un album au titre identique est lié tout seul ; sinon il s'ajoute aux propositions. Une requête de plus par album ou série concerné, au même rythme prudent. On peut aussi coller l'adresse d'une fiche BDfugue dans « Chercher… ».")}`,
@@ -1791,7 +1872,7 @@
     if (isPhone()) {
       // téléphone : d'abord la liste des rubriques (comme les réglages d'Android), puis la rubrique seule
       const ICONS = { look: "🎨", library: "📚", reader: "📖", account: "👤", images: "🖼️", bdt: "🏷️", access: "🔐", adult: "🔞", lab: "🍄", tasks: "⏱️", about: "ℹ️" };
-      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "BDConverter, recherche BDGest et BDfugue", tasks: "Ce qui tourne en arrière-plan, et l'arrêter", about: `Bulle ${esc(settings.meta.version || "")}` };
+      const HELP = { look: "Habillage, thème, pochettes, mode léger", library: "Scan, tri, classement, qualité HD/SD", reader: "Affichage, case par case, marges, zoom", account: "Profil, mot de passe, déconnexion", images: "Qualité des pages, cache", bdt: "Fiches et résumés Bédéthèque", access: "Comptes, code d'accès", adult: "Rubrique verrouillée", lab: "Plugins, BDConverter, recherche BDGest et BDfugue", tasks: "Ce qui tourne en arrière-plan, et l'arrêter", about: `Bulle ${esc(settings.meta.version || "")}` };
       if (!openedGroup) {
         setCrumbs([{ id: 0, name: "Accueil" }], "Réglages");
         main.innerHTML = `<h1>Réglages</h1><nav class="smenu">${SETTINGS_GROUPS.map(([k, name]) => `<a href="#/settings/${k}"><span class="ico">${ICONS[k] || "•"}</span><span>${name}<small>${HELP[k] || ""}</small></span></a>`).join("")}</nav>`;
@@ -1801,7 +1882,7 @@
       setCrumbs([{ id: 0, name: "Accueil" }, { id: -1, name: "Réglages", href: "#/settings" }], cur[1]);
       main.innerHTML = `<div class="settings tabbed"><div class="spane">${section(cur)}</div></div>`;
       if (quality && quality.job && quality.job.running) pollQuality();
-      pollTasks();
+      pollTasks(); loadPluginsBox();
       return;
     }
     if (tabs) {
@@ -1812,7 +1893,7 @@
       main.innerHTML = `${head}<div class="settings">${SETTINGS_GROUPS.map(section).join("")}</div>`;
     }
     if (quality && quality.job && quality.job.running) pollQuality();
-    pollTasks();
+    pollTasks(); loadPluginsBox();
   }
 
   /* Page « Tâches » : liste des tâches de fond, rafraîchie toutes les 2 s tant qu'elle est à l'écran. */
@@ -1878,6 +1959,67 @@
       if (box) renderTasks(box, j.tasks, j.recent);
       toast("Arrêt demandé : la tâche termine l'élément en cours.");
     } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
+  });
+
+  /* Réglages › Laboratoire : les plugins installés (démarrer, ouvrir, arrêter, journal, désinstaller) et l'envoi d'un paquet. */
+  const PLUGIN_STATE = { running: "Lancé", starting: "Démarrage…", installing: "Installation des dépendances…", stopped: "Arrêté", error: "Erreur" };
+  let pluginsTimer = null;
+  function renderPlugins(box, j) {
+    const list = j.plugins || [];
+    const row = p => {
+      const run = p.state === "running";
+      const when = run ? (p.started_at ? "depuis " + fmtDate(p.started_at) : "") : p.stopped_at ? `arrêté ${fmtDate(p.stopped_at)}${p.stop_reason ? " (" + p.stop_reason + ")" : ""}` : "";
+      return `<tr class="${run ? "run" : ""}"><td>${p.icon ? `<img class="picon" src="/api/plugins/${encodeURIComponent(p.id)}/icon" alt="">` : ""}<b>${esc(p.name)}</b> <small class="muted">${esc(p.version)}</small>${p.description ? `<br><small class="muted">${esc(p.description)}</small>` : ""}${p.error ? `<br><small class="error">${esc(p.error)}</small>` : ""}</td>
+        <td>${esc(PLUGIN_STATE[p.state] || p.state)}${when ? `<br><small class="muted">${esc(when)}</small>` : ""}<br><small class="muted">${p.idle_minutes ? `arrêt auto. : ${p.idle_minutes} min` : "pas d'arrêt automatique"}</small></td>
+        <td class="act"><span class="prow">
+          <button class="btn mini primary" type="button" data-plugin-act="open" data-id="${esc(p.id)}" ${p.state === "installing" ? "disabled" : ""}>Ouvrir</button>
+          ${run ? `<button class="btn mini" type="button" data-plugin-act="stop" data-id="${esc(p.id)}">Arrêter</button>` : ""}
+          <a class="btn mini" href="/api/plugins/${encodeURIComponent(p.id)}/log" target="_blank" rel="noopener">Journal</a>
+          <button class="btn mini" type="button" data-plugin-act="remove" data-id="${esc(p.id)}" title="Désinstaller (le dossier de sortie et ses fichiers sont gardés)">Supprimer</button></span></td></tr>`;
+    };
+    box.innerHTML = (list.length ? `<table class="coltable plugins"><thead><tr><th>Plugin</th><th>État</th><th></th></tr></thead><tbody>${list.map(row).join("")}</tbody></table>`
+      : `<p class="muted">Aucun plugin installé pour l'instant.</p>`)
+      + `<p class="muted">Dossier de sortie (ce que les plugins fabriquent, un sous-dossier par plugin) : <code>${esc(j.output || "")}</code>${j.output_mounted ? "" : `<br><span class="pwarn">${ICON.warn}</span> Ce dossier est dans le volume de Bulle. Pour récupérer les fichiers facilement, ajoutez dans la stack une ligne <code>- "/chemin/sur/le/serveur:/plugins-out"</code> sous <code>volumes:</code> (voir stack.yml), puis redéployez.`}</p>`;
+    clearTimeout(pluginsTimer);
+    if (list.some(p => p.state === "installing" || p.state === "starting")) pluginsTimer = setTimeout(loadPluginsBox, 3000);
+  }
+  async function loadPluginsBox() {
+    const box = document.getElementById("plugins-box");
+    if (!box) return;
+    try {
+      const j = await api("/api/plugins");
+      labPlugins = j.plugins || [];
+      updateShroom();
+      const again = document.getElementById("plugins-box");
+      if (again) renderPlugins(again, j);
+    } catch (e) { box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+  }
+  main.addEventListener("change", async e => {
+    if (e.target.id !== "plugin-file") return;
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    toast(`<div class="spinner"></div> Installation de ${esc(file.name)}…`, { sticky: true });
+    try {
+      const j = await api("/api/plugins", { method: "POST", body: fd });
+      toast(`Plugin « ${esc(j.plugin.name)} » ${esc(j.plugin.version)} installé${j.plugin.state === "installing" ? " : ses dépendances s'installent (une minute ou deux)" : ""}.`);
+    } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
+    loadPluginsBox();
+  });
+  main.addEventListener("click", async e => {
+    const b = e.target.closest("[data-plugin-act]");
+    if (!b) return;
+    const id = b.dataset.id, act = b.dataset.pluginAct;
+    const p = labPlugins.find(x => x.id === id);
+    if (act === "open") { openLab("p:" + id); return; }
+    if (act === "remove" && !confirm(`Désinstaller « ${p ? p.name : id} » ?\n\nLe programme et ses réglages sont supprimés. Le dossier de sortie et les fichiers qu'il contient sont gardés.`)) return;
+    try {
+      if (act === "stop") await api(`/api/plugins/${encodeURIComponent(id)}/stop`, { method: "POST" });
+      if (act === "remove") { await api(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" }); toast("Plugin désinstallé."); }
+    } catch (err) { toast(`${ICON.warn} ${esc(err.message)}`); }
+    loadPluginsBox();
   });
 
   /* Image de profil : réduite dans le navigateur (96 × 96, recadrée au centre) avant d'être envoyée, pour rester légère. */
@@ -2167,7 +2309,7 @@
       <div class="mrow"><span>Qualité des albums</span><span class="right">${["all", "hd", "sd"].map(k => `<button type="button" data-more-quality="${k}" class="${q === k ? "on" : ""}">${k === "all" ? "Tout" : k.toUpperCase()}</button>`).join("")}</span></div>
       ${skinSeasons ? `<div class="mrow"><span>${feteMode() ? "Fête" : "Saison"}</span><span class="right"><button type="button" data-more="season">${feteMode() ? (FETES[document.documentElement.dataset.season] || FETES.christmas).emoji : SEASON_EMOJI[["spring", "summer", "autumn", "winter"].includes(p.season) ? p.season : currentSeason()]} Changer</button></span></div>` : ""}
       ${isAdmin() ? `<button class="mrow" type="button" data-more="scan">${SVG.scan}<span>Rechercher les nouveaux albums</span></button>` : ""}
-      ${shroom && !shroom.hidden ? `<button class="mrow" type="button" data-more="lab">${SVG.lab}<span>Le laboratoire (BDConverter)</span></button>` : ""}
+      ${shroom && !shroom.hidden ? `<button class="mrow" type="button" data-more="lab">${SVG.lab}<span>Le laboratoire</span></button>` : ""}
     </div>`;
     moreEl.hidden = false;
     document.body.style.overflow = "hidden";

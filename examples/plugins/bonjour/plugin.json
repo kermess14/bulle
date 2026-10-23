@@ -1,0 +1,12 @@
+{
+  "id": "bonjour",
+  "name": "Bonjour (exemple)",
+  "version": "1.0",
+  "description": "Plugin d'exemple : montre le dossier de sortie, y écrit un fichier test et suit une petite tâche en direct.",
+  "command": ["{python}", "app.py"],
+  "idle_minutes": 20,
+  "busy_url": "api/status",
+  "keep": ["compteur.txt"],
+  "exclude": ["compteur.txt"],
+  "icon": "icone.svg"
+}

@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.43.0)
+# Bulle — lecteur de BD maison (v0.44.0)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -41,6 +41,10 @@ Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Uboo
 - **Le laboratoire** : un petit champignon discret à côté du logo ouvre **BDConverter** (votre
   convertisseur PDF → CBZ) dans un panneau, sans quitter Bulle. Adresse réglable (« auto » = même
   machine que Bulle, port 3111 ; vide = champignon masqué).
+- **Plugins** (administrateur) : de petits programmes empaquetés en `.zip`, installés depuis Réglages › Laboratoire,
+  lancés à la demande dans le conteneur de Bulle, affichés dans le panneau du champignon (un onglet par outil) et
+  arrêtés tout seuls après un moment sans activité. Ils écrivent dans un dossier de sortie à part
+  (`/plugins-out`) : la bibliothèque reste en lecture seule. Mode d'emploi et format : [PLUGINS.md](PLUGINS.md).
 - `Échap` ferme ce qui est ouvert, sinon revient en arrière (réglages, listes, recherche → page
   précédente ; dossier → dossier parent).
 - Sur chaque vignette reconnue par Bédéthèque, un bouton « … » à côté du « i » ouvre le résumé dans
@@ -128,6 +132,8 @@ Après une modification du code, `python3 make_stack.py` régénère ce fichier.
 | `PAGE_CACHE` | `1` | garder les pages redimensionnées sur disque |
 | `THREADS` | `8` | nombre de requêtes servies en parallèle |
 | `PRELOAD_THREADS` | `3` | couvertures générées en parallèle après un scan (baisser à 1 sur un petit serveur) |
+| `PLUGINS` | `1` | plugins du laboratoire (0 = désactivés) |
+| `PLUGINS_OUT` | `/plugins-out` | dossier de sortie des plugins (s'il n'est pas monté : `/data/plugins-out`) |
 
 Ces variables ne sont que des valeurs de départ : la page ⚙ Réglages de Bulle les modifie (et les
 mémorise dans la base) sans redémarrer le conteneur.
@@ -143,6 +149,19 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Plugins du laboratoire (v0.44.0)**. Un plugin est un programme web empaqueté dans un `.zip` avec une fiche
+  `plugin.json` (id, nom, version, commande, port…) ; `tools/make_plugin.py` fabrique le paquet en laissant de côté les
+  fichiers jetables ou personnels (liste `exclude`). Réglages › Laboratoire : installer / mettre à jour (même id),
+  ouvrir, arrêter, journal, désinstaller (le dossier de sortie est gardé). Le paquet est vérifié avant d'être décompressé
+  (pas de `../`, de lien symbolique, de taille démesurée) ; ses dépendances (`requirements.txt`) s'installent en
+  arrière-plan dans `/data/plugins/<id>/deps`. Bulle lance le programme à la demande (sur 127.0.0.1 dans le conteneur),
+  le relaie sous `/plugins/<id>/` — réservé à l'administrateur, les cookies de Bulle ne lui sont pas transmis — et
+  réécrit les adresses « /… » des pages (HTML, CSS, `fetch`, `EventSource`…) pour qu'une appli écrite pour la racine
+  marche sans modification. Arrêt automatique après `idle_minutes` sans activité, sauf pendant un flux en direct ou si
+  le plugin répond `{"busy": true}` à son `busy_url` ; un plugin lancé apparaît dans Réglages › Tâches. Le panneau du
+  champignon a un onglet par outil (BDConverter et les plugins). Nouveau volume facultatif dans la stack :
+  `/plugins-out`. Plugin d'exemple : `examples/plugins/bonjour`. Tests : `tools/test_plugins.py`. Essayé dans un Chromium
+  de bureau avec le serveur de secours de Flask ; pas encore derrière waitress sur le serveur OMV.
 - **Reprise à la case près, corrections manuelles complètes, interface de détecteur (v0.43.0)**. (1) La progression garde désormais la case en cours (`panel`, `panel_count` dans la table `progress`, colonnes ajoutées sans toucher aux anciennes lignes) : en rouvrant l'album, le lecteur revient à cette case, mais seulement si la page est la même et si le nombre de cases est le même qu'à l'enregistrement (écran différent, correction ou nouvelle détection : début de la page, comme avant). Hors case par case, la case est effacée. (2) Éditeur de cases (administrateur) : ordre de lecture réglable (`[` et `]` déplacent la case choisie ; « Ordre : fixé » vaut dans les deux sens de lecture, « auto » recalcule à l'enregistrement), bouton « Page entière » (correction sans case, gardée), et correction signalée « peut-être périmée » quand le fichier de l'album a changé (elle est gardée au lieu d'être effacée ; « Enregistrer » la valide, « Rétablir l'automatique » l'abandonne). « Exporter les corrections » (`GET /api/panels/export`, admin, 200 planches au plus) donne un zip : planches à la largeur d'analyse, `gt.json` au format de `tools/banc_cases.py score`, `auto.json` (ce que la détection trouve aujourd'hui) et `corrections.json` ; le fichier reste chez l'administrateur, rien n'est envoyé nulle part. (3) Interface de détecteur stable (`panels.run_detector`, `register_engine`, `valid_result`) : le serveur n'appelle plus un détecteur directement ; un moteur qui plante ou rend un résultat hors contrat est remplacé par le détecteur classique, puis par la page entière. Variable `PANELS_ENGINE` (défaut `classic`, le seul livré : aucun moteur IA n'est ajouté ; un tel moteur ne serait activé qu'après mesure sur des planches annotées jamais vues). La détection est inchangée (`PANELS_VERSION` reste 20) : les 120 planches de contrôle donnent le même résultat et passent toutes la vérification du contrat. Non testé sur appareil réel (tablette, tactile) : seulement un Chromium de bureau.
 - **Diagnostic des cases pour l'administrateur (v0.42.0)**. Touche `G` en case par case : la planche entière avec les cases gardées par le serveur (numéro occidental et rang en manga), les cadrages « grow » (orange pointillé) et les regroupements « join » (violet pointillé), la version du détecteur et celle du résultat, l'origine (détection gardée ou correction manuelle). Le bouton « Mesurer » lance à la demande une détection fraîche sans rien changer en base : dimensions réellement analysées, fond, second essai, temps par étape (découpage, ordre manga, textes), tests de couverture des cadres et budget épuisé ou non, comparaison avec ce qui est en base. Rien n'est calculé tant qu'on ne le demande pas (la lecture normale n'est pas ralentie ; `GET /api/panels/<album>/<page>/diag`, admin seulement). Mesure faite avec ce rapport sur 346 planches : le budget de recherche des cadres (`FRAME_BUDGET`, 150 000 tests) est épuisé sur 10 planches et dépassé jusqu'à 10 fois (jusqu'à 3,5 s sur la pire), parce que l'essentiel des tests a lieu après les boucles surveillées. Contrôler plus finement les boucles internes n'accélère rien et fait baisser le score (F1 94,9 → 94,5 % sur la validation) : le détecteur reste donc inchangé, le diagnostic signale ces planches. Aucun changement de la détection (`PANELS_VERSION` reste 20) ; mêmes cases avec ou sans rapport (testé).
 - **Lecteur : largeurs, sens manga, mémoire (v0.41.1)**. (1) La correction manuelle des cases est réservée à l'administrateur (le serveur refuse les autres avec 403 ; le bouton crayon n'apparaît pas) ; tous les profils lisent les cases corrigées. (2) Les largeurs d'image demandées par le lecteur suivent les paliers du serveur (multiples de 100 px, de 300 à 3000) : avant, des paliers de 160 px jusqu'à 3840 donnaient des adresses différentes pour la même image servie à 3000 px (copies en double dans le cache du navigateur) ; aucune netteté perdue, le serveur plafonnait déjà à 3000. (3) Changer de sens de lecture (manga) pendant qu'une réponse des cases est en route : l'ancienne réponse, sans l'ordre de droite à gauche, écrasait la bonne et faisait lire les cases dans le mauvais ordre ; elle est maintenant écartée et redemandée. Défaut reproduit puis corrigé dans un navigateur de test. (4) Défilement continu : les pages lointaines sont libérées (au plus ~15 images chargées sur un album de 80 pages, au lieu de toutes celles parcourues) et reviennent quand on remonte. Les autres modes bornaient déjà leurs caches. Non testé sur appareil réel (tablette, téléphone) : tests dans un Chromium de bureau (`tools/test_reader_browser.py`, facultatif, hors workflow). Aucun changement de la détection (`PANELS_VERSION` reste 20).

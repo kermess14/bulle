@@ -23,7 +23,7 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
     <b>Bu<span>lle</span></b>
   </a>
   <a class="ver" id="ver" href="#/settings/about" title="Version de Bulle (À propos)"></a>
-  <button class="shroom" id="shroom-btn" type="button" title="Le laboratoire (BDConverter)" aria-label="Laboratoire" hidden>
+  <button class="shroom" id="shroom-btn" type="button" title="Le laboratoire (BDConverter, plugins)" aria-label="Laboratoire" hidden>
     <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 30c0-14 11-24 24-24s24 10 24 24c0 3-2 5-5 5H13c-3 0-5-2-5-5z" fill="#e63946"/><circle cx="22" cy="20" r="4" fill="#fff6e6"/><circle cx="38" cy="14" r="3" fill="#fff6e6"/><circle cx="44" cy="26" r="3.5" fill="#fff6e6"/><circle cx="30" cy="28" r="2.5" fill="#fff6e6"/><path d="M24 35h16l-2 18c0 3-2 5-6 5s-6-2-6-5z" fill="#f6e4c3"/><path d="M8 30c0-14 11-24 24-24s24 10 24 24c0 3-2 5-5 5H13c-3 0-5-2-5-5zM24 35h16l-2 18c0 3-2 5-6 5s-6-2-6-5z" fill="none" stroke="#14110e" stroke-width="3" stroke-linejoin="round"/></svg>
   </button>
   <button class="lite" id="lite-btn" type="button" title="Mode léger" aria-label="Mode léger" aria-pressed="false">
@@ -105,8 +105,8 @@ try { var p = JSON.parse(localStorage.getItem("bulle:profile") || "{}"); var t =
   </div>
 </div>
 <div id="lab" class="lab" hidden>
-  <div class="labbar"><span class="labtitle">Le laboratoire — BDConverter</span><a class="btn mini" id="lab-open" href="#" target="_blank" rel="noopener">Ouvrir dans un onglet ↗</a><button class="iconbtn" id="lab-close" type="button" title="Fermer (Échap)" aria-label="Fermer">✕</button></div>
-  <iframe id="lab-frame" title="BDConverter" src="about:blank" allow="clipboard-write"></iframe>
+  <div class="labbar"><span class="labtitle" id="lab-title">Le laboratoire</span><nav class="labtabs" id="lab-tabs" aria-label="Outils du laboratoire"></nav><button class="btn mini" id="lab-stop" type="button" title="Arrêter ce plugin (il s'arrête aussi tout seul après un moment sans activité)" hidden>■ Arrêter</button><a class="btn mini" id="lab-open" href="#" target="_blank" rel="noopener">Ouvrir dans un onglet ↗</a><button class="iconbtn" id="lab-close" type="button" title="Fermer (Échap)" aria-label="Fermer">✕</button></div>
+  <iframe id="lab-frame" title="Laboratoire" src="about:blank" allow="clipboard-write"></iframe>
 </div>
 <nav class="tabbar" id="tabbar" aria-label="Navigation">
   <a href="#/" data-tb="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14.5"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M8 7h8M8 11h5"/></svg><span>Bibliothèque</span></a>

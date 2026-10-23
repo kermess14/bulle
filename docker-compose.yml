@@ -20,3 +20,5 @@ services:
       - "/uncomp3/V3X.BD/00 - BD Français:/library:ro"
       # Base de données + cache d'images (peut être vidé sans risque : data/cache)
       - ./data:/data
+      # Plugins du laboratoire (facultatif) : ce qu'ils fabriquent (voir PLUGINS.md)
+      # - ./plugins-sortie:/plugins-out

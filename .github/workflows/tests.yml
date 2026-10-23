@@ -26,3 +26,5 @@ jobs:
         run: python tools/test_panels_contracts.py
       - name: Lecture simple
         run: python tools/test_simple.py
+      - name: Plugins du laboratoire
+        run: python tools/test_plugins.py

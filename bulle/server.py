@@ -38,8 +38,9 @@ from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_widt
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
 from .panels import PANELS_VERSION, manual_panels, run_detector
 from . import lots as lots_mod
+from . import plugins as plugins_mod
 
-VERSION = "0.43.0"
+VERSION = "0.44.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_ENGINE = os.environ.get("PANELS_ENGINE", "classic")   # moteur de cases (seul « classic » est livré ; voir panels.run_detector)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
@@ -163,6 +164,14 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         return s
 
     bdt = BedethequeClient(lib.bdt_cache_get, lib.bdt_cache_put)
+    # plugins (laboratoire) : programmes empaquetés que Bulle lance à la demande, voir bulle/plugins.py et PLUGINS.md
+    plugins = plugins_mod.PluginManager(data_dir, os.environ.get("PLUGINS_OUT") or None,
+                                        on_event=lambda kind, label, ok: log_task(kind, label, ok)) \
+        if env_bool("PLUGINS", True) else None
+    if plugins is not None:
+        import atexit
+        atexit.register(plugins.stop_all)
+        app.extensions["bulle"]["plugins"] = plugins
     import bulle.bedetheque as _bdt_mod
     _bdt_mod.USER_AGENT = f"Bulle/{VERSION} (+https://github.com/kermess14/bulle ; lecteur de BD personnel, requetes a la demande)"
     bdt_job = {"running": False, "done": 0, "total": 0, "current": None, "errors": [], "stop": False, "linked": 0,
@@ -1411,7 +1420,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         g["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
         return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid, "role": current_role(),
                         "profile_selected": profile_selected(), "profiles": profiles_visible(), "version": VERSION,
-                        "library_root": library_root,
+                        "library_root": library_root, "plugins": plugins is not None,
                         "quality_profiles": {k: {"quality": v[0], "chroma": v[1]} for k, v in QUALITY_PROFILES.items()}})
 
     @app.route("/api/settings", methods=["PUT", "POST"])
@@ -3117,6 +3126,15 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     "started_at": lots_job.get("started_at") if lots_job["running"] else None,
                     "finished_at": None if lots_job["running"] else lots_job.get("finished_at"),
                     "detail": lots_job.get("error") if not lots_job["running"] else None})
+        for pinfo in (plugins.list() if plugins is not None else []):   # un plugin lancé = une tâche (arrêtable)
+            if pinfo["state"] in ("running", "starting", "installing"):
+                idle = pinfo["idle_minutes"]
+                out.append({"id": "plugin:" + pinfo["id"],
+                            "label": f"Plugin « {pinfo['name']} »" + (" : installation" if pinfo["state"] == "installing" else ""),
+                            "state": "running", "done": None, "total": None, "started_at": pinfo["started_at"],
+                            "finished_at": None,
+                            "detail": (f"arrêt automatique après {idle:g} min sans activité" if idle else "pas d'arrêt automatique")
+                            if pinfo["state"] != "installing" else "dépendances Python"})
         for t in out:   # tâche au repos : sa dernière exécution (y compris une recherche faite à la main) vient du journal
             if t["state"] == "idle" and t["id"] in ("bdt", "summaries"):
                 last = next((e for e in task_log if e["kind"] == t["id"]), None)
@@ -3145,6 +3163,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if not lots_job["running"]:
                 return False
             lots_job["stop"] = True
+        elif tid.startswith("plugin:") and plugins is not None and tid[7:] in plugins.plugins:
+            return plugins.stop(tid[7:])
         else:
             abort(404, description="Tâche inconnue")
         return True
@@ -3178,6 +3198,100 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         require_admin()
         n = sum(1 for t in task_list() if t["state"] == "running" and task_stop(t["id"]))
         return jsonify({"stopped": n, "tasks": task_list(), "recent": list(task_log)[:15]})
+
+    # ------------------------------------------------------------------ plugins (laboratoire)
+    def plugin_or_404(pid: str) -> "plugins_mod.Plugin":
+        if plugins is None:
+            abort(404, description="Plugins désactivés (variable PLUGINS=0)")
+        p = plugins.plugins.get(pid)
+        if p is None:
+            abort(404, description="Plugin inconnu")
+        return p
+
+    def plugin_call(fn, *args):
+        try:
+            return fn(*args)
+        except plugins_mod.PluginError as exc:
+            abort(409, description=str(exc))
+
+    @app.route("/api/plugins")
+    def api_plugins():
+        require_admin()
+        if plugins is None:
+            return jsonify({"enabled": False, "plugins": []})
+        return jsonify({"enabled": True, "plugins": plugins.list(), "output": plugins.out_root,
+                        "output_mounted": not plugins.out_root.startswith(data_dir)})
+
+    @app.route("/api/plugins", methods=["POST"])
+    def api_plugins_install():
+        """Installe ou met à jour un plugin : le paquet .zip est envoyé dans le champ « file »."""
+        require_admin()
+        if plugins is None:
+            abort(404, description="Plugins désactivés (variable PLUGINS=0)")
+        f = request.files.get("file")
+        if f is None or not f.filename:
+            abort(400, description="Choisissez le fichier .zip du plugin")
+        tmp = os.path.join(plugins.root, f".upload-{secrets.token_hex(8)}.zip")
+        try:
+            f.save(tmp)
+            info = plugin_call(plugins.install, tmp)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        return jsonify({"plugin": info, "plugins": plugins.list()})
+
+    @app.route("/api/plugins/<pid>/start", methods=["POST"])
+    def api_plugin_start(pid: str):
+        require_admin()
+        plugin_or_404(pid)
+        return jsonify({"plugin": plugin_call(plugins.start, pid)})
+
+    @app.route("/api/plugins/<pid>/stop", methods=["POST"])
+    def api_plugin_stop(pid: str):
+        require_admin()
+        plugin_or_404(pid)
+        plugins.stop(pid)
+        return jsonify({"plugin": plugins.info(plugins.plugins[pid])})
+
+    @app.route("/api/plugins/<pid>", methods=["DELETE"])
+    def api_plugin_remove(pid: str):
+        require_admin()
+        plugin_or_404(pid)
+        plugins.remove(pid)
+        return jsonify({"plugins": plugins.list()})
+
+    @app.route("/api/plugins/<pid>/log")
+    def api_plugin_log(pid: str):
+        require_admin()
+        plugin_or_404(pid)
+        return Response(plugins.log_tail(pid), 200, {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"})
+
+    @app.route("/api/plugins/<pid>/icon")
+    def api_plugin_icon(pid: str):
+        require_admin()
+        plugin_or_404(pid)
+        path = plugins.icon_path(pid)
+        if not path:
+            abort(404, description="Pas d'icône")
+        return send_file(path, mimetype=plugins_mod.ICON_TYPES[os.path.splitext(path)[1].lower()], max_age=3600)
+
+    @app.route("/plugins/<pid>", methods=["GET"])
+    def plugin_root_redirect(pid: str):
+        return redirect(f"/plugins/{pid}/", 308)
+
+    @app.route("/plugins/<pid>/", defaults={"sub": ""}, methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    @app.route("/plugins/<pid>/<path:sub>", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    def plugin_proxy(pid: str, sub: str):
+        """Les pages du plugin, relayées par Bulle : réservées à l'administrateur connecté (le programme lui-même
+        n'écoute que dans le conteneur)."""
+        if not auth_ok():
+            return Response("Connexion requise : ouvrez d'abord Bulle.", 401, {"Content-Type": "text/plain; charset=utf-8"})
+        if not is_admin():
+            return Response("Réservé à l'administrateur de Bulle.", 403, {"Content-Type": "text/plain; charset=utf-8"})
+        p = plugin_or_404(pid)
+        return plugins_mod.proxy(plugins, p, sub, request)
 
     # ------------------------------------------------------------------ tâches de fond
     def preload_albums(todo: list[dict], label: str, force: bool = False) -> None:
