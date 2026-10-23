@@ -6,7 +6,8 @@ Les planches sont enregistrées à 800 px de large (comme le serveur) dans <sort
 et <sortie>/echantillon.json dit de quel album et de quelle page elles viennent. Elles restent chez vous : le dossier ne doit
 jamais aller sur GitHub. Seuls les CBZ / ZIP sont lus (CBR, CB7, PDF sont ignorés). Les albums déjà dans le banc
 (gt.json des dossiers donnés par --exclure) sont évités, pour que les nouvelles planches soient vraiment nouvelles ;
-la couverture et la dernière page ne sont jamais tirées. Au plus 2 planches par album."""
+la couverture et la dernière page ne sont jamais tirées. Une planche par série par défaut (la série = le premier dossier sous
+le dossier des BD ; --par-serie 2 pour en prendre jusqu'à 2)."""
 from __future__ import annotations
 
 import argparse
@@ -29,6 +30,7 @@ def main() -> None:
     ap.add_argument("out")
     ap.add_argument("--n", type=int, default=250)
     ap.add_argument("--graine", type=int, default=1)
+    ap.add_argument("--par-serie", type=int, default=1)
     ap.add_argument("--exclure", nargs="*", default=[], help="dossiers de banc déjà utilisés (leur gt.json donne les albums à éviter)")
     a = ap.parse_args()
     used = set()
@@ -56,8 +58,8 @@ def main() -> None:
     for p in files:
         if len(meta) >= a.n:
             break
-        series = os.path.dirname(p)
-        if per_series.get(series, 0) >= 2:
+        series = os.path.relpath(p, a.library).split(os.sep)[0]
+        if per_series.get(series, 0) >= a.par_serie:
             continue
         try:
             with zipfile.ZipFile(p) as zf:
@@ -67,7 +69,7 @@ def main() -> None:
                 for i in rnd.sample(range(2, len(names) - 1), 1):
                     key = f"s-{k:03d}-{i}"
                     open(os.path.join(a.out, "pages", key + ".jpg"), "wb").write(comics.resize_to_jpeg(zf.read(names[i]), 800))
-                    meta[key] = {"album": os.path.splitext(os.path.basename(p))[0], "series": os.path.basename(series), "page": i}
+                    meta[key] = {"album": os.path.splitext(os.path.basename(p))[0], "series": series, "page": i}
                     per_series[series] = per_series.get(series, 0) + 1
                     k += 1
         except (OSError, zipfile.BadZipFile, KeyError, ValueError) as e:
@@ -75,7 +77,7 @@ def main() -> None:
         if len(meta) % 25 == 0 and meta:
             print(len(meta), "planches", flush=True)
     json.dump(meta, open(os.path.join(a.out, "echantillon.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print(f"{len(meta)} planches dans {os.path.join(a.out, 'pages')}")
+    print(f"{len(per_series)} séries différentes ; {len(meta)} planches dans {os.path.join(a.out, 'pages')}")
 
 
 if __name__ == "__main__":
