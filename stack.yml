@@ -27,6 +27,9 @@ services:
       - "/uncomp3/V3X.BD/00 - BD Français:/library:ro"
       # Progression de lecture + cache d'images (remplacer par un dossier du serveur si vous préférez, ex. /srv/.../bulle/data:/data)
       - bulle-data:/data
+      # Plugins du laboratoire (facultatif) : dossier du serveur où les plugins déposent ce qu'ils fabriquent.
+      # Enlever le « # » et mettre un dossier à vous (voir PLUGINS.md). La bibliothèque, elle, reste en lecture seule.
+      # - "/srv/bulle-plugins-sortie:/plugins-out"
 
 volumes:
   bulle-data:

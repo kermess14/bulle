@@ -38,6 +38,8 @@ services:
       - "__LIBRARY__:/library:ro"
       # Progression de lecture + cache d'images (data/cache peut être vidé sans risque)
       - bulle-data:/data
+      # Plugins du laboratoire (facultatif) : enlever le « # » et mettre un dossier à vous (voir PLUGINS.md)
+      # - "/srv/bulle-plugins-sortie:/plugins-out"
       # Dépendances Python installées une fois pour toutes
       - bulle-venv:/opt/venv
     environment:
