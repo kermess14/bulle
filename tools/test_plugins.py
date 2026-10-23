@@ -107,6 +107,10 @@ class PackageTests(unittest.TestCase):
         self.assertIn('href="/plugins/p/deja"', out)
         self.assertNotIn("/plugins/p/plugins/p/", out)
         self.assertIn("url(/plugins/p/img/b.png)", out)
+        # images créées en JavaScript (img.src, setAttribute, innerHTML…) : relayées aussi par /plugins/<id>/ (v0.44.1)
+        for hook in ("HTMLImageElement", "Element.prototype.setAttribute", "innerHTML", "insertAdjacentHTML",
+                     "MutationObserver"):
+            self.assertIn(hook, out)
         self.assertLess(out.index("<script>"), out.index("<link"))   # le script d'adaptation passe avant tout le reste
         self.assertEqual(pm._fix_set_cookie("sid=1; Path=/; HttpOnly", "/plugins/p/"), "sid=1; Path=/plugins/p/; HttpOnly")
         self.assertEqual(pm._strip_bulle_cookies("bulle_session=s; sid=1; bulle_auth=a"), "sid=1")

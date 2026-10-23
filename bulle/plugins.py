@@ -691,7 +691,8 @@ _HEAD_RE = re.compile(r"<head(\s[^>]*)?>", re.I)
 
 def shim_script(base: str) -> str:
     """Petit script ajouté en tête des pages du plugin : les adresses « /api/… » que le programme fabrique lui-même
-    (fetch, EventSource, XMLHttpRequest, liens créés en JavaScript, window.open) passent par /plugins/<id>/."""
+    (fetch, EventSource, XMLHttpRequest, liens et images créés en JavaScript, innerHTML, window.open) passent par
+    /plugins/<id>/."""
     b = json.dumps(base.rstrip("/"))
     return ("<script>(function(){var B=" + b + ";"
             "function fx(u){if(typeof u!=='string')return u;"
@@ -710,6 +711,31 @@ def shim_script(base: str) -> str:
             "var f=a.getAttribute('action');if(f&&fx(f)!==f)a.setAttribute('action',fx(f))}"
             "document.addEventListener('click',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(a)fixEl(a)},true);"
             "document.addEventListener('submit',function(e){fixEl(e.target)},true);"
+            # images, vidéos, cadres… créés en JavaScript : propriétés (img.src = …), setAttribute, innerHTML et
+            # insertAdjacentHTML ; un MutationObserver rattrape ce qui passerait autrement (ex. aperçus d'un plugin)
+            "var AT=/^(?:src|href|action|poster|data-src|formaction)$/i;"
+            "function fh(s){if(typeof s!=='string')return s;"
+            "return s.replace(/(\\s(?:src|href|action|poster|data-src|formaction)\\s*=\\s*[\"'])\\/(?![\\/\\\\])/gi,"
+            "function(m,a,i,t){return t.substr(i+a.length,B.length+1)===B+'/'?m:a+B+'/'})}"
+            "function hp(C,p){var K=window[C]&&window[C].prototype;if(!K)return;var d=Object.getOwnPropertyDescriptor(K,p);"
+            "if(!d||!d.set||!d.configurable)return;Object.defineProperty(K,p,{configurable:true,enumerable:d.enumerable,get:d.get,"
+            "set:function(v){d.set.call(this,fx(v))}})}"
+            "[['HTMLImageElement','src'],['HTMLMediaElement','src'],['HTMLSourceElement','src'],['HTMLIFrameElement','src'],"
+            "['HTMLScriptElement','src'],['HTMLEmbedElement','src'],['HTMLLinkElement','href'],['HTMLVideoElement','poster'],"
+            "['HTMLAnchorElement','href'],['HTMLFormElement','action']].forEach(function(x){hp(x[0],x[1])});"
+            "var SA=Element.prototype.setAttribute;Element.prototype.setAttribute=function(n,v){"
+            "if(typeof n==='string'&&AT.test(n))v=fx(String(v));return SA.call(this,n,v)};"
+            "['innerHTML','outerHTML'].forEach(function(p){var d=Object.getOwnPropertyDescriptor(Element.prototype,p);"
+            "if(d&&d.set&&d.configurable)Object.defineProperty(Element.prototype,p,{configurable:true,enumerable:d.enumerable,"
+            "get:d.get,set:function(v){d.set.call(this,fh(v))}})});"
+            "var IA=Element.prototype.insertAdjacentHTML;if(IA)Element.prototype.insertAdjacentHTML=function(w,h){"
+            "return IA.call(this,w,fh(h))};"
+            "function fixN(n){if(!n||n.nodeType!==1)return;['src','poster','data-src'].forEach(function(a){"
+            "var v=n.getAttribute(a);if(v&&fx(v)!==v)SA.call(n,a,fx(v))})}"
+            "if(window.MutationObserver)new MutationObserver(function(ms){ms.forEach(function(m){"
+            "m.addedNodes.forEach(function(n){if(n.nodeType!==1)return;fixN(n);"
+            "if(n.querySelectorAll)n.querySelectorAll('[src],[poster],[data-src]').forEach(fixN)})})})"
+            ".observe(document.documentElement,{childList:true,subtree:true});"
             "})();</script>")
 
 

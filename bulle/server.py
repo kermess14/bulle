@@ -40,7 +40,7 @@ from .panels import PANELS_VERSION, manual_panels, run_detector
 from . import lots as lots_mod
 from . import plugins as plugins_mod
 
-VERSION = "0.44.0"
+VERSION = "0.44.1"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_ENGINE = os.environ.get("PANELS_ENGINE", "classic")   # moteur de cases (seul « classic » est livré ; voir panels.run_detector)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
