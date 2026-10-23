@@ -1,4 +1,4 @@
-# Bulle — lecteur de BD maison (v0.44.1)
+# Bulle — lecteur de BD maison (v0.44.2)
 
 Bulle est un petit serveur web qui fait, en plus simple, ce qu'on aime dans Ubooquity
 (le rangement suit vos dossiers) avec un lecteur plus moderne inspiré de Kavita.
@@ -149,6 +149,7 @@ puis ouvrir `http://localhost:2205` (ou le port donné par `PORT`). Pour les CBR
 
 ## Utilisation
 
+- **Plugins réservés au réseau local (v0.44.2)**. Les plugins du laboratoire (Data Reaper…) ne sont plus accessibles depuis Internet : il faut ouvrir Bulle par son adresse de la maison (`http://192.168…:2205`, nom court, `.local`) et venir d’une adresse privée (adresse réelle transmise par le proxy comprise). Ouvert par le nom de domaine public, Bulle fait comme s’il n’y avait pas de plugins : rien dans le laboratoire ni dans Réglages, 404 sur `/plugins/` et `/api/plugins`. BDConverter n’est pas concerné. Variable `PLUGINS_INTERNET: "1"` pour revenir à l’ancien comportement.
 - **Images des plugins créées en JavaScript (v0.44.1)**. Le script d’adaptation ajouté aux pages d’un plugin relaie désormais aussi les adresses « /… » des images, vidéos et cadres fabriqués en JavaScript (`img.src = …`, `setAttribute`, `innerHTML`, `insertAdjacentHTML`, et un `MutationObserver` pour le reste). Avant, un aperçu comme `/api/cover?url=…` partait à la racine de Bulle au lieu de `/plugins/<id>/api/cover?url=…` et restait « Aperçu indisponible » (cas de Data Reaper).
 - **Plugins du laboratoire (v0.44.0)**. Un plugin est un programme web empaqueté dans un `.zip` avec une fiche
   `plugin.json` (id, nom, version, commande, port…) ; `tools/make_plugin.py` fabrique le paquet en laissant de côté les

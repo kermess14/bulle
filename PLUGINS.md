@@ -7,6 +7,9 @@ appareil (PC, iPad…).
 
 - Seul l'**administrateur** de Bulle voit les plugins, les lance et y accède. Un lecteur n'y a pas accès, même en
   tapant l'adresse.
+- Les plugins ne s'ouvrent que depuis le **réseau local** (`http://<serveur>:2205`). Par le nom de domaine public, ils
+  n'existent pas (404, rien d'affiché). Variable `PLUGINS_INTERNET: "1"` dans la stack pour les ouvrir aussi depuis
+  Internet (déconseillé).
 - Le programme n'écoute que **dans le conteneur** (127.0.0.1). On y accède par Bulle, à l'adresse
   `http://<serveur>:2205/plugins/<id>/` : aucun port de plus à ouvrir.
 - La bibliothèque reste en **lecture seule**. Un plugin écrit dans un **dossier de sortie** à part ; c'est vous qui
