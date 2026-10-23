@@ -676,6 +676,7 @@ class SimpleTests(unittest.TestCase):
             self.assertIn("corrections.json", names)
         key = f"a{nid}_p001"
         self.assertEqual(len(gt[key]["boxes"]), 3)
+        self.assertNotIn("set", gt[key])   # « set » n'accepte que dev ou val : le banc choisit par album
         self.assertTrue(all(len(b) == 4 and b[2] > b[0] for b in gt[key]["boxes"]))
         with self.lib._write_lock:
             self.lib.conn.execute("UPDATE profiles SET role='reader' WHERE id=?", (DEFAULT_PROFILE,))

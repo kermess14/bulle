@@ -1273,7 +1273,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     continue
                 d = r["data"]
                 gt[key] = {"boxes": [[round(p[0] * w), round(p[1] * h), round(p[2] * w), round(p[3] * h)] for p in d.get("panels", [])],
-                           "manga": False, "album": node["name"], "set": "export"}
+                           "manga": False, "album": node["name"]}
                 auto[key] = found
                 details[key] = {"album": node["name"], "page": r["page"], "size": [w, h], "manual": d.get("panels", []),
                                 "custom_order": bool(d.get("custom_order")), "stale": bool(d.get("stale")),
