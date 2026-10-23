@@ -5,6 +5,10 @@ C'est un OUTIL D'ESSAI : Bulle ne l'utilise pas et n'appelle jamais l'API. Il en
 
   python tools/banc_vision.py <dossier-banc>                 -> simulation : compte les planches, estime le coût, n'envoie rien
   python tools/banc_vision.py <dossier-banc> --oui           -> envoie vraiment (validation, 5 $ au plus)
+  python tools/banc_vision.py <dossier> --annoter --oui      -> planches SANS annotation (tirées par banc_echantillon.py) : le
+                                                                modèle propose des cases ; celles où il ne s'accorde pas avec
+                                                                le détecteur actuel vont dans <dossier>/a-verifier/ (images à
+                                                                regarder : vision en vert, détecteur en rouge)
 
 Avant : la clé d'API dans la variable ANTHROPIC_API_KEY (voir le mode d'emploi donné avec ce script ; la clé ne s'écrit
 jamais dans un fichier ni dans une commande qu'on partage).
@@ -89,10 +93,79 @@ def parse(text: str) -> list:
     return out
 
 
+def annoter(a, byk: dict, key: str, fake: bool) -> None:
+    """Planches sans annotation : propositions du modèle + détecteur actuel ; les désaccords sont à regarder."""
+    from PIL import ImageDraw
+    keys = sorted(byk)[:a.limit] if a.limit else sorted(byk)
+    est = len(keys) * (1500 * a.prix_entree + 300 * a.prix_sortie) / 1e6
+    print(f"{len(keys)} planches à annoter, modèle {a.model}, estimation ≈ {est:.2f} $ (plafond {a.budget:.2f} $)")
+    if not a.oui and not fake:
+        print("Simulation : rien n'est envoyé. Ajoutez --oui pour envoyer ces planches à l'API Anthropic.")
+        return
+    cache = os.path.join(a.folder, "vision-" + ("fake" if fake else a.model.replace("/", "_")))
+    os.makedirs(cache, exist_ok=True)
+    os.makedirs(os.path.join(a.folder, "a-verifier"), exist_ok=True)
+    P = bc.load(a.panels)
+    spent, res = 0.0, {}
+    for k in keys:
+        f = byk[k]
+        W, H = Image.open(f).size
+        im = bc.open_page(f, a.width)
+        cf = os.path.join(cache, k + ".json")
+        if os.path.exists(cf) and not fake:
+            panels = json.load(open(cf, encoding="utf-8"))["panels"]
+        else:
+            if spent >= a.budget:
+                print(f"Plafond de {a.budget:.2f} $ atteint : arrêt avant {k}.")
+                break
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=90)
+            try:
+                if fake:   # essai du script sans réseau : le détecteur, avec une case retirée une fois sur deux
+                    d0, _ = bc.detect(P, f, a.width, True)
+                    panels = [[v * (im.width if j % 2 == 0 else im.height) for j, v in enumerate(r)] for r in B.reading(d0, False)]
+                    panels = panels[1:] if len(k) and k[-1] in "13579" else panels
+                    tin = tout = 0
+                else:
+                    panels, tin, tout = call_api(key, a.model, buf.getvalue(), im.width, im.height, False)
+            except RuntimeError as e:
+                print(f"{k} : échec ({e}) ; on arrête pour ne pas gaspiller.")
+                break
+            spent += (tin * a.prix_entree + tout * a.prix_sortie) / 1e6
+            json.dump({"panels": panels}, open(cf, "w", encoding="utf-8"))
+        s = W / im.width
+        vis, _ = B.dedupe([[b[0] * s, b[1] * s, b[2] * s, b[3] * s] for b in panels])
+        d, _ = bc.detect(P, f, 0, True)
+        cls, _ = B.dedupe(B.to_pixels(B.reading(d, False), W, H))
+        m = B.match(vis, cls, 0.7)
+        agree = not m["fp"] and not m["fn"]
+        res[k] = {"vision": vis, "classique": cls, "accord": agree, "size": [W, H]}
+        if not agree:
+            tiles = []
+            for boxes, col in ((vis, "lime"), (cls, "red")):
+                t = Image.open(f).convert("RGB")
+                dr = ImageDraw.Draw(t)
+                for i, b in enumerate(boxes):
+                    dr.rectangle(list(b), outline=col, width=6)
+                    dr.text((b[0] + 8, b[1] + 8), str(i + 1), fill=col)
+                tiles.append(t.resize((W * 640 // H, 640)))
+            sheet = Image.new("RGB", (tiles[0].width + tiles[1].width + 10, 640), "white")
+            sheet.paste(tiles[0], (0, 0))
+            sheet.paste(tiles[1], (tiles[0].width + 10, 0))
+            sheet.save(os.path.join(a.folder, "a-verifier", k + ".jpg"), quality=85)
+        print(f"{k:12} vision {len(vis):2}  détecteur {len(cls):2}  {'accord' if agree else 'A VÉRIFIER'}  dépensé {spent:.2f} $", flush=True)
+    out = os.path.join(a.folder, "annotations-vision.json")
+    json.dump(res, open(out, "w", encoding="utf-8"))
+    n_dis = sum(1 for r in res.values() if not r["accord"])
+    print(f"\n{len(res)} planches, dépensé ≈ {spent:.2f} $ : {len(res) - n_dis} en accord, {n_dis} à vérifier (images dans a-verifier/).")
+    print("Détail écrit dans", out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("folder")
     ap.add_argument("--oui", action="store_true", help="envoyer vraiment les planches à l'API")
+    ap.add_argument("--annoter", action="store_true", help="planches sans gt.json : proposer des cases et trier celles à vérifier")
     ap.add_argument("--set", default="val", choices=("val", "dev", "tous"))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--only", default="")
@@ -107,8 +180,10 @@ def main() -> None:
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if a.oui and not key and not fake:
         sys.exit("La variable ANTHROPIC_API_KEY est vide : voir le mode d'emploi (la clé ne se passe pas en argument).")
-    gt = json.load(open(os.path.join(a.folder, "gt.json"), encoding="utf-8"))
     byk = {bc.key(f): f for f in bc.pages(a.folder)}
+    if a.annoter:
+        return annoter(a, byk, key, fake)
+    gt = json.load(open(os.path.join(a.folder, "gt.json"), encoding="utf-8"))
     only = {s.strip() for s in a.only.split(",") if s.strip()}
     todo = []
     for k, entry in gt.items():
