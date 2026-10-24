@@ -12,6 +12,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # Pages en HEIC/HEIF et JPEG XL (facultatif : si ces modules ne s'installent pas sur une architecture, Bulle s'en passe)
 RUN pip install --no-cache-dir pillow-heif pillow-jxl-plugin || echo "HEIC/JPEG XL non disponibles"
+# Détection des cases par le modèle appris (bulle/models/cases-yolo11n.onnx, hors ligne) : onnxruntime et numpy.
+# Facultatif : si ces modules ne s'installent pas sur une architecture, Bulle garde le détecteur à règles.
+RUN pip install --no-cache-dir "onnxruntime>=1.17" "numpy>=1.26" || echo "onnxruntime indisponible : détecteur à règles"
 COPY bulle ./bulle
 
 ENV LIBRARY_ROOT=/library \

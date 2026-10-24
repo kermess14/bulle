@@ -36,13 +36,16 @@ from .bedetheque import (INDEX_TTL, USER_AGENT, BdtError, BedethequeClient, comp
 from . import bdfugue
 from .comics import COVER_WIDTH, QUALITY_PROFILES, AlbumError, Comics, pick_width
 from .library import AVATAR_IMAGE_RE, AVATAR_MAX, DEFAULT_PROFILE, Library, safe_avatar
-from .panels import PANELS_VERSION, manual_panels, run_detector
+from .panels import engine_version, manual_panels, resolve_engine, run_detector
 from . import lots as lots_mod
 from . import plugins as plugins_mod
 
-VERSION = "0.44.1"
+VERSION = "0.45.0"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
-PANELS_ENGINE = os.environ.get("PANELS_ENGINE", "classic")   # moteur de cases (seul « classic » est livré ; voir panels.run_detector)
+# moteur de cases : « auto » (défaut) = le modèle appris s'il peut tourner ici (onnxruntime et bulle/models/…onnx),
+# sinon le détecteur à règles ; « classic » force le détecteur à règles, « model » le modèle (voir panels.run_detector)
+PANELS_ENGINE = resolve_engine((os.environ.get("PANELS_ENGINE") or "auto").strip().strip("\"'"))
+PANELS_VERSION = engine_version(PANELS_ENGINE)   # version des cases de ce moteur : changer de moteur les fait recalculer
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
                      # version, pour que les cases ne dépendent pas de ce qui traîne dans le cache
 log = logging.getLogger("bulle")
@@ -142,6 +145,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     library_root = os.path.abspath(library_root or os.environ.get("LIBRARY_ROOT", "/library"))
     data_dir = os.path.abspath(data_dir or os.environ.get("DATA_DIR", "/data"))
     os.makedirs(data_dir, exist_ok=True)
+    log.info("Détection des cases : moteur « %s » (version %d)%s", PANELS_ENGINE, PANELS_VERSION,
+             " — modèle appris, hors ligne" if PANELS_ENGINE == "model" else "")
 
     comics = Comics(os.path.join(data_dir, "cache"), page_cache=env_bool("PAGE_CACHE", True))
     lib = Library(library_root, os.path.join(data_dir, "bulle.sqlite"), on_invalidate=comics.invalidate)
@@ -1231,7 +1236,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         same = None
         if cached is not None and not cached.get("manual"):
             same = cached.get("panels") == fresh["panels"] and cached.get("v") == PANELS_VERSION
-        resp = jsonify({"detector_version": PANELS_VERSION, "stored": stored, "same_as_stored": same,
+        resp = jsonify({"detector_version": PANELS_VERSION, "engine": PANELS_ENGINE, "stored": stored, "same_as_stored": same,
                         "panels": fresh["panels"], "rtl": fresh["rtl"], "grow": fresh.get("grow") or {},
                         "join": fresh.get("join") or [], "diag": diag})
         resp.headers["Cache-Control"] = "no-store"
@@ -1933,6 +1938,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         s = lib.stats(current_profile())
         s["scan"] = lib.status
         s["version"] = VERSION
+        s["panels_engine"] = PANELS_ENGINE   # moteur de cases utilisé (« model » : le modèle appris, « classic » : les règles)
         s["library_root"] = library_root
         s["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
         return jsonify(s)

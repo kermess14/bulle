@@ -192,6 +192,62 @@ class EngineInterface(unittest.TestCase):
             self.assertFalse(P.valid_result(bad), bad)
 
 
+def _model_ok() -> bool:
+    try:
+        return P._model_module().available()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@unittest.skipUnless(_model_ok(), "onnxruntime ou bulle/models/cases-yolo11n.onnx absent : moteur « model » non testé")
+class ModelEngine(unittest.TestCase):
+    """Moteur « model » (modèle appris, hors ligne) : contrat, ordre manga, résultat stable, secours."""
+
+    @staticmethod
+    def page():
+        import random
+        rnd = random.Random(1)
+        im = Image.new("RGB", (600, 900), "white")
+        d = ImageDraw.Draw(im)
+        for b in ([20, 20, 290, 430], [310, 20, 580, 430], [20, 450, 580, 880]):
+            d.rectangle(b, outline="black", width=5)
+            for _ in range(40):   # un peu de « dessin » dans chaque case (une case vide n'est pas une case pour le modèle)
+                x, y = rnd.randint(b[0] + 10, b[2] - 40), rnd.randint(b[1] + 10, b[3] - 40)
+                d.ellipse([x, y, x + 30, y + 30], outline="black", width=2)
+        return im
+
+    def test_three_panels_contract_and_order(self):
+        d = P.run_detector(self.page(), "model")
+        self.assertTrue(P.valid_result(d))
+        self.assertEqual(d["v"], P.engine_version("model"))
+        self.assertNotEqual(d["v"], P.PANELS_VERSION)   # ses cases ne se mélangent pas avec celles des règles
+        self.assertEqual(len(d["panels"]), 3)
+        self.assertLess(d["panels"][0][0], d["panels"][1][0])   # ordre occidental : gauche puis droite, puis le bas
+        self.assertGreater(d["panels"][2][1], d["panels"][0][1])
+        self.assertEqual(d["rtl"], [1, 0, 2])                   # ordre manga : droite d'abord
+
+    def test_same_page_same_result(self):
+        self.assertEqual(P.run_detector(self.page(), "model"), P.run_detector(self.page(), "model"))
+
+    def test_blank_page_is_full_page(self):
+        self.assertEqual(P.run_detector(Image.new("RGB", (600, 900), "white"), "model")["panels"], [])
+
+    def test_auto_uses_model_and_missing_model_falls_back(self):
+        self.assertEqual(P.resolve_engine("auto"), "model")
+        self.assertEqual(P.resolve_engine("classic"), "classic")
+        pm = P._model_module()
+        saved = (pm._session, pm._error)
+        try:
+            pm._session, pm._error = None, "FileNotFoundError: test"
+            self.assertEqual(P.resolve_engine("auto"), "classic")
+            self.assertEqual(P.resolve_engine("model"), "classic")
+            d = P.run_detector(self.page(), "model")   # modèle en panne : le détecteur à règles répond
+            self.assertTrue(P.valid_result(d))
+            self.assertEqual(d["v"], P.PANELS_VERSION)
+        finally:
+            pm._session, pm._error = saved
+
+
 class ManualPanels(unittest.TestCase):
     """Cases tracées à la main (éditeur du lecteur) : validation, ordre de lecture, ordre manga."""
 

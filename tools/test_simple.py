@@ -21,6 +21,7 @@ import zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("SCAN_ON_START", "0")
 os.environ.setdefault("PRELOAD_COVERS", "0")
+os.environ.setdefault("PANELS_ENGINE", "classic")   # pages de test synthétiques : le détecteur à règles (le modèle a ses tests)
 
 from PIL import Image, ImageDraw  # noqa: E402
 
