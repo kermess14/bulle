@@ -107,6 +107,21 @@ class ReaderBrowser(unittest.TestCase):
         self.assertTrue(all(w % 100 == 0 and 300 <= w <= 3000 for w in asked), sorted(asked))
         self.assertEqual(self.errors, [])
 
+    def test_trackpad_pinch_zooms_from_100(self):
+        """Pincement au pavé tactile (Ctrl + molette en petits pas) : le zoom part de 100 % sans passer par la loupe."""
+        pg = self.page()
+        pg.goto(f"{self.base}/read/{self.short}?page=0")
+        pg.wait_for_timeout(1200)
+        self.assertFalse(pg.evaluate("document.body.classList.contains('zoomed')"))
+        for _ in range(20):
+            pg.evaluate("""() => { const s = document.querySelector('#stage'), r = s.getBoundingClientRect();
+                s.dispatchEvent(new WheelEvent('wheel', {deltaY: -4, ctrlKey: true, bubbles: true, cancelable: true,
+                  clientX: r.left + r.width / 2, clientY: r.top + r.height / 2})); }""")
+            pg.wait_for_timeout(15)
+        pg.wait_for_timeout(300)
+        self.assertTrue(pg.evaluate("document.body.classList.contains('zoomed')"), "le pincement doit zoomer")
+        self.assertEqual(self.errors, [])
+
     def test_scroll_mode_frees_far_pages(self):
         pg = self.page()
         pg.goto(f"{self.base}/read/{self.long}?page=0")
