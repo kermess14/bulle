@@ -970,12 +970,21 @@
     }
   }
   function resetZoom(announce = true) { if (userZoom !== 1) { cancelAnimationFrame(zoomRaf); zoomRaf = 0; userZoom = 1; panX = panY = 0; zoomBounds = null; zoomTarget().style.transform = ""; spread.style.transform = ""; single.style.transform = ""; body.classList.remove("zoomed"); if (announce) flash("Zoom 100 %"); } }
+  /* Pincement au pavé tactile (Mac) : Chrome, Firefox et Edge l'envoient comme une molette avec Ctrl, en petits pas
+     (±1 à 5) ; appliqués un par un depuis 100 %, chacun retombait sous le seuil « presque 100 % » et le zoom ne partait
+     jamais (il fallait d'abord la loupe +). On cumule donc les pas d'un même geste depuis le zoom de départ, comme le
+     pincement sur écran tactile. Safari envoie à la place des « gesture » : même traitement, plus bas. */
+  const wheelZoom = { last: 0, base: 1, acc: 1 };
   stage.addEventListener("wheel", e => {
     if (mode === "scroll") return;
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
+      const now = Date.now();
+      if (now - wheelZoom.last > 250) { wheelZoom.base = userZoom; wheelZoom.acc = 1; }   // nouveau geste
+      wheelZoom.last = now;
       const factor = Math.exp(-Math.max(-150, Math.min(150, e.deltaY)) * 0.0017);   // un cran de molette ≈ ×1,19
-      setZoom(userZoom * factor, e.clientX, e.clientY);
+      wheelZoom.acc = Math.max(0.05, Math.min(20, wheelZoom.acc * factor));
+      setZoom(wheelZoom.base * wheelZoom.acc, e.clientX, e.clientY);
       return;
     }
     if (userZoom > 1) { e.preventDefault(); panX -= e.deltaX; panY -= e.deltaY; applyZoom(); }
@@ -1004,6 +1013,12 @@
     setZoom(userZoom !== 1 ? 1 : 2.5, e.clientX, e.clientY);
   });
   // pincement à deux doigts
+  if (!navigator.maxTouchPoints && "GestureEvent" in window) {   // Safari sur Mac : pincement au pavé tactile (l'iPad a le pincement tactile plus bas)
+    let gesture = null;
+    stage.addEventListener("gesturestart", e => { if (mode === "scroll") return; e.preventDefault(); gesture = userZoom; }, { passive: false });
+    stage.addEventListener("gesturechange", e => { if (gesture == null) return; e.preventDefault(); setZoom(gesture * e.scale, e.clientX, e.clientY); }, { passive: false });
+    stage.addEventListener("gestureend", e => { if (gesture == null) return; e.preventDefault(); gesture = null; }, { passive: false });
+  }
   let pinch = null;
   stage.addEventListener("touchstart", e => {
     if (e.touches.length === 2) {
