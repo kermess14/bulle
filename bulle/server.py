@@ -40,7 +40,7 @@ from .panels import PANELS_VERSION, manual_panels, run_detector
 from . import lots as lots_mod
 from . import plugins as plugins_mod
 
-VERSION = "0.44.1"
+VERSION = "0.44.2"
 HD_MIN_PX = 2400   # seuil HD par défaut : grand côté des pages (réglable dans Réglages › Bibliothèque)
 PANELS_ENGINE = os.environ.get("PANELS_ENGINE", "classic")   # moteur de cases (seul « classic » est livré ; voir panels.run_detector)
 PANELS_WIDTH = 800   # largeur de la page rendue pour trouver les cases (= WORK_WIDTH de panels.py) : toujours la même
@@ -168,6 +168,8 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
     plugins = plugins_mod.PluginManager(data_dir, os.environ.get("PLUGINS_OUT") or None,
                                         on_event=lambda kind, label, ok: log_task(kind, label, ok)) \
         if env_bool("PLUGINS", True) else None
+    # plugins réservés au réseau local (défaut) : PLUGINS_INTERNET=1 les rouvre depuis Internet
+    plugins_internet = env_bool("PLUGINS_INTERNET", False)
     if plugins is not None:
         import atexit
         atexit.register(plugins.stop_all)
@@ -371,6 +373,32 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             return ip.is_private or ip.is_loopback or ip.is_link_local
         except ValueError:
             return "." not in h or h.endswith((".local", ".lan", ".home", ".internal", ".localhost"))
+
+    def plugins_here() -> bool:
+        """Les plugins sont-ils permis pour cette requête ? Par défaut, seulement depuis le réseau local : adresse de la
+        maison dans la barre (192.168…, nom court, .local) ET visiteur à une adresse privée. Ouvert par le nom de
+        domaine public (via un proxy, une redirection de port de la box…), Bulle fait comme s'il n'y avait pas de
+        plugins (rien d'affiché, 404 sur /plugins/ et /api/plugins)."""
+        if plugins is None:
+            return False
+        if plugins_internet:
+            return True
+        if not lan_host(request.host or ""):
+            return False
+        try:
+            ip = ipaddress.ip_address(client_ip().split("%")[0])
+        except ValueError:
+            return False
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+
+    @app.before_request
+    def plugins_gate():
+        path = request.path or ""
+        if (path == "/plugins" or path.startswith("/plugins/") or path == "/api/plugins"
+                or path.startswith("/api/plugins/")) and plugins is not None and not plugins_here():
+            abort(404, description="Plugins accessibles seulement depuis le réseau local")
 
     @app.before_request
     def https_gate():
@@ -1420,7 +1448,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
         g["img_tag"] = f"{comics.cover_width}{comics.profile_tag}"
         return jsonify({"global": g, "profile": lib.get_settings(pid), "profile_id": pid, "role": current_role(),
                         "profile_selected": profile_selected(), "profiles": profiles_visible(), "version": VERSION,
-                        "library_root": library_root, "plugins": plugins is not None,
+                        "library_root": library_root, "plugins": plugins_here(),
                         "quality_profiles": {k: {"quality": v[0], "chroma": v[1]} for k, v in QUALITY_PROFILES.items()}})
 
     @app.route("/api/settings", methods=["PUT", "POST"])
@@ -3126,7 +3154,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
                     "started_at": lots_job.get("started_at") if lots_job["running"] else None,
                     "finished_at": None if lots_job["running"] else lots_job.get("finished_at"),
                     "detail": lots_job.get("error") if not lots_job["running"] else None})
-        for pinfo in (plugins.list() if plugins is not None else []):   # un plugin lancé = une tâche (arrêtable)
+        for pinfo in (plugins.list() if plugins_here() else []):   # un plugin lancé = une tâche (arrêtable)
             if pinfo["state"] in ("running", "starting", "installing"):
                 idle = pinfo["idle_minutes"]
                 out.append({"id": "plugin:" + pinfo["id"],
@@ -3163,7 +3191,7 @@ def create_app(library_root: Optional[str] = None, data_dir: Optional[str] = Non
             if not lots_job["running"]:
                 return False
             lots_job["stop"] = True
-        elif tid.startswith("plugin:") and plugins is not None and tid[7:] in plugins.plugins:
+        elif tid.startswith("plugin:") and plugins_here() and tid[7:] in plugins.plugins:
             return plugins.stop(tid[7:])
         else:
             abort(404, description="Tâche inconnue")

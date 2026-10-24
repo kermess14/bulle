@@ -207,6 +207,23 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(info["state"], "stopped")
         self.assertEqual(read(), before)
 
+    def test_8_reseau_local_seulement(self):
+        """v0.44.2 : ouverts par le nom de domaine public ou depuis une adresse d'Internet, les plugins n'existent pas."""
+        self.install()
+        lan = {"base_url": "http://192.168.0.213:2205"}
+        pub = {"base_url": "https://bdbulle.exemple.duckdns.org"}
+        self.assertEqual(self.c.get("/api/plugins", **lan).status_code, 200)
+        self.assertTrue(self.c.get("/api/settings", **lan).get_json()["plugins"])
+        for path in ("/api/plugins", "/api/plugins/bonjour/log", "/plugins/bonjour/", "/plugins/bonjour/api/x"):
+            self.assertEqual(self.c.get(path, **pub).status_code, 404, path)
+        self.assertEqual(self.c.post("/api/plugins/bonjour/start", **pub).status_code, 404)
+        self.assertFalse(self.c.get("/api/settings", **pub).get_json()["plugins"])
+        # proxy de la maison qui transmet l'adresse réelle d'un visiteur d'Internet, même avec un Host « local »
+        self.assertEqual(self.c.get("/api/plugins", headers={"X-Real-IP": "82.64.10.20"}, **lan).status_code, 404)
+        # visiteur d'Internet arrivé directement (redirection de port) en se faisant passer pour une adresse locale
+        self.assertEqual(self.c.get("/api/plugins", environ_base={"REMOTE_ADDR": "82.64.10.20"}, **lan).status_code, 404)
+        self.assertEqual(self.c.get("/api/plugins", headers={"X-Real-IP": "192.168.0.20"}, **lan).status_code, 200)
+
     def test_4_lecteur_refuse(self):
         self.install()
         self.c.post("/api/plugins/bonjour/start")
