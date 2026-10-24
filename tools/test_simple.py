@@ -21,6 +21,7 @@ import zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("SCAN_ON_START", "0")
 os.environ.setdefault("PRELOAD_COVERS", "0")
+os.environ.setdefault("PANELS_ENGINE", "classic")   # pages de test synthétiques : le détecteur à règles (le modèle a ses tests)
 
 from PIL import Image, ImageDraw  # noqa: E402
 
@@ -676,6 +677,7 @@ class SimpleTests(unittest.TestCase):
             self.assertIn("corrections.json", names)
         key = f"a{nid}_p001"
         self.assertEqual(len(gt[key]["boxes"]), 3)
+        self.assertNotIn("set", gt[key])   # « set » n'accepte que dev ou val : le banc choisit par album
         self.assertTrue(all(len(b) == 4 and b[2] > b[0] for b in gt[key]["boxes"]))
         with self.lib._write_lock:
             self.lib.conn.execute("UPDATE profiles SET role='reader' WHERE id=?", (DEFAULT_PROFILE,))

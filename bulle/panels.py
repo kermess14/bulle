@@ -1,6 +1,8 @@
 """Détection des cases d'une planche, pour la lecture case par case.
 
-Deux détecteurs complémentaires, sans réseau de neurones ni dépendance :
+Détecteur à règles (moteur « classic ») : deux détecteurs complémentaires, sans réseau de neurones ni dépendance. Depuis la
+0.45.0, le moteur par défaut est le modèle appris (panels_model.py, moteur « model ») quand il peut tourner ; celui-ci
+reste son secours.
 
 1. **Gouttières** (« X-Y cut ») : on cherche les bandes de fond uni (blanc ou noir) qui traversent la
    planche de part en part, horizontalement puis verticalement dans chaque bande, et ainsi de suite.
@@ -2098,7 +2100,7 @@ def manual_panels(rects, custom_order: bool = False) -> dict:
 # le détecteur classique, et à défaut par « pas de case » (page entière) : le lecteur n'est jamais cassé par un moteur.
 # Un moteur dont les résultats diffèrent de ceux du classique doit avoir son propre jeu de versions (sinon les cases
 # gardées en base seraient mélangées) et n'être activé qu'après mesure sur des planches annotées qu'il n'a jamais vues
-# (tools/banc_cases.py score). Aucun autre moteur n'est livré.
+# (tools/banc_cases.py score). Deuxième moteur livré : « model » (panels_model.py, modèle appris, hors ligne).
 import logging as _logging
 
 _plog = _logging.getLogger("bulle.panels")
@@ -2156,3 +2158,52 @@ def run_detector(img: Image.Image, engine: Optional[str] = None, **opts) -> dict
 
 
 register_engine(DEFAULT_ENGINE, detect_panels)
+
+
+def _model_module():
+    """panels_model, importé comme module du paquet (serveur) ou depuis le même dossier (outils du banc)."""
+    try:
+        from . import panels_model as pm   # type: ignore
+        return pm
+    except ImportError:
+        import importlib.util
+        import os as _os
+        import sys as _sys
+        if "panels_model" in _sys.modules:
+            return _sys.modules["panels_model"]
+        spec = importlib.util.spec_from_file_location("panels_model", _os.path.join(_os.path.dirname(__file__), "panels_model.py"))
+        pm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pm)
+        _sys.modules["panels_model"] = pm
+        return pm
+
+
+def _model_engine(img: Image.Image, retry: bool = True, manga: bool = True, diag: Optional[dict] = None, **_ignored) -> dict:
+    """Moteur « model » : le modèle appris (voir panels_model.py). `retry` ne sert pas ici."""
+    return _model_module().detect(img, _reading_order, manga=manga, diag=diag)
+
+
+register_engine("model", _model_engine)
+
+
+def resolve_engine(name: Optional[str]) -> str:
+    """Moteur réellement utilisé : « auto » (défaut) = le modèle s'il peut tourner ici, sinon le classique ; « model »
+    indisponible (onnxruntime absent, fichier manquant) = le classique, avec un avertissement."""
+    name = (name or "auto").strip().lower()
+    if name in ("auto", "model"):
+        try:
+            if _model_module().available():
+                return "model"
+            if name == "model":
+                _plog.warning("Moteur de cases « model » indisponible (%s) : détecteur classique", _model_module().status().get("error"))
+        except Exception:  # noqa: BLE001
+            _plog.exception("Moteur de cases « model » indisponible : détecteur classique")
+        return DEFAULT_ENGINE
+    return name if name in ENGINES else DEFAULT_ENGINE
+
+
+def engine_version(name: Optional[str]) -> int:
+    """Version des cases d'un moteur : les cases gardées en base sous une autre version sont recalculées."""
+    if name == "model":
+        return _model_module().MODEL_VERSION
+    return PANELS_VERSION

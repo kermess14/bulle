@@ -65,10 +65,16 @@ def open_page(f, width):
     return im
 
 
+ENGINE = None   # --engine : moteur de cases (panels.run_detector) ; sans : detect_panels (le classique)
+
+
 def detect(P, f, width, manga):
     im = open_page(f, width)
     t = time.perf_counter()
-    d = P.detect_panels(im, manga=manga) if manga is not None else P.detect_panels(im)
+    if ENGINE:
+        d = P.run_detector(im, ENGINE, manga=True if manga is None else manga)
+    else:
+        d = P.detect_panels(im, manga=manga) if manga is not None else P.detect_panels(im)
     return {"panels": d["panels"], "rtl": d.get("rtl"), "join": d.get("join"), "grow": d.get("grow"),
             "v": d.get("v")}, time.perf_counter() - t
 
@@ -181,9 +187,12 @@ def main():
     ap.add_argument("--raw", action="store_true", help="cases brutes (sans grow ni join)")
     ap.add_argument("--json", default=None, help="enregistrer le relevé (score) dans ce fichier")
     ap.add_argument("--quiet", action="store_true", help="totaux seulement")
+    ap.add_argument("--engine", default=None, help="moteur de cases (classic, model, auto) ; défaut : detect_panels")
     args = ap.parse_args()
     folder = os.path.abspath(args.folder)
     P = load(args.panels)
+    global ENGINE
+    ENGINE = P.resolve_engine(args.engine) if args.engine and hasattr(P, "resolve_engine") else args.engine
     if args.mode == "score":
         score(P, folder, args)
         return
